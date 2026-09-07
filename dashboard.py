@@ -38,13 +38,9 @@ HTML_TEMPLATE = """
         </header>
 
         <!-- Main Stats -->
-        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-4 mb-6">
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <p class="text-xs text-slate-400">Total Candles</p>
-                <p class="text-2xl font-bold">{{ total }}</p>
-            </div>
-            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <p class="text-xs text-slate-400">Trades Taken</p>
+                <p class="text-xs text-slate-400">Closed Trades</p>
                 <p class="text-2xl font-bold text-amber-400">{{ status.total_trades }}</p>
             </div>
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
@@ -60,10 +56,18 @@ HTML_TEMPLATE = """
                 <p class="text-2xl font-bold text-blue-400">{{ status.win_rate }}%</p>
             </div>
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                <p class="text-xs text-slate-400">Next Trade #</p>
+                <p class="text-2xl font-bold text-cyan-400">{{ status.next_trade_num or '—' }}</p>
+            </div>
+            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
                 <p class="text-xs text-slate-400">Open Trade</p>
                 <p class="text-2xl font-bold {{ 'text-emerald-400' if status.trade_active else 'text-slate-500' }}">
                     {{ 'YES' if status.trade_active else 'No' }}
                 </p>
+            </div>
+            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                <p class="text-xs text-slate-400">Total Candles</p>
+                <p class="text-2xl font-bold">{{ total }}</p>
             </div>
         </div>
 
@@ -116,19 +120,35 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
-        <!-- Filter Stats -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <!-- Funnel Stats (from status.json when available, else candle log) -->
+        <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <p class="text-xs text-slate-400">Trend Confirmed</p>
-                <p class="text-2xl font-bold text-blue-400">{{ trend }}</p>
+                <p class="text-xs text-slate-400">Candles Eval</p>
+                <p class="text-xl font-bold">{{ funnel.candles_evaluated }}</p>
             </div>
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <p class="text-xs text-slate-400">Volume Spikes</p>
-                <p class="text-2xl font-bold text-purple-400">{{ vol }}</p>
+                <p class="text-xs text-slate-400">Tested Floor</p>
+                <p class="text-xl font-bold text-blue-400">{{ funnel.tested_floor }}</p>
             </div>
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <p class="text-xs text-slate-400">Valid Rejections</p>
-                <p class="text-2xl font-bold text-amber-400">{{ rejection }}</p>
+                <p class="text-xs text-slate-400">Valid Rejection</p>
+                <p class="text-xl font-bold text-amber-400">{{ funnel.valid_rejection }}</p>
+            </div>
+            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                <p class="text-xs text-slate-400">Held Support</p>
+                <p class="text-xl font-bold text-emerald-400">{{ funnel.held_support }}</p>
+            </div>
+            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                <p class="text-xs text-slate-400">Volume OK</p>
+                <p class="text-xl font-bold text-purple-400">{{ funnel.volume_confirmed }}</p>
+            </div>
+            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                <p class="text-xs text-slate-400">Trend OK</p>
+                <p class="text-xl font-bold text-cyan-400">{{ funnel.trend_confirmed }}</p>
+            </div>
+            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                <p class="text-xs text-slate-400">All Confirmed</p>
+                <p class="text-xl font-bold text-rose-400">{{ funnel.all_confirmed }}</p>
             </div>
         </div>
 
@@ -215,6 +235,7 @@ def index():
     status = {
         "equity": 500.00,
         "total_trades": 0,
+        "next_trade_num": None,
         "wins": 0,
         "losses": 0,
         "win_rate": 0.0,
@@ -227,6 +248,7 @@ def index():
         "ema_fast": None,
         "ema_slow": None,
         "atr": None,
+        "funnel": {},
     }
 
     if os.path.isfile(STATUS_FILE_PATH):
@@ -236,6 +258,8 @@ def index():
         except Exception:
             pass
 
+    # Prefer live funnel from status.json; fall back to scanning the candle log
+    funnel = status.get("funnel") or {}
     rows = []
     total_rows = 0
     trend_count = 0
@@ -245,7 +269,6 @@ def index():
     if os.path.isfile(LOG_FILE_PATH):
         try:
             with open(LOG_FILE_PATH, mode="r") as f:
-                # Support both old and new column names
                 reader = csv.DictReader(f)
                 for line in reader:
                     rows.append(line)
@@ -259,6 +282,15 @@ def index():
         except Exception as e:
             print(f"Error reading log: {e}")
 
+    # Fill missing funnel keys from log scan if needed
+    funnel.setdefault("candles_evaluated", total_rows)
+    funnel.setdefault("tested_floor", 0)
+    funnel.setdefault("valid_rejection", rejection_count)
+    funnel.setdefault("held_support", 0)
+    funnel.setdefault("volume_confirmed", vol_count)
+    funnel.setdefault("trend_confirmed", trend_count)
+    funnel.setdefault("all_confirmed", 0)
+
     recent_rows = list(reversed(rows))[:30]
 
     return render_template_string(
@@ -266,9 +298,7 @@ def index():
         rows=recent_rows,
         status=status,
         total=total_rows,
-        trend=trend_count,
-        vol=vol_count,
-        rejection=rejection_count,
+        funnel=funnel,
     )
 
 
