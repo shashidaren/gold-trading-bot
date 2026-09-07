@@ -86,16 +86,12 @@ class GoldEngine:
         self.entry_price = 0.0
         self.stop_loss = 0.0
         self.take_profit = 0.0
-        # Load previous trade count from CSV to prevent resetting to 1
-        if os.path.isfile(TRADES_LOG_PATH):
-            try:
-                with open(TRADES_LOG_PATH, "r") as f:
-                    self.total_trades = sum(1 for row in csv.reader(f)) - 1
-            except Exception: self.total_trades = 0
-        else:
-            self.total_trades = 0
+
+        # Persistent trade stats — never reset on restart
+        self.next_trade_num = 1
         self.wins = 0
         self.losses = 0
+        self.load_trade_stats()
 
         self.entry_time = None
         self.entry_rsi = None
@@ -125,6 +121,62 @@ class GoldEngine:
         else:
             self.load_history_from_csv()
             self.save_status()
+
+    def load_trade_stats(self):
+        """
+        Load persistent trade statistics from trades.csv so that:
+        - Trade numbers never reset
+        - Wins / losses / balance survive restarts
+        - Win rate is always calculated from closed trades only
+        """
+        self.next_trade_num = 1
+        self.wins = 0
+        self.losses = 0
+        self.balance = 500.00
+
+        if not os.path.isfile(TRADES_LOG_PATH):
+            print("ℹ️ No trades.csv found — starting fresh (balance $500)")
+            return
+
+        try:
+            with open(TRADES_LOG_PATH, newline="") as f:
+                reader = csv.DictReader(f)
+                max_num = 0
+                last_balance = None
+                for row in reader:
+                    try:
+                        num = int(row.get("Trade_Num", 0) or 0)
+                        if num > max_num:
+                            max_num = num
+                    except (ValueError, TypeError):
+                        pass
+
+                    reason = (row.get("Exit_Reason") or "").strip().upper()
+                    if reason == "TP":
+                        self.wins += 1
+                    elif reason == "SL":
+                        self.losses += 1
+
+                    try:
+                        bal = float(row.get("Balance_After", 0) or 0)
+                        if bal > 0:
+                            last_balance = bal
+                    except (ValueError, TypeError):
+                        pass
+
+                self.next_trade_num = max_num + 1
+                if last_balance is not None:
+                    self.balance = last_balance
+
+            closed = self.wins + self.losses
+            print(f"📂 Loaded trade stats → next_trade=#{self.next_trade_num} | "
+                  f"closed={closed} ({self.wins}W/{self.losses}L) | balance=${self.balance:.2f}")
+        except Exception as e:
+            print(f"⚠️ Failed to load trade stats: {e}")
+            self.next_trade_num = 1
+            self.wins = 0
+            self.losses = 0
+            self.balance = 500.00
 
     def load_history_from_csv(self):
         if not os.path.isfile(LOG_FILE_PATH):
@@ -190,26 +242,51 @@ class GoldEngine:
         self.prev_close = close
 
     def save_status(self):
-        win_rate = (self.wins / self.total_trades * 100) if self.total_trades > 0 else 0.0
+        closed = self.wins + self.losses
+        win_rate = (self.wins / closed * 100) if closed > 0 else 0.0
         active_trade = self.trade_active
-        data = {"equity": round(self.balance, 2), "total_trades": self.total_trades, "wins": self.wins, "losses": self.losses,
-                "win_rate": round(win_rate, 1), "trade_active": active_trade, "last_update": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "rsi": round(self.rsi, 1) if self.rsi else None, "ema_fast": round(self.ema_fast, 2) if self.ema_fast else None,
-                "ema_slow": round(self.ema_slow, 2) if self.ema_slow else None, "atr": round(self.atr, 2) if self.atr else None,
-                "entry_price": round(self.entry_price, 2) if active_trade and self.entry_price else None,
-                "stop_loss": round(self.stop_loss, 2) if active_trade and self.stop_loss else None,
-                "take_profit": round(self.take_profit, 2) if active_trade and self.take_profit else None,
-                "funnel": {"candles_evaluated": self.candles_evaluated, "tested_floor": self.hit_tested_floor,
-                           "valid_rejection": self.hit_valid_rejection, "held_support": self.hit_held_support,
-                           "volume_confirmed": self.hit_volume_confirmed, "trend_confirmed": self.hit_trend_confirmed, "all_confirmed": self.hit_all}}
+        data = {
+            "equity": round(self.balance, 2),
+            "total_trades": closed,                    # closed trades only
+            "next_trade_num": self.next_trade_num,     # what the next trade will be numbered
+            "wins": self.wins,
+            "losses": self.losses,
+            "win_rate": round(win_rate, 1),
+            "trade_active": active_trade,
+            "last_update": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "rsi": round(self.rsi, 1) if self.rsi else None,
+            "ema_fast": round(self.ema_fast, 2) if self.ema_fast else None,
+            "ema_slow": round(self.ema_slow, 2) if self.ema_slow else None,
+            "atr": round(self.atr, 2) if self.atr else None,
+            "entry_price": round(self.entry_price, 2) if active_trade and self.entry_price else None,
+            "stop_loss": round(self.stop_loss, 2) if active_trade and self.stop_loss else None,
+            "take_profit": round(self.take_profit, 2) if active_trade and self.take_profit else None,
+            "funnel": {
+                "candles_evaluated": self.candles_evaluated,
+                "tested_floor": self.hit_tested_floor,
+                "valid_rejection": self.hit_valid_rejection,
+                "held_support": self.hit_held_support,
+                "volume_confirmed": self.hit_volume_confirmed,
+                "trend_confirmed": self.hit_trend_confirmed,
+                "all_confirmed": self.hit_all
+            }
+        }
         try:
-            with open(STATUS_FILE_PATH, "w") as f: json.dump(data, f, indent=2)
-        except Exception as e: print(f"⚠️ Failed to write status.json: {e}")
+            with open(STATUS_FILE_PATH, "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"⚠️ Failed to write status.json: {e}")
 
     def send_telegram(self, text: str):
         if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
-        try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": str(TELEGRAM_CHAT_ID), "text": text, "parse_mode": "Markdown"}, timeout=4)
-        except Exception as e: print(f"\n⚠️ Telegram failed: {e}")
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={"chat_id": str(TELEGRAM_CHAT_ID), "text": text, "parse_mode": "Markdown"},
+                timeout=4
+            )
+        except Exception as e:
+            print(f"\n⚠️ Telegram failed: {e}")
 
     def log_candle(self, timestamp, o, h, l, c, ratio, tick_count, vol_ma, dynamic_floor, ema_f, ema_s, tested, rejected, held, vol_conf, trend_conf, rsi_val, atr_val):
         file_exists = os.path.isfile(LOG_FILE_PATH)
@@ -228,11 +305,23 @@ class GoldEngine:
         with open(TRADES_LOG_PATH, mode="a", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=["Trade_Num", "Entry_Time", "Exit_Time", "Entry_Price", "Stop_Loss", "Take_Profit", "Exit_Price", "Exit_Reason", "Profit", "Balance_After", "RSI_At_Entry", "ATR_At_Entry", "Wick_Ratio_At_Entry", "EMA50_At_Entry", "EMA200_At_Entry"])
             if not file_exists: writer.writeheader()
-            writer.writerow({"Trade_Num": self.total_trades, "Entry_Time": self.entry_time, "Exit_Time": time.strftime("%Y-%m-%d %H:%M:%S"),
-                             "Entry_Price": f"{self.entry_price:.2f}", "Stop_Loss": f"{self.stop_loss:.2f}", "Take_Profit": f"{self.take_profit:.2f}",
-                             "Exit_Price": f"{exit_price:.2f}", "Exit_Reason": exit_reason, "Profit": f"{profit:.2f}", "Balance_After": f"{self.balance:.2f}",
-                             "RSI_At_Entry": f"{self.entry_rsi:.1f}" if self.entry_rsi else "", "ATR_At_Entry": f"{self.entry_atr:.2f}" if self.entry_atr else "",
-                             "Wick_Ratio_At_Entry": f"{self.entry_wick_ratio:.1%}" if self.entry_wick_ratio else "", "EMA50_At_Entry": f"{self.entry_ema_fast:.2f}" if self.entry_ema_fast else "", "EMA200_At_Entry": f"{self.entry_ema_slow:.2f}" if self.entry_ema_slow else ""})
+            writer.writerow({
+                "Trade_Num": self.current_trade_num,
+                "Entry_Time": self.entry_time,
+                "Exit_Time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "Entry_Price": f"{self.entry_price:.2f}",
+                "Stop_Loss": f"{self.stop_loss:.2f}",
+                "Take_Profit": f"{self.take_profit:.2f}",
+                "Exit_Price": f"{exit_price:.2f}",
+                "Exit_Reason": exit_reason,
+                "Profit": f"{profit:.2f}",
+                "Balance_After": f"{self.balance:.2f}",
+                "RSI_At_Entry": f"{self.entry_rsi:.1f}" if self.entry_rsi else "",
+                "ATR_At_Entry": f"{self.entry_atr:.2f}" if self.entry_atr else "",
+                "Wick_Ratio_At_Entry": f"{self.entry_wick_ratio:.1%}" if self.entry_wick_ratio else "",
+                "EMA50_At_Entry": f"{self.entry_ema_fast:.2f}" if self.entry_ema_fast else "",
+                "EMA200_At_Entry": f"{self.entry_ema_slow:.2f}" if self.entry_ema_slow else ""
+            })
 
     def evaluate_candle(self, o, h, l, c, tick_count):
         candle_range = h - l
@@ -323,11 +412,24 @@ class GoldEngine:
         sl_price = round(sl_price / point) * point
         tp_price = round(tp_price / point) * point
         tick = mt5.symbol_info_tick(SYMBOL)
-        if tick is None: print("⚠️ Failed to get tick data"); return
+        if tick is None:
+            print("⚠️ Failed to get tick data")
+            return
 
-        request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": SYMBOL, "volume": LOT_SIZE, "type": mt5.ORDER_TYPE_BUY, "price": tick.ask,
-                   "sl": sl_price, "tp": tp_price, "deviation": 20, "magic": MAGIC_NUMBER, "comment": "Gold Engine Live",
-                   "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_FOK}
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": SYMBOL,
+            "volume": LOT_SIZE,
+            "type": mt5.ORDER_TYPE_BUY,
+            "price": tick.ask,
+            "sl": sl_price,
+            "tp": tp_price,
+            "deviation": 20,
+            "magic": MAGIC_NUMBER,
+            "comment": "Gold Engine Live",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_FOK
+        }
         print(f"   ➡️ Sending: BUY {LOT_SIZE} {SYMBOL} @ {tick.ask:.2f} | SL: {sl_price:.2f} | TP: {tp_price:.2f}")
         
         result = mt5.order_send(request)
@@ -335,48 +437,94 @@ class GoldEngine:
             print(f"❌ Order failed: {result.retcode} - {result.comment}")
             self.send_telegram(f"❌ *ORDER FAILED*\nCode: {result.retcode}\nMsg: {result.comment}")
         else:
-            self.total_trades += 1
-            print(f"✅ ORDER SUCCESS! Ticket: {result.order}")
-            self.send_telegram(f"🚨 *LIVE GOLD BUY EXECUTED*\n🎫 Ticket: `{result.order}`\n💰 Entry: `${tick.ask:.2f}`\n🛑 SL: `${sl_price:.2f}`\n🎯 TP: `${tp_price:.2f}`")
+            self.current_trade_num = self.next_trade_num
+            self.next_trade_num += 1
+            print(f"✅ ORDER SUCCESS! Ticket: {result.order} | Trade #{self.current_trade_num}")
+            self.send_telegram(
+                f"🚨 *LIVE GOLD BUY EXECUTED*\n"
+                f"🎫 Ticket: `{result.order}` | Trade #{self.current_trade_num}\n"
+                f"💰 Entry: `${tick.ask:.2f}`\n"
+                f"🛑 SL: `${sl_price:.2f}`\n"
+                f"🎯 TP: `${tp_price:.2f}`"
+            )
 
     def execute_simulated_trade(self, c, wick_ratio, ts, dynamic_floor):
-        self.trade_active = True; self.total_trades += 1
-        self.entry_price = c; self.stop_loss = c - (self.atr * ATR_SL_MULT); self.take_profit = c + (self.atr * ATR_TP_MULT)
-        self.entry_time = ts; self.entry_rsi = self.rsi; self.entry_atr = self.atr; self.entry_wick_ratio = wick_ratio
-        self.entry_ema_fast = self.ema_fast; self.entry_ema_slow = self.ema_slow
-        msg = f"🚨 *GOLD BUY SETUP #{self.total_trades}*\n💰 Entry: `${self.entry_price:.2f}`\n📊 RSI: `{self.rsi:.1f}` | ATR: `{self.atr:.2f}`\n🛑 SL: `${self.stop_loss:.2f}`\n🎯 TP: `${self.take_profit:.2f}`"
-        self.send_telegram(msg); print(f"\n🤖 Alert sent → Trade #{self.total_trades}\n"); self.save_status()
+        self.trade_active = True
+        self.current_trade_num = self.next_trade_num
+        self.next_trade_num += 1
+
+        self.entry_price = c
+        self.stop_loss = c - (self.atr * ATR_SL_MULT)
+        self.take_profit = c + (self.atr * ATR_TP_MULT)
+        self.entry_time = ts
+        self.entry_rsi = self.rsi
+        self.entry_atr = self.atr
+        self.entry_wick_ratio = wick_ratio
+        self.entry_ema_fast = self.ema_fast
+        self.entry_ema_slow = self.ema_slow
+
+        msg = (
+            f"🚨 *GOLD BUY SETUP #{self.current_trade_num}*\n"
+            f"💰 Entry: `${self.entry_price:.2f}`\n"
+            f"📊 RSI: `{self.rsi:.1f}` | ATR: `{self.atr:.2f}`\n"
+            f"🛑 SL: `${self.stop_loss:.2f}`\n"
+            f"🎯 TP: `${self.take_profit:.2f}`"
+        )
+        self.send_telegram(msg)
+        print(f"\n🤖 Alert sent → Trade #{self.current_trade_num}\n")
+        self.save_status()
 
     def check_position(self, price: float):
-        if not self.trade_active: return
+        if not self.trade_active:
+            return
         if price >= self.take_profit:
-            profit = price - self.entry_price; self.balance += profit; self.wins += 1; self.trade_active = False
+            profit = price - self.entry_price
+            self.balance += profit
+            self.wins += 1
+            self.trade_active = False
             self.log_trade(exit_price=price, exit_reason="TP", profit=profit)
-            self.send_telegram(f"✅ *TP HIT*\nExit: `${price:.2f}` (+${profit:.2f})\nEquity: `${self.balance:.2f}`")
+            self.send_telegram(
+                f"✅ *TP HIT* (#{self.current_trade_num})\n"
+                f"Exit: `${price:.2f}` (+${profit:.2f})\n"
+                f"Equity: `${self.balance:.2f}`"
+            )
             self.save_status()
         elif price <= self.stop_loss:
-            loss = self.entry_price - price; self.balance -= loss; self.losses += 1; self.trade_active = False
+            loss = self.entry_price - price
+            self.balance -= loss
+            self.losses += 1
+            self.trade_active = False
             self.log_trade(exit_price=price, exit_reason="SL", profit=-loss)
-            self.send_telegram(f"❌ *SL HIT*\nExit: `${price:.2f}` (-${loss:.2f})\nEquity: `${self.balance:.2f}`")
+            self.send_telegram(
+                f"❌ *SL HIT* (#{self.current_trade_num})\n"
+                f"Exit: `${price:.2f}` (-${loss:.2f})\n"
+                f"Equity: `${self.balance:.2f}`"
+            )
             self.save_status()
 
     def aggregate_tick(self, price: float):
         minute_now = int(time.time() // 60)
-        if self.current_minute is None: self.current_minute = minute_now
+        if self.current_minute is None:
+            self.current_minute = minute_now
         if minute_now != self.current_minute:
             if self.tick_pool:
                 o, h, l, c = self.tick_pool[0], max(self.tick_pool), min(self.tick_pool), self.tick_pool[-1]
                 self.evaluate_candle(o, h, l, c, len(self.tick_pool))
-            self.tick_pool.clear(); self.current_minute = minute_now
+            self.tick_pool.clear()
+            self.current_minute = minute_now
         self.tick_pool.append(price)
 
     def on_event(self, event):
-        if event.get("event") != "price": return
+        if event.get("event") != "price":
+            return
         try:
             price = float(event["price"])
-            self.check_position(price); self.aggregate_tick(price)
-            print(f"⏱️ ${price:.2f} | ticks: {len(self.tick_pool)}   ", end="\r"); sys.stdout.flush()
-        except Exception: return
+            self.check_position(price)
+            self.aggregate_tick(price)
+            print(f"⏱️ ${price:.2f} | ticks: {len(self.tick_pool)}   ", end="\r")
+            sys.stdout.flush()
+        except Exception:
+            return
 
     def run_live(self):
         print(f"🚀 Gold Engine LIVE starting for {SYMBOL}...")
@@ -384,33 +532,66 @@ class GoldEngine:
         while True:
             try:
                 rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_M1, 0, 250)
-                if rates is None or len(rates) == 0: time.sleep(5); continue
+                if rates is None or len(rates) == 0:
+                    time.sleep(5)
+                    continue
                 last_candle = rates[-2]
-                o, h, l, c, vol = float(last_candle['open']), float(last_candle['high']), float(last_candle['low']), float(last_candle['close']), int(last_candle['tick_volume'])
+                o, h, l, c, vol = (
+                    float(last_candle["open"]),
+                    float(last_candle["high"]),
+                    float(last_candle["low"]),
+                    float(last_candle["close"]),
+                    int(last_candle["tick_volume"]),
+                )
                 self.evaluate_candle(o, h, l, c, vol)
-                if candles_fetched % 10 == 0: print(f"💓 Heartbeat: Processed candle @ {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(last_candle['time']))} | Close: {c}")
+                if candles_fetched % 10 == 0:
+                    print(f"💓 Heartbeat: Processed candle @ {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(last_candle['time']))} | Close: {c}")
                 candles_fetched += 1
-                for _ in range(12): time.sleep(5)
-            except KeyboardInterrupt: print("\n⚙️ Shutting down..."); mt5.shutdown(); break
-            except Exception as e: print(f"\n❌ Error: {e}"); time.sleep(10)
+                for _ in range(12):
+                    time.sleep(5)
+            except KeyboardInterrupt:
+                print("\n⚙️ Shutting down...")
+                mt5.shutdown()
+                break
+            except Exception as e:
+                print(f"\n❌ Error: {e}")
+                time.sleep(10)
 
     def run_forward_test(self):
         print("🚀 Gold Engine FORWARD TEST starting...")
-        if not TWELVE_DATA_KEY: print("❌ TWELVE_DATA_API_KEY missing"); sys.exit(1)
+        if not TWELVE_DATA_KEY:
+            print("❌ TWELVE_DATA_API_KEY missing")
+            sys.exit(1)
         while True:
             try:
                 td = TDClient(apikey=TWELVE_DATA_KEY)
                 ws = td.websocket(on_event=self.on_event)
-                ws.subscribe(["XAU/USD"]); ws.connect(); print("📡 Connected to Twelve Data\n")
+                ws.subscribe(["XAU/USD"])
+                ws.connect()
+                print("📡 Connected to Twelve Data\n")
                 while True:
-                    try: ws.heartbeat(); time.sleep(15)
-                    except Exception as e: print(f"\n⚠️ Connection issue: {e}"); print("🔄 Reconnecting in 10s..."); time.sleep(10); break
-            except KeyboardInterrupt: print("\n⚙️ Shutting down..."); break
-            except Exception as e: print(f"\n❌ Error: {e}"); print("🔄 Restarting in 15s..."); time.sleep(15)
+                    try:
+                        ws.heartbeat()
+                        time.sleep(15)
+                    except Exception as e:
+                        print(f"\n⚠️ Connection issue: {e}")
+                        print("🔄 Reconnecting in 10s...")
+                        time.sleep(10)
+                        break
+            except KeyboardInterrupt:
+                print("\n⚙️ Shutting down...")
+                break
+            except Exception as e:
+                print(f"\n❌ Error: {e}")
+                print("🔄 Restarting in 15s...")
+                time.sleep(15)
 
     def run(self):
-        if TRADING_MODE == "LIVE": self.run_live()
-        else: self.run_forward_test()
+        if TRADING_MODE == "LIVE":
+            self.run_live()
+        else:
+            self.run_forward_test()
+
 
 if __name__ == "__main__":
     engine = GoldEngine()
