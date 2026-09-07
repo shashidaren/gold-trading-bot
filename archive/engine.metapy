@@ -1,0 +1,467 @@
+#!/usr/bin/env python3
+import os
+import csv
+import json
+import time
+import sys
+import requests
+from collections import deque
+from dotenv import load_dotenv
+from twelvedata import TDClient
+
+load_dotenv(dotenv_path="/opt/gold/.env")
+
+TWELVE_DATA_KEY = os.getenv("TWELVE_DATA_API_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# --- STRATEGY PARAMETERS - FIXED ---
+LOOKBACK_PERIOD = 20
+WICK_RATIO_TARGET = 0.30
+EMA_FAST = 50
+EMA_SLOW = 200
+RSI_PERIOD = 14
+ATR_PERIOD = 14
+
+FLOOR_BUFFER_PCT = 0.0015 # allow 0.15% above floor to count as test
+ATR_SL_MULT = 1.0
+ATR_TP_MULT = 2.5
+
+# --- DIAGNOSTIC / RELAXATION TOGGLES ---
+REQUIRE_VOLUME_CONFIRM = False # SET FALSE FOR XAU/USD - tick volume is fake
+VOLUME_SPIKE_MULTIPLIER = 0.9 # only if you turn volume back on
+REQUIRE_TREND_CONFIRM = True
+STATS_EVERY_N_CANDLES = 30
+
+STARTING_BALANCE = 500.00
+LOG_FILE_PATH = "/opt/gold/forward_test_log.csv"
+STATUS_FILE_PATH = "/opt/gold/status.json"
+
+class GoldEngine:
+    def __init__(self):
+        self.lows = deque(maxlen=EMA_SLOW)
+        self.highs = deque(maxlen=EMA_SLOW)
+        self.closes = deque(maxlen=EMA_SLOW)
+        self.volumes = deque(maxlen=EMA_SLOW) # this will now be tick-counts
+        self.tr_list = deque(maxlen=ATR_PERIOD)
+
+        self.rsi_gains = deque(maxlen=RSI_PERIOD)
+        self.rsi_losses = deque(maxlen=RSI_PERIOD)
+        self.prev_close = None
+        self.rsi = None
+
+        self.ema_fast = None
+        self.ema_slow = None
+        self.atr = None
+        self.k_fast = 2 / (EMA_FAST + 1)
+        self.k_slow = 2 / (EMA_SLOW + 1)
+
+        self.current_minute = None
+        self.tick_pool = []
+
+        self.balance = STARTING_BALANCE
+        self.trade_active = False
+        self.entry_price = 0.0
+        self.stop_loss = 0.0
+        self.take_profit = 0.0
+        self.total_trades = 0
+        self.wins = 0
+        self.losses = 0
+
+        self.warmup_logged = False
+
+        # diagnostic funnel
+        self.candles_evaluated = 0
+        self.candles_warm = 0
+        self.hit_tested_floor = 0
+        self.hit_valid_rejection = 0
+        self.hit_held_support = 0
+        self.hit_volume_confirmed = 0
+        self.hit_trend_confirmed = 0
+        self.hit_all = 0
+
+        self.load_history_from_csv()
+        self.save_status()
+
+    def load_history_from_csv(self):
+        if not os.path.isfile(LOG_FILE_PATH):
+            print("ℹ No existing log found. Starting fresh.")
+            return
+        print(f"📂 Loading history from {LOG_FILE_PATH}...")
+        try:
+            rows = []
+            with open(LOG_FILE_PATH, mode="r") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    rows.append(row)
+
+            if not rows:
+                print("⚠ Log file is empty.")
+                return
+
+            recent = rows[-EMA_SLOW:] if len(rows) > EMA_SLOW else rows
+            print(f"📊 Found {len(rows)} total rows → using last {len(recent)}")
+
+            for row in recent:
+                try:
+                    low = float(row["Low"])
+                    high = float(row.get("High", row["Low"]))
+                    close = float(row["Close"])
+                    vol_str = row.get("Volume", "1")
+                    volume = float(vol_str) if vol_str not in ("Calculating", "", None) else 1.0
+
+                    self.lows.append(low)
+                    self.highs.append(high)
+                    self.closes.append(close)
+                    self.volumes.append(volume)
+
+                    if self.prev_close is not None:
+                        # RSI
+                        change = close - self.prev_close
+                        self.rsi_gains.append(max(change, 0))
+                        self.rsi_losses.append(max(-change, 0))
+                        # TR for ATR
+                        tr = max(high - low, abs(high - self.prev_close), abs(low - self.prev_close))
+                        self.tr_list.append(tr)
+
+                    self.prev_close = close
+                except:
+                    continue
+
+            # Rebuild EMAs correctly
+            if len(self.closes) >= EMA_SLOW:
+                # seed with SMA
+                self.ema_fast = sum(list(self.closes)[-EMA_FAST:]) / EMA_FAST
+                self.ema_slow = sum(list(self.closes)[-EMA_SLOW:]) / EMA_SLOW
+                # continue ema from oldest to newest in our buffer for accuracy
+                # We already have SMA, now walk forward
+                closes_list = list(self.closes)
+                # reset and rebuild properly
+                self.ema_fast = sum(closes_list[:EMA_FAST]) / EMA_FAST
+                self.ema_slow = sum(closes_list[:EMA_SLOW]) / EMA_SLOW
+                for price in closes_list[EMA_FAST:]:
+                    self.ema_fast = (price * self.k_fast) + (self.ema_fast * (1 - self.k_fast))
+                for price in closes_list[EMA_SLOW:]:
+                    self.ema_slow = (price * self.k_slow) + (self.ema_slow * (1 - self.k_slow))
+
+            self.calculate_rsi()
+            self.calculate_atr()
+
+            print(f"✅ Loaded {len(self.closes)} candles | EMA50: {self.ema_fast} | EMA200: {self.ema_slow} | RSI: {self.rsi} | ATR: {self.atr}")
+
+        except Exception as e:
+            print(f"❌ Failed to load history: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def calculate_rsi(self):
+        if len(self.rsi_gains) < RSI_PERIOD:
+            self.rsi = None
+            return
+        avg_gain = sum(self.rsi_gains) / RSI_PERIOD
+        avg_loss = sum(self.rsi_losses) / RSI_PERIOD
+        if avg_loss == 0:
+            self.rsi = 100.0
+        else:
+            rs = avg_gain / avg_loss
+            self.rsi = 100 - (100 / (1 + rs))
+
+    def calculate_atr(self):
+        if len(self.tr_list) < ATR_PERIOD:
+            self.atr = None
+            return
+        self.atr = sum(self.tr_list) / ATR_PERIOD
+
+    def update_indicators(self, high, low, close):
+        # EMA
+        if self.ema_fast is None:
+            if len(self.closes) >= EMA_FAST:
+                self.ema_fast = sum(list(self.closes)[-EMA_FAST:]) / EMA_FAST
+        else:
+            self.ema_fast = (close * self.k_fast) + (self.ema_fast * (1 - self.k_fast))
+
+        if self.ema_slow is None:
+            if len(self.closes) >= EMA_SLOW:
+                self.ema_slow = sum(list(self.closes)[-EMA_SLOW:]) / EMA_SLOW
+        else:
+            self.ema_slow = (close * self.k_slow) + (self.ema_slow * (1 - self.k_slow))
+
+        # RSI & TR
+        if self.prev_close is not None:
+            change = close - self.prev_close
+            self.rsi_gains.append(max(change, 0))
+            self.rsi_losses.append(max(-change, 0))
+            self.calculate_rsi()
+
+            tr = max(high - low, abs(high - self.prev_close), abs(low - self.prev_close))
+            self.tr_list.append(tr)
+            self.calculate_atr()
+
+        self.prev_close = close
+
+    def save_status(self):
+        win_rate = (self.wins / self.total_trades * 100) if self.total_trades > 0 else 0.0
+        data = {
+            "equity": round(self.balance, 2),
+            "total_trades": self.total_trades,
+            "wins": self.wins,
+            "losses": self.losses,
+            "win_rate": round(win_rate, 1),
+            "trade_active": self.trade_active,
+            "entry_price": round(self.entry_price, 2) if self.trade_active else None,
+            "stop_loss": round(self.stop_loss, 2) if self.trade_active else None,
+            "take_profit": round(self.take_profit, 2) if self.trade_active else None,
+            "last_update": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "rsi": round(self.rsi, 1) if self.rsi is not None else None,
+            "ema_fast": round(self.ema_fast, 2) if self.ema_fast else None,
+            "ema_slow": round(self.ema_slow, 2) if self.ema_slow else None,
+            "atr": round(self.atr, 2) if self.atr else None,
+            "funnel": {
+                "candles_evaluated": self.candles_evaluated,
+                "candles_warm": self.candles_warm,
+                "tested_floor": self.hit_tested_floor,
+                "valid_rejection": self.hit_valid_rejection,
+                "held_support": self.hit_held_support,
+                "volume_confirmed": self.hit_volume_confirmed,
+                "trend_confirmed": self.hit_trend_confirmed,
+                "all_confirmed": self.hit_all,
+            },
+        }
+        try:
+            with open(STATUS_FILE_PATH, "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"⚠ Failed to write status.json: {e}")
+
+    def send_telegram(self, text: str):
+        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+            return
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {"chat_id": str(TELEGRAM_CHAT_ID), "text": text, "parse_mode": "Markdown"}
+        try:
+            requests.post(url, json=payload, timeout=4)
+        except Exception as e:
+            print(f"\n⚠ Telegram failed: {e}")
+
+    def log_candle(self, timestamp, o, h, l, c, ratio, tick_count, vol_ma, dynamic_floor, ema_f, ema_s, tested, rejected, held, vol_conf, trend_conf, rsi_val, atr_val):
+        file_exists = os.path.isfile(LOG_FILE_PATH)
+        with open(LOG_FILE_PATH, mode="a", newline="") as f:
+            fieldnames = ["Timestamp","Open","High","Low","Close","Wick_Ratio","Volume","Vol_MA","Vol_Confirmed","Dynamic_Floor","EMA_50","EMA_200","Trend_Confirmed","Tested_Floor","Valid_Rejection","Held_Floor","RSI","ATR"]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow({
+                "Timestamp": timestamp,
+                "Open": f"{o:.2f}", "High": f"{h:.2f}", "Low": f"{l:.2f}", "Close": f"{c:.2f}",
+                "Wick_Ratio": f"{ratio:.1%}",
+                "Volume": f"{tick_count:.0f}",
+                "Vol_MA": f"{vol_ma:.1f}" if vol_ma is not None else "Calculating",
+                "Vol_Confirmed": str(vol_conf),
+                "Dynamic_Floor": f"{dynamic_floor:.2f}" if dynamic_floor is not None else "Calculating",
+                "EMA_50": f"{ema_f:.2f}" if ema_f is not None else "Calculating",
+                "EMA_200": f"{ema_s:.2f}" if ema_s is not None else "Calculating",
+                "Trend_Confirmed": str(trend_conf),
+                "Tested_Floor": str(tested),
+                "Valid_Rejection": str(rejected),
+                "Held_Floor": str(held),
+                "RSI": f"{rsi_val:.1f}" if rsi_val is not None else "Calculating",
+                "ATR": f"{atr_val:.2f}" if atr_val is not None else "Calculating",
+            })
+
+    def print_funnel(self):
+        print("\n🔍 --- SIGNAL FUNNEL ---")
+        print(f"Candles evaluated: {self.candles_evaluated}")
+        print(f"Past warmup: {self.candles_warm}")
+        print(f"→ Tested floor: {self.hit_tested_floor}")
+        print(f"→ Valid rejection wick: {self.hit_valid_rejection}")
+        print(f"→ Held support: {self.hit_held_support}")
+        print(f"→ Volume confirmed: {self.hit_volume_confirmed}")
+        print(f"→ Trend confirmed: {self.hit_trend_confirmed}")
+        print(f"→ ALL met: {self.hit_all}")
+        print("────────────────────────\n")
+
+    def evaluate_candle(self, o, h, l, c, tick_count):
+        candle_range = h - l
+        if candle_range <= 0:
+            return
+
+        body_bottom = min(o, c)
+        lower_wick = body_bottom - l
+        wick_ratio = lower_wick / candle_range if candle_range!= 0 else 0
+        valid_rejection = wick_ratio >= WICK_RATIO_TARGET
+
+        dynamic_floor = None
+        volume_ma = None
+        tested_floor = False
+        held_support = False
+        volume_confirmed = False
+        trend_confirmed = False
+
+        self.candles_evaluated += 1
+
+        if len(self.closes) >= LOOKBACK_PERIOD:
+            dynamic_floor = min(list(self.lows)[-LOOKBACK_PERIOD:])
+            volume_ma = sum(list(self.volumes)[-LOOKBACK_PERIOD:]) / LOOKBACK_PERIOD if len(self.volumes) >= LOOKBACK_PERIOD else None
+
+            # FIX: Buffer test
+            tested_floor = l <= (dynamic_floor * (1 + FLOOR_BUFFER_PCT))
+            held_support = c > dynamic_floor
+            if volume_ma:
+                volume_confirmed = tick_count >= (volume_ma * VOLUME_SPIKE_MULTIPLIER)
+            else:
+                volume_confirmed = True
+
+        # FIX: Proper dual EMA trend
+        if self.ema_fast is not None and self.ema_slow is not None and self.rsi is not None:
+            trend_confirmed = (self.ema_fast > self.ema_slow) and (c > self.ema_fast) and (self.rsi >= 40)
+        elif self.ema_slow is not None:
+            trend_confirmed = c > self.ema_slow
+
+        if dynamic_floor is not None and self.ema_slow is not None:
+            self.candles_warm += 1
+            if tested_floor: self.hit_tested_floor += 1
+            if valid_rejection: self.hit_valid_rejection += 1
+            if held_support: self.hit_held_support += 1
+            if volume_confirmed: self.hit_volume_confirmed += 1
+            if trend_confirmed: self.hit_trend_confirmed += 1
+
+        if len(self.closes) < EMA_SLOW:
+            if not self.warmup_logged or len(self.closes) % 30 == 0:
+                print(f"⏳ Warming up... {len(self.closes)}/{EMA_SLOW} | ATR: {self.atr}")
+                self.warmup_logged = True
+        else:
+            rsi_str = f"{self.rsi:.1f}" if self.rsi is not None else "—"
+            atr_str = f"{self.atr:.2f}" if self.atr is not None else "—"
+            print(f"📊 Floor: ${dynamic_floor:.2f} | EMA50: ${self.ema_fast:.2f} EMA200: ${self.ema_slow:.2f} | RSI: {rsi_str} ATR: {atr_str} | Close: ${c:.2f}")
+            print(f" → Tested: {tested_floor} | Rej: {valid_rejection} ({wick_ratio:.1%}) | Held: {held_support} | Vol: {volume_confirmed} ({tick_count}/{volume_ma:.0f if volume_ma else 0}) | Trend: {trend_confirmed}")
+
+        if self.candles_evaluated % STATS_EVERY_N_CANDLES == 0:
+            self.print_funnel()
+
+        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        self.log_candle(ts, o, h, l, c, wick_ratio, tick_count, volume_ma, dynamic_floor, self.ema_fast, self.ema_slow, tested_floor, valid_rejection, held_support, volume_confirmed, trend_confirmed, self.rsi, self.atr)
+
+        # Update history AFTER evaluation
+        self.lows.append(l)
+        self.highs.append(h)
+        self.volumes.append(tick_count)
+        self.closes.append(c)
+        self.update_indicators(h, l, c)
+
+        # Entry logic
+        vol_ok = volume_confirmed if REQUIRE_VOLUME_CONFIRM else True
+        trend_ok = trend_confirmed if REQUIRE_TREND_CONFIRM else True
+
+        if (dynamic_floor is not None and self.ema_slow is not None and self.atr is not None and
+            tested_floor and valid_rejection and held_support and vol_ok and trend_ok and not self.trade_active):
+
+            self.hit_all += 1
+            self.trade_active = True
+            self.total_trades += 1
+            self.entry_price = c
+            self.stop_loss = l - (self.atr * ATR_SL_MULT)
+            self.take_profit = c + (self.atr * ATR_TP_MULT)
+
+            rsi_text = f"{self.rsi:.1f}" if self.rsi is not None else "N/A"
+            msg = (
+                f"🚨 *GOLD BUY SETUP #{self.total_trades}*\n\n"
+                f"💰 Entry: `${self.entry_price:.2f}`\n"
+                f"📈 EMA50: `${self.ema_fast:.2f}` > EMA200: `${self.ema_slow:.2f}`\n"
+                f"📊 RSI: `{rsi_text}` ATR: `{self.atr:.2f}`\n"
+                f"Floor: `${dynamic_floor:.2f}` Wick: `{wick_ratio:.1%}`\n"
+                f"🛑 SL: `${self.stop_loss:.2f}`\n"
+                f"🎯 TP: `${self.take_profit:.2f}` (RR 1:{ATR_TP_MULT/ATR_SL_MULT})"
+            )
+            self.send_telegram(msg)
+            print(f"\n🤖 Alert sent → Trade #{self.total_trades}\n")
+            self.save_status()
+
+    def aggregate_tick(self, price: float):
+        minute_now = int(time.time() // 60)
+        if self.current_minute is None:
+            self.current_minute = minute_now
+
+        if minute_now!= self.current_minute:
+            if self.tick_pool:
+                o = self.tick_pool[0]
+                h = max(self.tick_pool)
+                l = min(self.tick_pool)
+                c = self.tick_pool[-1]
+                tick_count = len(self.tick_pool)
+                print(f"\n⏰ Candle closed | O:{o:.2f} H:{h:.2f} L:{l:.2f} C:{c:.2f} Ticks:{tick_count}")
+                self.evaluate_candle(o, h, l, c, tick_count)
+            self.tick_pool.clear()
+            self.current_minute = minute_now
+
+        self.tick_pool.append(price)
+
+    def check_position(self, price: float):
+        if not self.trade_active:
+            return
+        if price >= self.take_profit:
+            profit = price - self.entry_price
+            self.balance += profit
+            self.wins += 1
+            self.trade_active = False
+            wr = (self.wins / self.total_trades) * 100
+            self.send_telegram(f"✅ *TP HIT*\nExit: `${price:.2f}` (+${profit:.2f})\nEquity: `${self.balance:.2f}`\nWin Rate: {wr:.1f}%")
+            self.print_ledger()
+            self.save_status()
+        elif price <= self.stop_loss:
+            loss = self.entry_price - price
+            self.balance -= loss
+            self.losses += 1
+            self.trade_active = False
+            wr = (self.wins / self.total_trades) * 100
+            self.send_telegram(f"❌ *SL HIT*\nExit: `${price:.2f}` (-${loss:.2f})\nEquity: `${self.balance:.2f}`\nWin Rate: {wr:.1f}%")
+            self.print_ledger()
+            self.save_status()
+
+    def print_ledger(self):
+        wr = (self.wins / self.total_trades * 100) if self.total_trades else 0
+        print("\n📊 --- FORWARD TEST SCORECARD ---")
+        print(f"Trades: {self.total_trades} | Wins: {self.wins} | Losses: {self.losses}")
+        print(f"Win Rate: {wr:.1f}% | Equity: ${self.balance:.2f}")
+        print("────────────────────────────────\n")
+
+    def on_event(self, event):
+        if event.get("event")!= "price":
+            return
+        try:
+            price = float(event["price"])
+        except:
+            return
+        # FIX: no more day_volume
+        self.check_position(price)
+        self.aggregate_tick(price)
+        print(f"⏱ ${price:.2f} | ticks this min: {len(self.tick_pool)} ", end="\r")
+        sys.stdout.flush()
+
+def main():
+    print("🚀 Gold Engine v2 starting...")
+    if not TWELVE_DATA_KEY:
+        print("❌ TWELVE_DATA_API_KEY missing in.env")
+        sys.exit(1)
+    engine = GoldEngine()
+    try:
+        td = TDClient(apikey=TWELVE_DATA_KEY)
+        ws = td.websocket(on_event=engine.on_event)
+        ws.subscribe(["XAU/USD"])
+        ws.connect()
+        print("📡 Connected. Listening for XAU/USD...\n")
+        while True:
+            try:
+                ws.heartbeat()
+            except Exception as e:
+                print(f"\n⚠ Heartbeat error: {e}")
+            time.sleep(15)
+    except KeyboardInterrupt:
+        print("\n⚙ Shutting down cleanly...")
+        engine.save_status()
+        engine.print_funnel()
+    except Exception as e:
+        print(f"\n❌ Fatal error: {e}")
+        raise
+
+if __name__ == "__main__":
+    main()

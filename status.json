@@ -1,0 +1,25 @@
+{
+  "equity": 500.0,
+  "total_trades": 11,
+  "wins": 0,
+  "losses": 0,
+  "win_rate": 0.0,
+  "trade_active": false,
+  "last_update": "2026-09-07 03:44:00",
+  "rsi": 15.8,
+  "ema_fast": 4408.49,
+  "ema_slow": 4411.96,
+  "atr": 0.89,
+  "entry_price": null,
+  "stop_loss": null,
+  "take_profit": null,
+  "funnel": {
+    "candles_evaluated": 7,
+    "tested_floor": 6,
+    "valid_rejection": 2,
+    "held_support": 6,
+    "volume_confirmed": 6,
+    "trend_confirmed": 0,
+    "all_confirmed": 0
+  }
+}

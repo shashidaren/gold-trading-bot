@@ -8,7 +8,6 @@ import requests
 from collections import deque
 from dotenv import load_dotenv
 from trade_filter import should_take_trade
-
 # ==========================================
 # 🎛️ CONFIGURATION SWITCH
 # Set to "FORWARD_TEST" to use Twelve Data and simulated balance
@@ -39,9 +38,9 @@ ATR_TP_MULT = 3.0
 REQUIRE_VOLUME_CONFIRM = False
 VOLUME_SPIKE_MULTIPLIER = 0.9
 REQUIRE_TREND_CONFIRM = True
-RSI_MIN = 30.0      # Prevent catching falling knives
-RSI_MAX = 68.0      # Prevent buying overbought tops
-MIN_ATR = 1.10      # Aligned with trade_filter.py (Single source of truth)
+RSI_MIN = 30.0      # NEW: Prevent catching falling knives
+RSI_MAX = 68.0      # NEW: Prevent buying overbought tops
+MIN_ATR = 0.70       # NEW: Prevent trading in low volatility chop
 
 # Live Trading Parameters (Only used if TRADING_MODE == "LIVE")
 SYMBOL = "GOLD"
@@ -86,14 +85,7 @@ class GoldEngine:
         self.entry_price = 0.0
         self.stop_loss = 0.0
         self.take_profit = 0.0
-        # Load previous trade count from CSV to prevent resetting to 1
-        if os.path.isfile(TRADES_LOG_PATH):
-            try:
-                with open(TRADES_LOG_PATH, "r") as f:
-                    self.total_trades = sum(1 for row in csv.reader(f)) - 1
-            except Exception: self.total_trades = 0
-        else:
-            self.total_trades = 0
+        self.total_trades = 0
         self.wins = 0
         self.losses = 0
 
@@ -106,8 +98,7 @@ class GoldEngine:
 
         self.warmup_logged = False
         self.candles_evaluated = 0
-        
-        # Funnel diagnostics
+        self.candles_warm = 0
         self.hit_tested_floor = 0
         self.hit_valid_rejection = 0
         self.hit_held_support = 0
@@ -191,14 +182,10 @@ class GoldEngine:
 
     def save_status(self):
         win_rate = (self.wins / self.total_trades * 100) if self.total_trades > 0 else 0.0
-        active_trade = self.trade_active
         data = {"equity": round(self.balance, 2), "total_trades": self.total_trades, "wins": self.wins, "losses": self.losses,
-                "win_rate": round(win_rate, 1), "trade_active": active_trade, "last_update": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "win_rate": round(win_rate, 1), "trade_active": self.trade_active, "last_update": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "rsi": round(self.rsi, 1) if self.rsi else None, "ema_fast": round(self.ema_fast, 2) if self.ema_fast else None,
                 "ema_slow": round(self.ema_slow, 2) if self.ema_slow else None, "atr": round(self.atr, 2) if self.atr else None,
-                "entry_price": round(self.entry_price, 2) if active_trade and self.entry_price else None,
-                "stop_loss": round(self.stop_loss, 2) if active_trade and self.stop_loss else None,
-                "take_profit": round(self.take_profit, 2) if active_trade and self.take_profit else None,
                 "funnel": {"candles_evaluated": self.candles_evaluated, "tested_floor": self.hit_tested_floor,
                            "valid_rejection": self.hit_valid_rejection, "held_support": self.hit_held_support,
                            "volume_confirmed": self.hit_volume_confirmed, "trend_confirmed": self.hit_trend_confirmed, "all_confirmed": self.hit_all}}
@@ -252,17 +239,12 @@ class GoldEngine:
             held_support = c > dynamic_floor
             volume_confirmed = tick_count >= (volume_ma * VOLUME_SPIKE_MULTIPLIER) if volume_ma else True
 
-        if self.ema_fast is not None and self.ema_slow is not None: 
-            trend_confirmed = self.ema_fast > self.ema_slow
-        elif self.ema_fast is not None: 
-            trend_confirmed = c > self.ema_fast
-        else: 
-            trend_confirmed = False
+        if self.ema_fast is not None and self.ema_slow is not None: trend_confirmed = self.ema_fast > self.ema_slow
+        elif self.ema_fast is not None: trend_confirmed = c > self.ema_fast
+        else: trend_confirmed = False
 
         if len(self.closes) < EMA_SLOW:
-            if not self.warmup_logged or len(self.closes) % 30 == 0: 
-                print(f"⏳ Warming up... {len(self.closes)}/{EMA_SLOW}")
-                self.warmup_logged = True
+            if not self.warmup_logged or len(self.closes) % 30 == 0: print(f"⏳ Warming up... {len(self.closes)}/{EMA_SLOW}"); self.warmup_logged = True
         else:
             print(f"📊 Floor:${dynamic_floor:.2f} | EMA50:${self.ema_fast:.2f} EMA200:${self.ema_slow:.2f} | RSI:{self.rsi} ATR:{self.atr} | C:${c:.2f}")
             print(f"   Tested:{tested_floor} | Rej:{valid_rejection} ({wick_ratio:.0%}) | Held:{held_support} | Vol:{volume_confirmed} | Trend:{trend_confirmed}")
@@ -282,14 +264,7 @@ class GoldEngine:
             positions = mt5.positions_get(symbol=SYMBOL, magic=MAGIC_NUMBER)
             in_trade = (positions is not None and len(positions) > 0)
 
-        # --- DIAGNOSTIC: Increment funnel stats ---
-        if dynamic_floor is not None:
-            if tested_floor: self.hit_tested_floor += 1
-            if valid_rejection: self.hit_valid_rejection += 1
-            if held_support: self.hit_held_support += 1
-            if volume_confirmed: self.hit_volume_confirmed += 1
-            if trend_confirmed: self.hit_trend_confirmed += 1
-
+        
         if (dynamic_floor is not None and self.ema_slow is not None and self.atr is not None and
                 tested_floor and valid_rejection and held_support and vol_ok and trend_ok and rsi_ok and atr_ok and not in_trade):
             
@@ -297,10 +272,9 @@ class GoldEngine:
 
             # --- Pre-trade filter ---
             allow, reason = should_take_trade(
+                current_rsi=self.rsi,
                 current_atr=self.atr,
-                current_price=c,
-                ema_fast=self.ema_fast,
-                ema_slow=self.ema_slow
+                current_wick=wick_ratio
             )
 
             if not allow:
@@ -314,6 +288,8 @@ class GoldEngine:
                 self.execute_live_trade(c, wick_ratio, ts, dynamic_floor)
             else:
                 self.execute_simulated_trade(c, wick_ratio, ts, dynamic_floor)
+
+
 
     def execute_live_trade(self, c, wick_ratio, ts, dynamic_floor):
         print("\n🚨 ALL CONDITIONS MET! PREPARING LIVE ORDER...")

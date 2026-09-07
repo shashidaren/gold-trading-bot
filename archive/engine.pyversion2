@@ -1,0 +1,248 @@
+import os
+import csv
+import time
+import sys
+import requests
+from dotenv import load_dotenv
+from twelvedata import TDClient
+
+# Load hidden parameters safely from your path
+load_dotenv(dotenv_path="/opt/gold/.env")
+
+ACCOUNT_ID = "420568040"
+TWELVE_DATA_KEY = os.getenv("TWELVE_DATA_API_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# --- STRATEGY PARAMETERS ---
+LOOKBACK_PERIOD = 20          
+WICK_RATIO_TARGET = 0.50     
+VOLUME_SPIKE_MULTIPLIER = 1.5  # Filter: Vol must be 1.5x of the 20-period MA
+EMA_PERIOD = 200               # New: Trend filter period
+
+# --- FORWARD TEST ENVIRONMENT VARIABLES ---
+VIRTUAL_BALANCE = 500.00
+SIMULATED_TRADE_ACTIVE = False
+VIRTUAL_ENTRY_PRICE = 0.00
+VIRTUAL_STOP_LOSS = 0.00
+VIRTUAL_TAKE_PROFIT = 0.00
+
+TOTAL_SIM_TRADES = 0
+SIM_WINS = 0
+SIM_LOSSES = 0
+
+# --- DATA STORAGE QUEUES ---
+minute_tick_pool = []
+minute_volume_pool = []       
+current_candle_minute = None
+completed_lows_cache = []    
+completed_volumes_cache = []  
+completed_closes_cache = []   # New: Cache for 200 EMA calculation
+
+LOG_FILE_PATH = "/opt/gold/forward_test_log.csv"
+
+def send_telegram_notification(text_message):
+    """
+    Dispatches real-time status alerts directly to your mobile device via Telegram API.
+    """
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return  
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": str(TELEGRAM_CHAT_ID), "text": text_message, "parse_mode": "Markdown"}
+    try:
+        requests.post(url, json=payload, timeout=3)
+    except Exception as e:
+        print(f"\n⚠️ Telegram alert delivery failed: {e}")
+
+def log_candle_to_csv(timestamp, c_open, c_high, c_low, c_close, ratio, volume, vol_ma, dynamic_floor, ema_200, tested, rejected, held, vol_conf, trend_conf):
+    file_exists = os.path.isfile(LOG_FILE_PATH)
+    with open(LOG_FILE_PATH, mode='a', newline='') as csv_file:
+        fieldnames = ['Timestamp', 'Open', 'High', 'Low', 'Close', 'Wick_Ratio', 'Volume', 'Vol_MA', 'Vol_Confirmed', 'Dynamic_Floor', 'EMA_200', 'Trend_Confirmed', 'Tested_Floor', 'Valid_Rejection', 'Held_Floor']
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow({
+            'Timestamp': timestamp, 'Open': f"{c_open:.2f}", 'High': f"{c_high:.2f}",
+            'Low': f"{c_low:.2f}", 'Close': f"{c_close:.2f}", 'Wick_Ratio': f"{ratio:.1%}",
+            'Volume': f"{volume:.0f}", 'Vol_MA': f"{vol_ma:.1f}" if vol_ma else "Calculating",
+            'Vol_Confirmed': str(vol_conf),
+            'Dynamic_Floor': f"{dynamic_floor:.2f}" if dynamic_floor else "Calculating",
+            'EMA_200': f"{ema_200:.2f}" if ema_200 else "Calculating",
+            'Trend_Confirmed': str(trend_conf),
+            'Tested_Floor': str(tested), 'Valid_Rejection': str(rejected), 'Held_Floor': str(held)
+        })
+
+def evaluate_price_action_rules(c_open, c_high, c_low, c_close, c_volume):
+    global TOTAL_SIM_TRADES, SIMULATED_TRADE_ACTIVE, VIRTUAL_ENTRY_PRICE, VIRTUAL_STOP_LOSS, VIRTUAL_TAKE_PROFIT, completed_lows_cache, completed_volumes_cache, completed_closes_cache
+    
+    candle_range = c_high - c_low
+    if candle_range <= 0: return
+
+    body_bottom = min(c_open, c_close)
+    lower_wick = body_bottom - c_low
+    calculated_ratio = lower_wick / candle_range
+
+    # 1. Evaluate indicators based on historical data
+    if len(completed_closes_cache) < EMA_PERIOD:
+        print(f"⏳ Accumulating historical data for EMA 200... ({len(completed_closes_cache)}/{EMA_PERIOD} minutes filled)")
+        dynamic_floor = None
+        volume_ma = None
+        current_ema = None
+        tested_floor, held_support, volume_confirmed, trend_confirmed = False, False, False, False
+    else:
+        # Dynamic floor uses the last 20 periods from the pool
+        dynamic_floor = min(completed_lows_cache[-LOOKBACK_PERIOD:])
+        volume_ma = sum(completed_volumes_cache[-LOOKBACK_PERIOD:]) / LOOKBACK_PERIOD
+        
+        # Calculate 200 EMA iteratively
+        k = 2 / (EMA_PERIOD + 1)
+        ema = completed_closes_cache[0]
+        for price in completed_closes_cache[1:]:
+            ema = (price * k) + (ema * (1 - k))
+        current_ema = ema
+        
+        tested_floor = c_low <= dynamic_floor
+        held_support = c_close > dynamic_floor
+        volume_confirmed = c_volume >= (volume_ma * VOLUME_SPIKE_MULTIPLIER)
+        trend_confirmed = c_close > current_ema  # Bullish trend filter condition
+
+    valid_rejection = calculated_ratio >= WICK_RATIO_TARGET
+
+    if dynamic_floor and volume_ma and current_ema:
+        print(f"📊 Floor: ${dynamic_floor:.2f} | EMA 200: ${current_ema:.2f} | Close: ${c_close:.2f}")
+        print(f"🧐 Conditions -> Floor Tested: {tested_floor} | Trend Up: {trend_confirmed} | Vol Spike: {volume_confirmed}")
+
+    formatted_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+    log_candle_to_csv(formatted_time, c_open, c_high, c_low, c_close, calculated_ratio, c_volume, volume_ma, dynamic_floor, current_ema, tested_floor, valid_rejection, held_support, volume_confirmed, trend_confirmed)
+
+    # 2. Slide lookup windows forward (retaining up to 200 periods)
+    completed_lows_cache.append(c_low)
+    completed_volumes_cache.append(c_volume)
+    completed_closes_cache.append(c_close)
+    if len(completed_closes_cache) > EMA_PERIOD:
+        completed_lows_cache.pop(0)  
+        completed_volumes_cache.pop(0)
+        completed_closes_cache.pop(0)
+
+    # 3. Execution Signal Trigger (Requires Trend Confirmation)
+    if dynamic_floor and tested_floor and valid_rejection and held_support and volume_confirmed and trend_confirmed:
+        if not SIMULATED_TRADE_ACTIVE:
+            SIMULATED_TRADE_ACTIVE = True
+            TOTAL_SIM_TRADES += 1
+            VIRTUAL_ENTRY_PRICE = c_close
+            
+            VIRTUAL_STOP_LOSS = c_low - 1.00 
+            VIRTUAL_TAKE_PROFIT = c_close + 5.00
+            
+            msg = (f"🚨 *TREND-FILTERED SETUP RECOGNIZED*\n\n"
+                   f"📥 Virtual Position #{TOTAL_SIM_TRADES} Opened\n"
+                   f"💰 Entry Price: ${VIRTUAL_ENTRY_PRICE:.2f}\n"
+                   f"📈 200 EMA Alignment: Valid (${current_ema:.2f})\n"
+                   f"🛑 Structural SL: ${VIRTUAL_STOP_LOSS:.2f}\n"
+                   f"🎯 Target TP: ${VIRTUAL_TAKE_PROFIT:.2f}")
+            send_telegram_notification(msg)
+            print(f"\n🤖 Alert dispatched to phone for Trade #{TOTAL_SIM_TRADES}\n")
+
+def aggregate_ticks_into_candle(live_price, live_volume):
+    global minute_tick_pool, minute_volume_pool, current_candle_minute
+    current_time = time.localtime()
+    minute_now = current_time.tm_min
+    
+    if current_candle_minute is None:
+        current_candle_minute = minute_now
+        
+    if minute_now != current_candle_minute:
+        if len(minute_tick_pool) > 0:
+            candle_open = minute_tick_pool[0]
+            candle_high = max(minute_tick_pool)
+            candle_low = min(minute_tick_pool)
+            candle_close = minute_tick_pool[-1]
+            candle_volume = sum(minute_volume_pool)
+            
+            print(f"\n⏰ [CANDLE CLOSED] Time: {current_time.tm_hour}:{current_candle_minute:02d} | O: {candle_open:.2f} H: {candle_high:.2f} L: {candle_low:.2f} C: {candle_close:.2f} V: {candle_volume:.0f}")
+            evaluate_price_action_rules(candle_open, candle_high, candle_low, candle_close, candle_volume)
+            
+        minute_tick_pool.clear()
+        minute_volume_pool.clear()
+        current_candle_minute = minute_now
+        
+    minute_tick_pool.append(live_price)
+    minute_volume_pool.append(live_volume)
+
+def check_virtual_position(current_price):
+    global SIMULATED_TRADE_ACTIVE, VIRTUAL_BALANCE, SIM_WINS, SIM_LOSSES
+    if not SIMULATED_TRADE_ACTIVE: return
+    
+    if current_price >= VIRTUAL_TAKE_PROFIT:
+        profit_gained = current_price - VIRTUAL_ENTRY_PRICE
+        VIRTUAL_BALANCE += profit_gained
+        SIM_WINS += 1
+        SIMULATED_TRADE_ACTIVE = False
+        
+        win_rate = (SIM_WINS / TOTAL_SIM_TRADES) * 100
+        msg = (f"✅ *VIRTUAL PROFIT TARGET HIT*\n\n"
+               f"📥 Exit Price: ${current_price:.2f} (+${profit_gained:.2f})\n"
+               f"💳 Account Equity: ${VIRTUAL_BALANCE:.2f}\n"
+               f"🎯 Active Win Rate: {win_rate:.1f}%")
+        send_telegram_notification(msg)
+        print_ledger_summary()
+        
+    elif current_price <= VIRTUAL_STOP_LOSS:
+        loss_incurred = VIRTUAL_ENTRY_PRICE - current_price
+        VIRTUAL_BALANCE -= loss_incurred
+        SIM_LOSSES += 1
+        SIMULATED_TRADE_ACTIVE = False
+        
+        win_rate = (SIM_WINS / TOTAL_SIM_TRADES) * 100
+        msg = (f"❌ *VIRTUAL STOP LOSS HIT*\n\n"
+               f"📉 Exit Price: ${current_price:.2f} (-${loss_incurred:.2f})\n"
+               f"💳 Account Equity: ${VIRTUAL_BALANCE:.2f}\n"
+               f"🎯 Active Win Rate: {win_rate:.1f}%")
+        send_telegram_notification(msg)
+        print_ledger_summary()
+
+def print_ledger_summary():
+    win_rate = (SIM_WINS / TOTAL_SIM_TRADES) * 100 if TOTAL_SIM_TRADES > 0 else 0
+    print("\n📊 --- LIVE FORWARD TESTING SCORECARD ---")
+    print(f"📈 Total Tracked Positions: {TOTAL_SIM_TRADES}")
+    print(f"✅ Successful Wins: {SIM_WINS}  |  ❌ Risk Failures: {SIM_LOSSES}")
+    print(f"🎯 Strategy Win Rate: {win_rate:.1f}%")
+    print(f"💳 Simulated Account Equity: ${VIRTUAL_BALANCE:.2f}")
+    print("────────────────────────────────────────\n")
+
+def on_event(event):
+    if event.get("event") == "price":
+        live_price = float(event["price"])
+        live_volume = float(event["volume"]) if "volume" in event else 1.0
+        
+        check_virtual_position(live_price)
+        aggregate_ticks_into_candle(live_price, live_volume)
+        print(f"⏱️ Live Tick: ${live_price:.2f} | Pool: {len(minute_tick_pool)} ticks ", end="\r")
+        sys.stdout.flush()
+
+def main():
+    print("🚀 Initializing Native Linux Cloud Engine via Twelve Data SDK...")
+    print(f"Monitor active for ID: {ACCOUNT_ID}")
+    
+    if not TWELVE_DATA_KEY:
+        print("❌ Error: TWELVE_DATA_API_KEY is not defined in your .env file.")
+        sys.exit(1)
+        
+    try:
+        td = TDClient(apikey=TWELVE_DATA_KEY)
+        ws = td.websocket(on_event=on_event)
+        ws.subscribe(['XAU/USD'])
+        print("📡 Stream Established. Running engine listener loop...")
+        ws.connect()
+        
+        while True:
+            time.sleep(1)
+            
+    except KeyboardInterrupt:
+        print("\n⚙️ Engine manually interrupted by Operator. Safely closing down connections.")
+    except Exception as e:
+        print(f"\n❌ Unhandled Connection Failure: {e}")
+
+if __name__ == "__main__":
+    main()

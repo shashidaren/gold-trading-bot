@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+import os
+import csv
+import json
+import time
+import sys
+import requests
+from collections import deque
+from dotenv import load_dotenv
+from twelvedata import TDClient
+
+# Load environment
+load_dotenv(dotenv_path="/opt/gold/.env")
+
+TWELVE_DATA_KEY = os.getenv("TWELVE_DATA_API_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# --- STRATEGY PARAMETERS ---
+LOOKBACK_PERIOD = 20
+WICK_RATIO_TARGET = 0.50
+VOLUME_SPIKE_MULTIPLIER = 1.2
+EMA_PERIOD = 200
+
+# Simulated trading
+STARTING_BALANCE = 500.00
+STOP_LOSS_OFFSET = 1.00
+TAKE_PROFIT_OFFSET = 5.00
+
+LOG_FILE_PATH = "/opt/gold/forward_test_log.csv"
+STATUS_FILE_PATH = "/opt/gold/status.json"
+
+
+class GoldEngine:
+    def __init__(self):
+        self.lows = deque(maxlen=EMA_PERIOD)
+        self.volumes = deque(maxlen=EMA_PERIOD)
+        self.closes = deque(maxlen=EMA_PERIOD)
+
+        self.ema_200 = None
+        self.ema_k = 2 / (EMA_PERIOD + 1)
+
+        self.current_minute = None
+        self.tick_pool = []
+        self.volume_pool = []
+
+        self.balance = STARTING_BALANCE
+        self.trade_active = False
+        self.entry_price = 0.0
+        self.stop_loss = 0.0
+        self.take_profit = 0.0
+        self.total_trades = 0
+        self.wins = 0
+        self.losses = 0
+
+        self.warmup_logged = False
+        self.save_status()  # create initial status file
+
+    def save_status(self):
+        """Write live equity + trade stats for the dashboard"""
+        win_rate = (self.wins / self.total_trades * 100) if self.total_trades > 0 else 0.0
+        data = {
+            "equity": round(self.balance, 2),
+            "total_trades": self.total_trades,
+            "wins": self.wins,
+            "losses": self.losses,
+            "win_rate": round(win_rate, 1),
+            "trade_active": self.trade_active,
+            "entry_price": round(self.entry_price, 2) if self.trade_active else None,
+            "stop_loss": round(self.stop_loss, 2) if self.trade_active else None,
+            "take_profit": round(self.take_profit, 2) if self.trade_active else None,
+            "last_update": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        try:
+            with open(STATUS_FILE_PATH, "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"⚠️ Failed to write status.json: {e}")
+
+    def send_telegram(self, text: str):
+        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+            return
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": str(TELEGRAM_CHAT_ID),
+            "text": text,
+            "parse_mode": "Markdown"
+        }
+        try:
+            requests.post(url, json=payload, timeout=4)
+        except Exception as e:
+            print(f"\n⚠️ Telegram failed: {e}")
+
+    def log_candle(self, timestamp, o, h, l, c, ratio, volume, vol_ma,
+                   dynamic_floor, ema, tested, rejected, held, vol_conf, trend_conf):
+        file_exists = os.path.isfile(LOG_FILE_PATH)
+        with open(LOG_FILE_PATH, mode="a", newline="") as f:
+            fieldnames = [
+                "Timestamp", "Open", "High", "Low", "Close", "Wick_Ratio",
+                "Volume", "Vol_MA", "Vol_Confirmed", "Dynamic_Floor", "EMA_200",
+                "Trend_Confirmed", "Tested_Floor", "Valid_Rejection", "Held_Floor"
+            ]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow({
+                "Timestamp": timestamp,
+                "Open": f"{o:.2f}",
+                "High": f"{h:.2f}",
+                "Low": f"{l:.2f}",
+                "Close": f"{c:.2f}",
+                "Wick_Ratio": f"{ratio:.1%}",
+                "Volume": f"{volume:.0f}",
+                "Vol_MA": f"{vol_ma:.1f}" if vol_ma is not None else "Calculating",
+                "Vol_Confirmed": str(vol_conf),
+                "Dynamic_Floor": f"{dynamic_floor:.2f}" if dynamic_floor is not None else "Calculating",
+                "EMA_200": f"{ema:.2f}" if ema is not None else "Calculating",
+                "Trend_Confirmed": str(trend_conf),
+                "Tested_Floor": str(tested),
+                "Valid_Rejection": str(rejected),
+                "Held_Floor": str(held),
+            })
+
+    def update_ema(self, close: float):
+        if self.ema_200 is None:
+            if len(self.closes) >= EMA_PERIOD:
+                self.ema_200 = sum(self.closes) / EMA_PERIOD
+        else:
+            self.ema_200 = (close * self.ema_k) + (self.ema_200 * (1 - self.ema_k))
+
+    def evaluate_candle(self, o, h, l, c, volume):
+        candle_range = h - l
+        if candle_range <= 0:
+            return
+
+        body_bottom = min(o, c)
+        lower_wick = body_bottom - l
+        wick_ratio = lower_wick / candle_range
+        valid_rejection = wick_ratio >= WICK_RATIO_TARGET
+
+        dynamic_floor = None
+        volume_ma = None
+        tested_floor = False
+        held_support = False
+        volume_confirmed = False
+        trend_confirmed = False
+
+        if len(self.closes) >= LOOKBACK_PERIOD:
+            dynamic_floor = min(list(self.lows)[-LOOKBACK_PERIOD:])
+            volume_ma = sum(list(self.volumes)[-LOOKBACK_PERIOD:]) / LOOKBACK_PERIOD
+            tested_floor = l <= dynamic_floor
+            held_support = c > dynamic_floor
+            volume_confirmed = volume >= (volume_ma * VOLUME_SPIKE_MULTIPLIER)
+
+        if self.ema_200 is not None:
+            trend_confirmed = c > self.ema_200
+
+        if len(self.closes) < EMA_PERIOD:
+            if not self.warmup_logged or len(self.closes) % 30 == 0:
+                print(f"⏳ Warming up EMA 200... {len(self.closes)}/{EMA_PERIOD}")
+                self.warmup_logged = True
+        else:
+            print(f"📊 Floor: ${dynamic_floor:.2f} | EMA200: ${self.ema_200:.2f} | Close: ${c:.2f}")
+            print(f"   → Tested: {tested_floor} | Trend↑: {trend_confirmed} | VolSpike: {volume_confirmed} | Wick: {wick_ratio:.1%}")
+
+        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        self.log_candle(
+            ts, o, h, l, c, wick_ratio, volume, volume_ma,
+            dynamic_floor, self.ema_200, tested_floor, valid_rejection,
+            held_support, volume_confirmed, trend_confirmed
+        )
+
+        self.lows.append(l)
+        self.volumes.append(volume)
+        self.closes.append(c)
+        self.update_ema(c)
+
+        # Entry
+        if (dynamic_floor is not None and self.ema_200 is not None and
+                tested_floor and valid_rejection and held_support and
+                volume_confirmed and trend_confirmed and not self.trade_active):
+
+            self.trade_active = True
+            self.total_trades += 1
+            self.entry_price = c
+            self.stop_loss = l - STOP_LOSS_OFFSET
+            self.take_profit = c + TAKE_PROFIT_OFFSET
+
+            msg = (
+                f"🚨 *TREND-FILTERED SETUP*\n\n"
+                f"📥 Virtual Position #{self.total_trades}\n"
+                f"💰 Entry: `${self.entry_price:.2f}`\n"
+                f"📈 EMA200: `${self.ema_200:.2f}`\n"
+                f"🛑 SL: `${self.stop_loss:.2f}`\n"
+                f"🎯 TP: `${self.take_profit:.2f}`"
+            )
+            self.send_telegram(msg)
+            print(f"\n🤖 Alert sent → Trade #{self.total_trades}\n")
+            self.save_status()
+
+    def aggregate_tick(self, price: float, volume: float):
+        minute_now = int(time.time() // 60)
+
+        if self.current_minute is None:
+            self.current_minute = minute_now
+
+        if minute_now != self.current_minute:
+            if self.tick_pool:
+                o = self.tick_pool[0]
+                h = max(self.tick_pool)
+                l = min(self.tick_pool)
+                c = self.tick_pool[-1]
+                v = sum(self.volume_pool)
+
+                print(f"\n⏰ Candle closed | O:{o:.2f} H:{h:.2f} L:{l:.2f} C:{c:.2f} V:{v:.0f}")
+                self.evaluate_candle(o, h, l, c, v)
+
+            self.tick_pool.clear()
+            self.volume_pool.clear()
+            self.current_minute = minute_now
+
+        self.tick_pool.append(price)
+        self.volume_pool.append(volume)
+
+    def check_position(self, price: float):
+        if not self.trade_active:
+            return
+
+        if price >= self.take_profit:
+            profit = price - self.entry_price
+            self.balance += profit
+            self.wins += 1
+            self.trade_active = False
+
+            wr = (self.wins / self.total_trades) * 100
+            msg = (
+                f"✅ *TP HIT*\n\n"
+                f"Exit: `${price:.2f}` (+${profit:.2f})\n"
+                f"Equity: `${self.balance:.2f}`\n"
+                f"Win Rate: {wr:.1f}%"
+            )
+            self.send_telegram(msg)
+            self.print_ledger()
+            self.save_status()
+
+        elif price <= self.stop_loss:
+            loss = self.entry_price - price
+            self.balance -= loss
+            self.losses += 1
+            self.trade_active = False
+
+            wr = (self.wins / self.total_trades) * 100
+            msg = (
+                f"❌ *SL HIT*\n\n"
+                f"Exit: `${price:.2f}` (-${loss:.2f})\n"
+                f"Equity: `${self.balance:.2f}`\n"
+                f"Win Rate: {wr:.1f}%"
+            )
+            self.send_telegram(msg)
+            self.print_ledger()
+            self.save_status()
+
+    def print_ledger(self):
+        wr = (self.wins / self.total_trades * 100) if self.total_trades else 0
+        print("\n📊 --- FORWARD TEST SCORECARD ---")
+        print(f"Trades: {self.total_trades}  |  Wins: {self.wins}  |  Losses: {self.losses}")
+        print(f"Win Rate: {wr:.1f}%")
+        print(f"Equity: ${self.balance:.2f}")
+        print("────────────────────────────────\n")
+
+    def on_event(self, event):
+        if event.get("event") != "price":
+            return
+
+        try:
+            price = float(event["price"])
+            volume = float(event.get("day_volume") or event.get("volume") or 1.0)
+        except (KeyError, TypeError, ValueError):
+            return
+
+        self.check_position(price)
+        self.aggregate_tick(price, volume)
+
+        print(f"⏱️ ${price:.2f} | ticks this min: {len(self.tick_pool)}   ", end="\r")
+        sys.stdout.flush()
+
+
+def main():
+    print("🚀 Gold Engine starting (Twelve Data WebSocket)...")
+
+    if not TWELVE_DATA_KEY:
+        print("❌ TWELVE_DATA_API_KEY missing in .env")
+        sys.exit(1)
+
+    engine = GoldEngine()
+
+    try:
+        td = TDClient(apikey=TWELVE_DATA_KEY)
+        ws = td.websocket(on_event=engine.on_event)
+        ws.subscribe(["XAU/USD"])
+        ws.connect()
+        print("📡 Connected. Listening for XAU/USD...\n")
+
+        while True:
+            try:
+                ws.heartbeat()
+            except Exception as e:
+                print(f"\n⚠️ Heartbeat error: {e}")
+            time.sleep(15)
+
+    except KeyboardInterrupt:
+        print("\n⚙️ Shutting down cleanly...")
+        engine.save_status()
+    except Exception as e:
+        print(f"\n❌ Fatal error: {e}")
+        raise
+
+
+if __name__ == "__main__":
+    main()

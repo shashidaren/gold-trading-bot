@@ -1,0 +1,132 @@
+import os
+import csv
+from flask import Flask, render_template_string
+
+app = Flask(__name__)
+LOG_FILE_PATH = "/opt/gold/forward_test_log.csv"
+
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gold Trading Engine Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <meta http-equiv="refresh" content="5">
+</head>
+<body class="bg-slate-900 text-slate-100 font-sans p-6">
+    <div class="max-w-6xl mx-auto">
+        <header class="flex justify-between items-center mb-8 border-b border-slate-800 pb-4">
+            <div>
+                <h1 class="text-3xl font-bold text-amber-400">🪙 Gold Forward Test Dashboard</h1>
+                <p class="text-slate-400 text-sm">XAU/USD Price Action & Volume Engine (Auto-refreshes every 5s)</p>
+            </div>
+            <div class="bg-slate-800 px-4 py-2 rounded-lg border border-slate-700">
+                <span class="text-xs text-slate-400 block">Simulated Equity</span>
+                <span class="text-2xl font-semibold text-emerald-400">${{ "%.2f"|format(equity) }}</span>
+            </div>
+        </header>
+
+        <!-- Stats Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                <p class="text-xs text-slate-400">Total Tracked Rows</p>
+                <p class="text-2xl font-bold text-slate-100">{{ total }}</p>
+            </div>
+            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                <p class="text-xs text-slate-400">Trend Confirmed (200 EMA)</p>
+                <p class="text-2xl font-bold text-blue-400">{{ trend }}</p>
+            </div>
+            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                <p class="text-xs text-slate-400">Volume Spikes</p>
+                <p class="text-2xl font-bold text-purple-400">{{ vol }}</p>
+            </div>
+            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                <p class="text-xs text-slate-400">Valid Rejections</p>
+                <p class="text-2xl font-bold text-amber-400">{{ rejection }}</p>
+            </div>
+        </div>
+
+        <!-- Recent Logs Table -->
+        <div class="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+            <div class="px-6 py-4 border-b border-slate-700 font-semibold text-slate-200">Recent Candle Log History</div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-sm text-slate-300">
+                    <thead class="bg-slate-900/50 text-slate-400 uppercase text-xs">
+                        <tr>
+                            <th class="px-6 py-3">Timestamp</th>
+                            <th class="px-6 py-3">Close</th>
+                            <th class="px-6 py-3">Wick %</th>
+                            <th class="px-6 py-3">Vol MA</th>
+                            <th class="px-6 py-3">Floor</th>
+                            <th class="px-6 py-3">200 EMA</th>
+                            <th class="px-6 py-3">Trend Up</th>
+                            <th class="px-6 py-3">Vol Conf</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-700">
+                        {% for row in rows %}
+                        <tr class="hover:bg-slate-700/50">
+                            <td class="px-6 py-4 font-mono text-xs">{{ row.Timestamp }}</td>
+                            <td class="px-6 py-4 font-semibold text-slate-100">${{ row.Close }}</td>
+                            <td class="px-6 py-4">{{ row.Wick_Ratio }}</td>
+                            <td class="px-6 py-4">{{ row.Vol_MA }}</td>
+                            <td class="px-6 py-4">${{ row.Dynamic_Floor }}</td>
+                            <td class="px-6 py-4">${{ row.EMA_200 }}</td>
+                            <td class="px-6 py-4">
+                                <span class="px-2 py-1 rounded text-xs {{ 'bg-emerald-900/50 text-emerald-400' if row.Trend_Confirmed == 'True' else 'bg-rose-900/50 text-rose-400' }}">
+                                    {{ row.Trend_Confirmed }}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4">
+                                <span class="px-2 py-1 rounded text-xs {{ 'bg-emerald-900/50 text-emerald-400' if row.Vol_Confirmed == 'True' else 'bg-slate-700 text-slate-400' }}">
+                                    {{ row.Vol_Confirmed }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+@app.route("/")
+def index():
+    rows = []
+    total_rows = 0
+    trend_count = 0
+    vol_count = 0
+    rejection_count = 0
+    
+    if os.path.isfile(LOG_FILE_PATH):
+        with open(LOG_FILE_PATH, mode='r') as f:
+            reader = csv.DictReader(f)
+            for line in reader:
+                rows.append(line)
+                total_rows += 1
+                if line.get('Trend_Confirmed') == 'True':
+                    trend_count += 1
+                if line.get('Vol_Confirmed') == 'True':
+                    vol_count += 1
+                if line.get('Valid_Rejection') == 'True':
+                    rejection_count += 1
+                    
+    recent_rows = list(reversed(rows))[:25]
+    
+    return render_template_string(
+        HTML_TEMPLATE, 
+        rows=recent_rows, 
+        equity=500.00, 
+        total=total_rows,
+        trend=trend_count,
+        vol=vol_count,
+        rejection=rejection_count
+    )
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
