@@ -3,6 +3,9 @@
 Lightweight pre-trade filter - Medium-term version
 Acts as the final gatekeeper for portfolio/state-level rules.
 (Strategy-level rules like RSI, Wick, and Trend are handled in engine.py)
+
+Timestamps: engine.py writes Entry_Time / Exit_Time in UTC.
+This module also uses UTC for blackouts, cooldown, and skip logs.
 """
 
 import csv
@@ -60,8 +63,8 @@ def check_sl_cooldown(trades: list) -> tuple[bool, str]:
         return False, ""
 
     try:
+        # Exit_Time is written by engine.py in UTC
         exit_time = datetime.strptime(last["Exit_Time"], "%Y-%m-%d %H:%M:%S")
-        # Assume exit_time is UTC to match datetime.now(timezone.utc)
         exit_time = exit_time.replace(tzinfo=timezone.utc)
         cooldown_end = exit_time + timedelta(minutes=SL_COOLDOWN_MINUTES)
         now = datetime.now(timezone.utc)
