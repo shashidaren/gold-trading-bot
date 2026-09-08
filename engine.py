@@ -1,1 +1,731 @@
-PLACEHOLDER
+#!/usr/bin/env python3
+import os
+import csv
+import json
+import time
+import sys
+import requests
+from collections import deque
+from datetime import datetime, timezone
+from dotenv import load_dotenv
+from trade_filter import should_take_trade
+
+# ==========================================
+# CONFIGURATION SWITCH
+# Set to "FORWARD_TEST" to use Twelve Data and simulated balance
+# Set to "LIVE" to use MetaTrader 5 and real execution
+# ==========================================
+TRADING_MODE = "FORWARD_TEST"
+
+load_dotenv(dotenv_path="/opt/gold/.env")
+
+TWELVE_DATA_KEY = os.getenv("TWELVE_DATA_API_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+LOOKBACK_PERIOD = 20
+WICK_RATIO_TARGET = 0.38
+EMA_FAST = 50
+EMA_SLOW = 200
+RSI_PERIOD = 14
+ATR_PERIOD = 14
+FLOOR_BUFFER_PCT = 0.0020
+
+ATR_SL_MULT = 2.0
+ATR_TP_MULT = 3.0
+
+REQUIRE_VOLUME_CONFIRM = False
+VOLUME_SPIKE_MULTIPLIER = 0.9
+REQUIRE_TREND_CONFIRM = True
+RSI_MIN = 30.0
+RSI_MAX = 68.0
+MIN_ATR = 1.10
+
+SYMBOL = "GOLD"
+LOT_SIZE = 0.01
+MAGIC_NUMBER = 987654
+
+LOG_FILE_PATH = "/opt/gold/forward_test_log.csv"
+STATUS_FILE_PATH = "/opt/gold/status.json"
+TRADES_LOG_PATH = "/opt/gold/trades.csv"
+
+
+def utc_now_str() -> str:
+    """All timestamps in this bot are UTC (matches trade_filter.py)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+if TRADING_MODE == "LIVE":
+    import MetaTrader5 as mt5
+else:
+    from twelvedata import TDClient
+
+
+class GoldEngine:
+    def __init__(self):
+        self.lows = deque(maxlen=EMA_SLOW)
+        self.highs = deque(maxlen=EMA_SLOW)
+        self.closes = deque(maxlen=EMA_SLOW)
+        self.volumes = deque(maxlen=EMA_SLOW)
+        self.tr_list = deque(maxlen=ATR_PERIOD)
+        self.rsi_gains = deque(maxlen=RSI_PERIOD)
+        self.rsi_losses = deque(maxlen=RSI_PERIOD)
+
+        self.prev_close = None
+        self.rsi = None
+        self.ema_fast = None
+        self.ema_slow = None
+        self.atr = None
+
+        self.k_fast = 2 / (EMA_FAST + 1)
+        self.k_slow = 2 / (EMA_SLOW + 1)
+
+        self.current_minute = None
+        self.tick_pool = []
+
+        self.balance = 500.00
+        self.trade_active = False
+        self.entry_price = 0.0
+        self.stop_loss = 0.0
+        self.take_profit = 0.0
+        self.current_trade_num = None
+
+        self.next_trade_num = 1
+        self.wins = 0
+        self.losses = 0
+
+        self.entry_time = None
+        self.entry_rsi = None
+        self.entry_atr = None
+        self.entry_wick_ratio = None
+        self.entry_ema_fast = None
+        self.entry_ema_slow = None
+
+        self.load_trade_stats()
+        # Restore open trade if process died mid-trade (status.json)
+        # Must run AFTER entry_* defaults so restore can overwrite them.
+        self.restore_open_trade_from_status()
+
+        self.warmup_logged = False
+        self.candles_evaluated = 0
+
+        self.hit_tested_floor = 0
+        self.hit_valid_rejection = 0
+        self.hit_held_support = 0
+        self.hit_volume_confirmed = 0
+        self.hit_trend_confirmed = 0
+        self.hit_all = 0
+
+        if TRADING_MODE == "LIVE":
+            if not mt5.initialize():
+                print(f"MT5 Initialize failed: {mt5.last_error()}")
+                sys.exit(1)
+            account = mt5.account_info()
+            print(f"Connected to MT5 | Account: {account.login} | Balance: {account.balance} {account.currency}")
+            mt5.symbol_select(SYMBOL, True)
+        else:
+            self.load_history_from_csv()
+            self.save_status()
+
+    def load_trade_stats(self):
+        self.next_trade_num = 1
+        self.wins = 0
+        self.losses = 0
+        self.balance = 500.00
+
+        if not os.path.isfile(TRADES_LOG_PATH):
+            print("No trades.csv found - starting fresh (balance $500)")
+            return
+
+        try:
+            with open(TRADES_LOG_PATH, newline="") as f:
+                reader = csv.DictReader(f)
+                max_num = 0
+                last_balance = None
+                for row in reader:
+                    try:
+                        num = int(row.get("Trade_Num", 0) or 0)
+                        if num > max_num:
+                            max_num = num
+                    except (ValueError, TypeError):
+                        pass
+
+                    reason = (row.get("Exit_Reason") or "").strip().upper()
+                    if reason == "TP":
+                        self.wins += 1
+                    elif reason == "SL":
+                        self.losses += 1
+
+                    try:
+                        bal = float(row.get("Balance_After", 0) or 0)
+                        if bal > 0:
+                            last_balance = bal
+                    except (ValueError, TypeError):
+                        pass
+
+                self.next_trade_num = max_num + 1
+                if last_balance is not None:
+                    self.balance = last_balance
+
+            closed = self.wins + self.losses
+            print(f"Loaded trade stats -> next_trade=#{self.next_trade_num} | "
+                  f"closed={closed} ({self.wins}W/{self.losses}L) | balance=${self.balance:.2f}")
+        except Exception as e:
+            print(f"Failed to load trade stats: {e}")
+            self.next_trade_num = 1
+            self.wins = 0
+            self.losses = 0
+            self.balance = 500.00
+
+    def restore_open_trade_from_status(self):
+        """Restore open simulated trade from status.json after crash/restart."""
+        if not os.path.isfile(STATUS_FILE_PATH):
+            return
+        try:
+            with open(STATUS_FILE_PATH) as f:
+                data = json.load(f)
+        except Exception as e:
+            print(f"Could not read status.json for open-trade restore: {e}")
+            return
+
+        if not data.get("trade_active"):
+            return
+
+        entry = data.get("entry_price")
+        sl = data.get("stop_loss")
+        tp = data.get("take_profit")
+        if entry is None or sl is None or tp is None:
+            print("status.json marks trade_active but missing entry/SL/TP - ignoring")
+            return
+
+        self.trade_active = True
+        self.entry_price = float(entry)
+        self.stop_loss = float(sl)
+        self.take_profit = float(tp)
+        self.entry_time = data.get("entry_time") or utc_now_str()
+        self.current_trade_num = data.get("current_trade_num")
+        if self.current_trade_num is None:
+            self.current_trade_num = max(1, self.next_trade_num - 1)
+        self.entry_rsi = data.get("entry_rsi")
+        self.entry_atr = data.get("entry_atr")
+        self.entry_wick_ratio = data.get("entry_wick_ratio")
+        self.entry_ema_fast = data.get("entry_ema_fast")
+        self.entry_ema_slow = data.get("entry_ema_slow")
+
+        print(f"Restored OPEN trade #{self.current_trade_num} | "
+              f"Entry=${self.entry_price:.2f} SL=${self.stop_loss:.2f} TP=${self.take_profit:.2f}")
+
+    def load_history_from_csv(self):
+        if not os.path.isfile(LOG_FILE_PATH):
+            print("No existing log found. Starting fresh.")
+            return
+        print(f"Loading history from {LOG_FILE_PATH}...")
+        try:
+            rows = []
+            with open(LOG_FILE_PATH, mode="r") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    rows.append(row)
+            if not rows:
+                return
+            recent = rows[-EMA_SLOW:] if len(rows) > EMA_SLOW else rows
+            print(f"Found {len(rows)} total rows -> using last {len(recent)}")
+            for row in recent:
+                try:
+                    low = float(row["Low"])
+                    high = float(row.get("High", low))
+                    close = float(row["Close"])
+                    vol_str = row.get("Volume", "1")
+                    volume = float(vol_str) if vol_str not in ("Calculating", "", None) else 1.0
+                    self.lows.append(low)
+                    self.highs.append(high)
+                    self.closes.append(close)
+                    self.volumes.append(volume)
+                    if self.prev_close is not None:
+                        change = close - self.prev_close
+                        self.rsi_gains.append(max(change, 0))
+                        self.rsi_losses.append(max(-change, 0))
+                        tr = max(high - low, abs(high - self.prev_close), abs(low - self.prev_close))
+                        self.tr_list.append(tr)
+                    self.prev_close = close
+                except Exception:
+                    continue
+            closes_list = list(self.closes)
+            if len(closes_list) >= EMA_FAST:
+                self.ema_fast = sum(closes_list[:EMA_FAST]) / EMA_FAST
+                for price in closes_list[EMA_FAST:]:
+                    self.ema_fast = (price * self.k_fast) + (self.ema_fast * (1 - self.k_fast))
+            if len(closes_list) >= EMA_SLOW:
+                self.ema_slow = sum(closes_list[:EMA_SLOW]) / EMA_SLOW
+                for price in closes_list[EMA_SLOW:]:
+                    self.ema_slow = (price * self.k_slow) + (self.ema_slow * (1 - self.k_slow))
+            self.calculate_rsi()
+            self.calculate_atr()
+            print(f"Loaded {len(self.closes)} candles")
+        except Exception as e:
+            print(f"Failed to load history: {e}")
+
+    def calculate_rsi(self):
+        if len(self.rsi_gains) < RSI_PERIOD:
+            self.rsi = None
+            return
+        avg_gain = sum(self.rsi_gains) / RSI_PERIOD
+        avg_loss = sum(self.rsi_losses) / RSI_PERIOD
+        self.rsi = 100.0 if avg_loss == 0 else 100 - (100 / (1 + (avg_gain / avg_loss)))
+
+    def calculate_atr(self):
+        if len(self.tr_list) < ATR_PERIOD:
+            self.atr = None
+            return
+        self.atr = sum(self.tr_list) / ATR_PERIOD
+
+    def update_indicators(self, high, low, close):
+        if self.ema_fast is None:
+            if len(self.closes) >= EMA_FAST:
+                self.ema_fast = sum(list(self.closes)[-EMA_FAST:]) / EMA_FAST
+        else:
+            self.ema_fast = (close * self.k_fast) + (self.ema_fast * (1 - self.k_fast))
+        if self.ema_slow is None:
+            if len(self.closes) >= EMA_SLOW:
+                self.ema_slow = sum(list(self.closes)[-EMA_SLOW:]) / EMA_SLOW
+        else:
+            self.ema_slow = (close * self.k_slow) + (self.ema_slow * (1 - self.k_slow))
+        if self.prev_close is not None:
+            change = close - self.prev_close
+            self.rsi_gains.append(max(change, 0))
+            self.rsi_losses.append(max(-change, 0))
+            self.calculate_rsi()
+            tr = max(high - low, abs(high - self.prev_close), abs(low - self.prev_close))
+            self.tr_list.append(tr)
+            self.calculate_atr()
+        self.prev_close = close
+
+    def save_status(self):
+        closed = self.wins + self.losses
+        win_rate = (self.wins / closed * 100) if closed > 0 else 0.0
+        active_trade = self.trade_active
+        data = {
+            "equity": round(self.balance, 2),
+            "total_trades": closed,
+            "next_trade_num": self.next_trade_num,
+            "wins": self.wins,
+            "losses": self.losses,
+            "win_rate": round(win_rate, 1),
+            "trade_active": active_trade,
+            "last_update": utc_now_str(),
+            "rsi": round(self.rsi, 1) if self.rsi else None,
+            "ema_fast": round(self.ema_fast, 2) if self.ema_fast else None,
+            "ema_slow": round(self.ema_slow, 2) if self.ema_slow else None,
+            "atr": round(self.atr, 2) if self.atr else None,
+            "entry_price": round(self.entry_price, 2) if active_trade and self.entry_price else None,
+            "stop_loss": round(self.stop_loss, 2) if active_trade and self.stop_loss else None,
+            "take_profit": round(self.take_profit, 2) if active_trade and self.take_profit else None,
+            "entry_time": self.entry_time if active_trade else None,
+            "current_trade_num": self.current_trade_num if active_trade else None,
+            "entry_rsi": round(self.entry_rsi, 1) if active_trade and self.entry_rsi is not None else None,
+            "entry_atr": round(self.entry_atr, 2) if active_trade and self.entry_atr is not None else None,
+            "entry_wick_ratio": self.entry_wick_ratio if active_trade else None,
+            "entry_ema_fast": round(self.entry_ema_fast, 2) if active_trade and self.entry_ema_fast is not None else None,
+            "entry_ema_slow": round(self.entry_ema_slow, 2) if active_trade and self.entry_ema_slow is not None else None,
+            "funnel": {
+                "candles_evaluated": self.candles_evaluated,
+                "tested_floor": self.hit_tested_floor,
+                "valid_rejection": self.hit_valid_rejection,
+                "held_support": self.hit_held_support,
+                "volume_confirmed": self.hit_volume_confirmed,
+                "trend_confirmed": self.hit_trend_confirmed,
+                "all_confirmed": self.hit_all,
+            },
+        }
+        try:
+            with open(STATUS_FILE_PATH, "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"Failed to write status.json: {e}")
+
+    def send_telegram(self, text: str):
+        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+            return
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={"chat_id": str(TELEGRAM_CHAT_ID), "text": text, "parse_mode": "Markdown"},
+                timeout=4,
+            )
+        except Exception as e:
+            print(f"Telegram failed: {e}")
+
+    def log_candle(self, timestamp, o, h, l, c, ratio, tick_count, vol_ma, dynamic_floor, ema_f, ema_s, tested, rejected, held, vol_conf, trend_conf, rsi_val, atr_val):
+        file_exists = os.path.isfile(LOG_FILE_PATH)
+        with open(LOG_FILE_PATH, mode="a", newline="") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "Timestamp", "Open", "High", "Low", "Close", "Wick_Ratio", "Volume", "Vol_MA",
+                    "Vol_Confirmed", "Dynamic_Floor", "EMA_50", "EMA_200", "Trend_Confirmed",
+                    "Tested_Floor", "Valid_Rejection", "Held_Floor", "RSI", "ATR",
+                ],
+            )
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow({
+                "Timestamp": timestamp,
+                "Open": f"{o:.2f}",
+                "High": f"{h:.2f}",
+                "Low": f"{l:.2f}",
+                "Close": f"{c:.2f}",
+                "Wick_Ratio": f"{ratio:.1%}",
+                "Volume": f"{tick_count:.0f}",
+                "Vol_MA": f"{vol_ma:.1f}" if vol_ma else "Calculating",
+                "Vol_Confirmed": str(vol_conf),
+                "Dynamic_Floor": f"{dynamic_floor:.2f}" if dynamic_floor else "Calculating",
+                "EMA_50": f"{ema_f:.2f}" if ema_f else "Calculating",
+                "EMA_200": f"{ema_s:.2f}" if ema_s else "Calculating",
+                "Trend_Confirmed": str(trend_conf),
+                "Tested_Floor": str(tested),
+                "Valid_Rejection": str(rejected),
+                "Held_Floor": str(held),
+                "RSI": f"{rsi_val:.1f}" if rsi_val else "Calculating",
+                "ATR": f"{atr_val:.2f}" if atr_val else "Calculating",
+            })
+
+    def log_trade(self, exit_price, exit_reason, profit):
+        file_exists = os.path.isfile(TRADES_LOG_PATH)
+        with open(TRADES_LOG_PATH, mode="a", newline="") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "Trade_Num", "Entry_Time", "Exit_Time", "Entry_Price", "Stop_Loss", "Take_Profit",
+                    "Exit_Price", "Exit_Reason", "Profit", "Balance_After", "RSI_At_Entry",
+                    "ATR_At_Entry", "Wick_Ratio_At_Entry", "EMA50_At_Entry", "EMA200_At_Entry",
+                ],
+            )
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow({
+                "Trade_Num": self.current_trade_num,
+                "Entry_Time": self.entry_time,
+                "Exit_Time": utc_now_str(),
+                "Entry_Price": f"{self.entry_price:.2f}",
+                "Stop_Loss": f"{self.stop_loss:.2f}",
+                "Take_Profit": f"{self.take_profit:.2f}",
+                "Exit_Price": f"{exit_price:.2f}",
+                "Exit_Reason": exit_reason,
+                "Profit": f"{profit:.2f}",
+                "Balance_After": f"{self.balance:.2f}",
+                "RSI_At_Entry": f"{self.entry_rsi:.1f}" if self.entry_rsi is not None else "",
+                "ATR_At_Entry": f"{self.entry_atr:.2f}" if self.entry_atr is not None else "",
+                "Wick_Ratio_At_Entry": f"{self.entry_wick_ratio:.1%}" if self.entry_wick_ratio is not None else "",
+                "EMA50_At_Entry": f"{self.entry_ema_fast:.2f}" if self.entry_ema_fast is not None else "",
+                "EMA200_At_Entry": f"{self.entry_ema_slow:.2f}" if self.entry_ema_slow is not None else "",
+            })
+
+    def evaluate_candle(self, o, h, l, c, tick_count):
+        candle_range = h - l
+        if candle_range <= 0:
+            return
+        body_bottom = min(o, c)
+        lower_wick = body_bottom - l
+        wick_ratio = lower_wick / candle_range
+        valid_rejection = wick_ratio >= WICK_RATIO_TARGET
+
+        dynamic_floor, volume_ma, tested_floor, held_support, volume_confirmed, trend_confirmed = (
+            None, None, False, False, False, False
+        )
+        self.candles_evaluated += 1
+
+        if len(self.closes) >= LOOKBACK_PERIOD:
+            dynamic_floor = min(list(self.lows)[-LOOKBACK_PERIOD:])
+            volume_ma = sum(list(self.volumes)[-LOOKBACK_PERIOD:]) / LOOKBACK_PERIOD
+            tested_floor = l <= (dynamic_floor * (1 + FLOOR_BUFFER_PCT))
+            held_support = c > dynamic_floor
+            volume_confirmed = tick_count >= (volume_ma * VOLUME_SPIKE_MULTIPLIER) if volume_ma else True
+
+        if self.ema_fast is not None and self.ema_slow is not None:
+            trend_confirmed = self.ema_fast > self.ema_slow
+        elif self.ema_fast is not None:
+            trend_confirmed = c > self.ema_fast
+        else:
+            trend_confirmed = False
+
+        if len(self.closes) < EMA_SLOW:
+            if not self.warmup_logged or len(self.closes) % 30 == 0:
+                print(f"Warming up... {len(self.closes)}/{EMA_SLOW}")
+                self.warmup_logged = True
+        else:
+            print(
+                f"Floor:${dynamic_floor:.2f} | EMA50:${self.ema_fast:.2f} EMA200:${self.ema_slow:.2f} "
+                f"| RSI:{self.rsi} ATR:{self.atr} | C:${c:.2f}"
+            )
+            print(
+                f"   Tested:{tested_floor} | Rej:{valid_rejection} ({wick_ratio:.0%}) | "
+                f"Held:{held_support} | Vol:{volume_confirmed} | Trend:{trend_confirmed}"
+            )
+
+        ts = utc_now_str()
+        self.log_candle(
+            ts, o, h, l, c, wick_ratio, tick_count, volume_ma, dynamic_floor,
+            self.ema_fast, self.ema_slow, tested_floor, valid_rejection, held_support,
+            volume_confirmed, trend_confirmed, self.rsi, self.atr,
+        )
+        self.lows.append(l)
+        self.highs.append(h)
+        self.volumes.append(tick_count)
+        self.closes.append(c)
+        self.update_indicators(h, l, c)
+        self.save_status()
+
+        vol_ok = volume_confirmed if REQUIRE_VOLUME_CONFIRM else True
+        trend_ok = trend_confirmed if REQUIRE_TREND_CONFIRM else True
+        rsi_ok = (self.rsi is not None and RSI_MIN < self.rsi < RSI_MAX)
+        atr_ok = (self.atr is not None and self.atr > MIN_ATR)
+
+        in_trade = self.trade_active
+        if TRADING_MODE == "LIVE":
+            positions = mt5.positions_get(symbol=SYMBOL, magic=MAGIC_NUMBER)
+            in_trade = (positions is not None and len(positions) > 0)
+
+        if dynamic_floor is not None:
+            if tested_floor:
+                self.hit_tested_floor += 1
+            if valid_rejection:
+                self.hit_valid_rejection += 1
+            if held_support:
+                self.hit_held_support += 1
+            if volume_confirmed:
+                self.hit_volume_confirmed += 1
+            if trend_confirmed:
+                self.hit_trend_confirmed += 1
+
+        if (
+            dynamic_floor is not None
+            and self.ema_slow is not None
+            and self.atr is not None
+            and tested_floor
+            and valid_rejection
+            and held_support
+            and vol_ok
+            and trend_ok
+            and rsi_ok
+            and atr_ok
+            and not in_trade
+        ):
+            self.hit_all += 1
+
+            allow, reason = should_take_trade(
+                current_atr=self.atr,
+                current_price=c,
+                ema_fast=self.ema_fast,
+                ema_slow=self.ema_slow,
+            )
+
+            if not allow:
+                msg = (
+                    f"TRADE SKIPPED\nReason: `{reason}`\n"
+                    f"Price: `${c:.2f}` | RSI: `{self.rsi:.1f}` | ATR: `{self.atr:.2f}`"
+                )
+                self.send_telegram(msg)
+                print(f"\nTrade skipped -> {reason}\n")
+                return
+
+            if TRADING_MODE == "LIVE":
+                self.execute_live_trade(c, wick_ratio, ts, dynamic_floor)
+            else:
+                self.execute_simulated_trade(c, wick_ratio, ts, dynamic_floor)
+
+    def execute_live_trade(self, c, wick_ratio, ts, dynamic_floor):
+        print("\nALL CONDITIONS MET! PREPARING LIVE ORDER...")
+        sl_price = c - (self.atr * ATR_SL_MULT)
+        tp_price = c + (self.atr * ATR_TP_MULT)
+        point = mt5.symbol_info(SYMBOL).point
+        sl_price = round(sl_price / point) * point
+        tp_price = round(tp_price / point) * point
+        tick = mt5.symbol_info_tick(SYMBOL)
+        if tick is None:
+            print("Failed to get tick data")
+            return
+
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": SYMBOL,
+            "volume": LOT_SIZE,
+            "type": mt5.ORDER_TYPE_BUY,
+            "price": tick.ask,
+            "sl": sl_price,
+            "tp": tp_price,
+            "deviation": 20,
+            "magic": MAGIC_NUMBER,
+            "comment": "Gold Engine Live",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_FOK,
+        }
+        print(f"   Sending: BUY {LOT_SIZE} {SYMBOL} @ {tick.ask:.2f} | SL: {sl_price:.2f} | TP: {tp_price:.2f}")
+
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            print(f"Order failed: {result.retcode} - {result.comment}")
+            self.send_telegram(f"ORDER FAILED\nCode: {result.retcode}\nMsg: {result.comment}")
+        else:
+            self.current_trade_num = self.next_trade_num
+            self.next_trade_num += 1
+            print(f"ORDER SUCCESS! Ticket: {result.order} | Trade #{self.current_trade_num}")
+            self.send_telegram(
+                f"LIVE GOLD BUY EXECUTED\n"
+                f"Ticket: `{result.order}` | Trade #{self.current_trade_num}\n"
+                f"Entry: `${tick.ask:.2f}`\n"
+                f"SL: `${sl_price:.2f}`\n"
+                f"TP: `${tp_price:.2f}`"
+            )
+
+    def execute_simulated_trade(self, c, wick_ratio, ts, dynamic_floor):
+        self.trade_active = True
+        self.current_trade_num = self.next_trade_num
+        self.next_trade_num += 1
+
+        self.entry_price = c
+        self.stop_loss = c - (self.atr * ATR_SL_MULT)
+        self.take_profit = c + (self.atr * ATR_TP_MULT)
+        self.entry_time = ts
+        self.entry_rsi = self.rsi
+        self.entry_atr = self.atr
+        self.entry_wick_ratio = wick_ratio
+        self.entry_ema_fast = self.ema_fast
+        self.entry_ema_slow = self.ema_slow
+
+        msg = (
+            f"GOLD BUY SETUP #{self.current_trade_num}\n"
+            f"Entry: `${self.entry_price:.2f}`\n"
+            f"RSI: `{self.rsi:.1f}` | ATR: `{self.atr:.2f}`\n"
+            f"SL: `${self.stop_loss:.2f}`\n"
+            f"TP: `${self.take_profit:.2f}`"
+        )
+        self.send_telegram(msg)
+        print(f"\nAlert sent -> Trade #{self.current_trade_num}\n")
+        self.save_status()
+
+    def check_position(self, price: float):
+        if not self.trade_active:
+            return
+        if price >= self.take_profit:
+            profit = price - self.entry_price
+            self.balance += profit
+            self.wins += 1
+            self.trade_active = False
+            self.log_trade(exit_price=price, exit_reason="TP", profit=profit)
+            self.send_telegram(
+                f"TP HIT (#{self.current_trade_num})\n"
+                f"Exit: `${price:.2f}` (+${profit:.2f})\n"
+                f"Equity: `${self.balance:.2f}`"
+            )
+            self.save_status()
+        elif price <= self.stop_loss:
+            loss = self.entry_price - price
+            self.balance -= loss
+            self.losses += 1
+            self.trade_active = False
+            self.log_trade(exit_price=price, exit_reason="SL", profit=-loss)
+            self.send_telegram(
+                f"SL HIT (#{self.current_trade_num})\n"
+                f"Exit: `${price:.2f}` (-${loss:.2f})\n"
+                f"Equity: `${self.balance:.2f}`"
+            )
+            self.save_status()
+
+    def aggregate_tick(self, price: float):
+        minute_now = int(datetime.now(timezone.utc).timestamp() // 60)
+        if self.current_minute is None:
+            self.current_minute = minute_now
+        if minute_now != self.current_minute:
+            if self.tick_pool:
+                o, h, l, c = self.tick_pool[0], max(self.tick_pool), min(self.tick_pool), self.tick_pool[-1]
+                self.evaluate_candle(o, h, l, c, len(self.tick_pool))
+            self.tick_pool.clear()
+            self.current_minute = minute_now
+        self.tick_pool.append(price)
+
+    def on_event(self, event):
+        if event.get("event") != "price":
+            return
+        try:
+            price = float(event["price"])
+            self.check_position(price)
+            self.aggregate_tick(price)
+            print(f"${price:.2f} | ticks: {len(self.tick_pool)}   ", end="\r")
+            sys.stdout.flush()
+        except Exception:
+            return
+
+    def run_live(self):
+        print(f"Gold Engine LIVE starting for {SYMBOL}...")
+        candles_fetched = 0
+        while True:
+            try:
+                rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_M1, 0, 250)
+                if rates is None or len(rates) == 0:
+                    time.sleep(5)
+                    continue
+                last_candle = rates[-2]
+                o, h, l, c, vol = (
+                    float(last_candle["open"]),
+                    float(last_candle["high"]),
+                    float(last_candle["low"]),
+                    float(last_candle["close"]),
+                    int(last_candle["tick_volume"]),
+                )
+                self.evaluate_candle(o, h, l, c, vol)
+                if candles_fetched % 10 == 0:
+                    print(
+                        f"Heartbeat: Processed candle @ "
+                        f"{datetime.fromtimestamp(last_candle['time'], tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC "
+                        f"| Close: {c}"
+                    )
+                candles_fetched += 1
+                for _ in range(12):
+                    time.sleep(5)
+            except KeyboardInterrupt:
+                print("\nShutting down...")
+                mt5.shutdown()
+                break
+            except Exception as e:
+                print(f"\nError: {e}")
+                time.sleep(10)
+
+    def run_forward_test(self):
+        print("Gold Engine FORWARD TEST starting...")
+        if not TWELVE_DATA_KEY:
+            print("TWELVE_DATA_API_KEY missing")
+            sys.exit(1)
+        while True:
+            try:
+                td = TDClient(apikey=TWELVE_DATA_KEY)
+                ws = td.websocket(on_event=self.on_event)
+                ws.subscribe(["XAU/USD"])
+                ws.connect()
+                print("Connected to Twelve Data\n")
+                while True:
+                    try:
+                        ws.heartbeat()
+                        time.sleep(15)
+                    except Exception as e:
+                        print(f"\nConnection issue: {e}")
+                        print("Reconnecting in 10s...")
+                        time.sleep(10)
+                        break
+            except KeyboardInterrupt:
+                print("\nShutting down...")
+                break
+            except Exception as e:
+                print(f"\nError: {e}")
+                print("Restarting in 15s...")
+                time.sleep(15)
+
+    def run(self):
+        if TRADING_MODE == "LIVE":
+            self.run_live()
+        else:
+            self.run_forward_test()
+
+
+if __name__ == "__main__":
+    engine = GoldEngine()
+    engine.run()
