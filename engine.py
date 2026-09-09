@@ -8,7 +8,7 @@ import requests
 from collections import deque
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from trade_filter import should_take_trade
+from trade_filter import should_take_trade, get_daily_sl_count, MAX_DAILY_LOSSES, load_recent_trades
 
 # ==========================================
 # CONFIGURATION SWITCH
@@ -41,13 +41,10 @@ RSI_MIN = 30.0
 RSI_MAX = 68.0
 MIN_ATR = 1.10
 
-# --- Regime gates (added in 2026-09-09 win-rate review - see docs/REVIEW-2026-09-09.md) ---
-# Validated with tools/validate_gates.py against all 37 historical trades:
-# keeps 7/7 wins, blocks 15/30 losses (P&L -52.68 -> -16.65).
-REQUIRE_EMA_SLOPE = True       # EMA50 must be rising (short-term trend direction)
-EMA_SLOPE_LOOKBACK = 30        # ...compared to N candles ago
-MAX_BELOW_EMA_ATR = 0.30       # entry close may sit at most 0.3*ATR below EMA50
-                               # (blocks "buys" while price is collapsing away from the mean)
+# --- Regime gates (EMA Slope & Distance from Mean) ---
+REQUIRE_EMA_SLOPE = True       # EMA50 slope direction filter
+EMA_SLOPE_LOOKBACK = 30        # Compare EMA50 vs N candles ago
+MAX_BELOW_EMA_ATR = 0.30       # Entry distance buffer from EMA50
 
 SYMBOL = "GOLD"
 LOT_SIZE = 0.01
@@ -94,6 +91,7 @@ class GoldEngine:
 
         self.balance = 500.00
         self.trade_active = False
+        self.trade_type = "BUY"  # "BUY" or "SELL"
         self.entry_price = 0.0
         self.stop_loss = 0.0
         self.take_profit = 0.0
@@ -112,20 +110,29 @@ class GoldEngine:
 
         self.load_trade_stats()
         # Restore open trade if process died mid-trade (status.json)
-        # Must run AFTER entry_* defaults so restore can overwrite them.
         self.restore_open_trade_from_status()
 
         self.warmup_logged = False
         self.candles_evaluated = 0
 
+        # Buy Funnel Counters
         self.hit_tested_floor = 0
         self.hit_valid_rejection = 0
         self.hit_held_support = 0
         self.hit_volume_confirmed = 0
         self.hit_trend_confirmed = 0
-        self.hit_all = 0
         self.hit_slope_confirmed = 0
         self.hit_price_near_ema = 0
+        self.hit_all = 0
+
+        # Sell Funnel Counters
+        self.hit_sell_tested_ceiling = 0
+        self.hit_sell_valid_rejection = 0
+        self.hit_sell_held_resistance = 0
+        self.hit_sell_trend_confirmed = 0
+        self.hit_sell_slope_confirmed = 0
+        self.hit_sell_price_near_ema = 0
+        self.hit_sell_all = 0
 
         if TRADING_MODE == "LIVE":
             if not mt5.initialize():
@@ -153,12 +160,8 @@ class GoldEngine:
                 except Exception:
                     pass
             if prior_closed:
-                # This happened on 2026-09-04/07: trades.csv went missing on restart,
-                # balance silently reset to $500 and trade numbering restarted at #1,
-                # which corrupted the equity history. Warn loudly instead.
                 print(f"WARNING: trades.csv is MISSING but status.json shows {prior_closed} "
                       f"closed trades - balance/numbering will RESET to $500/#1!")
-                print("         Restore trades.csv from backup before continuing the ledger.")
             else:
                 print("No trades.csv found - starting fresh (balance $500)")
             return
@@ -225,6 +228,7 @@ class GoldEngine:
             return
 
         self.trade_active = True
+        self.trade_type = data.get("trade_type", "BUY")
         self.entry_price = float(entry)
         self.stop_loss = float(sl)
         self.take_profit = float(tp)
@@ -238,7 +242,7 @@ class GoldEngine:
         self.entry_ema_fast = data.get("entry_ema_fast")
         self.entry_ema_slow = data.get("entry_ema_slow")
 
-        print(f"Restored OPEN trade #{self.current_trade_num} | "
+        print(f"Restored OPEN {self.trade_type} trade #{self.current_trade_num} | "
               f"Entry=${self.entry_price:.2f} SL=${self.stop_loss:.2f} TP=${self.take_profit:.2f}")
 
     def load_history_from_csv(self):
@@ -267,7 +271,7 @@ class GoldEngine:
                     self.highs.append(high)
                     self.closes.append(close)
                     self.volumes.append(volume)
-                    # Seed EMA50 history for the slope gate (skip warm-up placeholders)
+                    # Seed EMA50 history for the slope gate
                     ema50_str = row.get("EMA_50")
                     try:
                         if ema50_str not in ("Calculating", "", None):
@@ -337,6 +341,11 @@ class GoldEngine:
         closed = self.wins + self.losses
         win_rate = (self.wins / closed * 100) if closed > 0 else 0.0
         active_trade = self.trade_active
+
+        # Calculate daily losses count for circuit breaker visibility
+        recent = load_recent_trades(50)
+        daily_losses = get_daily_sl_count(recent)
+
         data = {
             "equity": round(self.balance, 2),
             "total_trades": closed,
@@ -345,6 +354,9 @@ class GoldEngine:
             "losses": self.losses,
             "win_rate": round(win_rate, 1),
             "trade_active": active_trade,
+            "trade_type": self.trade_type if active_trade else None,
+            "daily_losses": daily_losses,
+            "max_daily_losses": MAX_DAILY_LOSSES,
             "last_update": utc_now_str(),
             "rsi": round(self.rsi, 1) if self.rsi else None,
             "ema_fast": round(self.ema_fast, 2) if self.ema_fast else None,
@@ -370,6 +382,13 @@ class GoldEngine:
                 "slope_confirmed": self.hit_slope_confirmed,
                 "price_near_ema": self.hit_price_near_ema,
                 "all_confirmed": self.hit_all,
+                "sell_tested_ceiling": self.hit_sell_tested_ceiling,
+                "sell_valid_rejection": self.hit_sell_valid_rejection,
+                "sell_held_resistance": self.hit_sell_held_resistance,
+                "sell_trend_confirmed": self.hit_sell_trend_confirmed,
+                "sell_slope_confirmed": self.hit_sell_slope_confirmed,
+                "sell_price_near_ema": self.hit_sell_price_near_ema,
+                "sell_all_confirmed": self.hit_sell_all,
             },
         }
         try:
@@ -430,7 +449,7 @@ class GoldEngine:
             writer = csv.DictWriter(
                 f,
                 fieldnames=[
-                    "Trade_Num", "Entry_Time", "Exit_Time", "Entry_Price", "Stop_Loss", "Take_Profit",
+                    "Trade_Num", "Trade_Type", "Entry_Time", "Exit_Time", "Entry_Price", "Stop_Loss", "Take_Profit",
                     "Exit_Price", "Exit_Reason", "Profit", "Balance_After", "RSI_At_Entry",
                     "ATR_At_Entry", "Wick_Ratio_At_Entry", "EMA50_At_Entry", "EMA200_At_Entry",
                 ],
@@ -439,6 +458,7 @@ class GoldEngine:
                 writer.writeheader()
             writer.writerow({
                 "Trade_Num": self.current_trade_num,
+                "Trade_Type": self.trade_type,
                 "Entry_Time": self.entry_time,
                 "Exit_Time": utc_now_str(),
                 "Entry_Price": f"{self.entry_price:.2f}",
@@ -459,29 +479,51 @@ class GoldEngine:
         candle_range = h - l
         if candle_range <= 0:
             return
-        body_bottom = min(o, c)
-        lower_wick = body_bottom - l
-        wick_ratio = lower_wick / candle_range
-        valid_rejection = wick_ratio >= WICK_RATIO_TARGET
-
-        dynamic_floor, volume_ma, tested_floor, held_support, volume_confirmed, trend_confirmed = (
-            None, None, False, False, False, False
-        )
+        
         self.candles_evaluated += 1
+
+        # Calculate wicks
+        body_bottom = min(o, c)
+        body_top = max(o, c)
+        lower_wick = body_bottom - l
+        upper_wick = h - body_top
+        
+        lower_wick_ratio = lower_wick / candle_range
+        upper_wick_ratio = upper_wick / candle_range
+        
+        valid_buy_rejection = lower_wick_ratio >= WICK_RATIO_TARGET
+        valid_sell_rejection = upper_wick_ratio >= WICK_RATIO_TARGET
+
+        dynamic_floor, dynamic_ceiling, volume_ma = None, None, None
+        tested_floor, held_support = False, False
+        tested_ceiling, held_resistance = False, False
+        volume_confirmed = False
 
         if len(self.closes) >= LOOKBACK_PERIOD:
             dynamic_floor = min(list(self.lows)[-LOOKBACK_PERIOD:])
+            dynamic_ceiling = max(list(self.highs)[-LOOKBACK_PERIOD:])
             volume_ma = sum(list(self.volumes)[-LOOKBACK_PERIOD:]) / LOOKBACK_PERIOD
+            
+            # Buy support conditions
             tested_floor = l <= (dynamic_floor * (1 + FLOOR_BUFFER_PCT))
             held_support = c > dynamic_floor
+
+            # Sell resistance conditions
+            tested_ceiling = h >= (dynamic_ceiling * (1 - FLOOR_BUFFER_PCT))
+            held_resistance = c < dynamic_ceiling
+
             volume_confirmed = tick_count >= (volume_ma * VOLUME_SPIKE_MULTIPLIER) if volume_ma else True
 
+        # Trend evaluations
         if self.ema_fast is not None and self.ema_slow is not None:
-            trend_confirmed = self.ema_fast > self.ema_slow
+            buy_trend_confirmed = self.ema_fast > self.ema_slow
+            sell_trend_confirmed = self.ema_fast < self.ema_slow
         elif self.ema_fast is not None:
-            trend_confirmed = c > self.ema_fast
+            buy_trend_confirmed = c > self.ema_fast
+            sell_trend_confirmed = c < self.ema_fast
         else:
-            trend_confirmed = False
+            buy_trend_confirmed = False
+            sell_trend_confirmed = False
 
         if len(self.closes) < EMA_SLOW:
             if not self.warmup_logged or len(self.closes) % 30 == 0:
@@ -489,19 +531,21 @@ class GoldEngine:
                 self.warmup_logged = True
         else:
             print(
-                f"Floor:${dynamic_floor:.2f} | EMA50:${self.ema_fast:.2f} EMA200:${self.ema_slow:.2f} "
+                f"Floor:${dynamic_floor:.2f} Ceil:${dynamic_ceiling:.2f} | EMA50:${self.ema_fast:.2f} EMA200:${self.ema_slow:.2f} "
                 f"| RSI:{self.rsi} ATR:{self.atr} | C:${c:.2f}"
             )
             print(
-                f"   Tested:{tested_floor} | Rej:{valid_rejection} ({wick_ratio:.0%}) | "
-                f"Held:{held_support} | Vol:{volume_confirmed} | Trend:{trend_confirmed}"
+                f"   [BUY] Tested:{tested_floor} | Rej:{valid_buy_rejection} ({lower_wick_ratio:.0%}) | Held:{held_support} | Trend:{buy_trend_confirmed}"
+            )
+            print(
+                f"   [SELL] Tested:{tested_ceiling} | Rej:{valid_sell_rejection} ({upper_wick_ratio:.0%}) | Held:{held_resistance} | Trend:{sell_trend_confirmed}"
             )
 
         ts = utc_now_str()
         self.log_candle(
-            ts, o, h, l, c, wick_ratio, tick_count, volume_ma, dynamic_floor,
-            self.ema_fast, self.ema_slow, tested_floor, valid_rejection, held_support,
-            volume_confirmed, trend_confirmed, self.rsi, self.atr,
+            ts, o, h, l, c, lower_wick_ratio, tick_count, volume_ma, dynamic_floor,
+            self.ema_fast, self.ema_slow, tested_floor, valid_buy_rejection, held_support,
+            volume_confirmed, buy_trend_confirmed, self.rsi, self.atr,
         )
         self.lows.append(l)
         self.highs.append(h)
@@ -510,65 +554,104 @@ class GoldEngine:
         self.update_indicators(h, l, c)
         self.save_status()
 
-        # --- Regime gates (2026-09-09 review) ---
-        # slope: EMA50 must be rising vs EMA_SLOPE_LOOKBACK candles ago.
-        # ema50_history holds the EMA50 of every PREVIOUS candle (current one
-        # is appended below), so [-LOOKBACK] is exactly N candles ago.
-        slope_confirmed = False
+        # --- Regime gates (Slope & Price Proximity) ---
+        buy_slope_confirmed = False
+        sell_slope_confirmed = False
         if self.ema_fast is not None and len(self.ema50_history) >= EMA_SLOPE_LOOKBACK:
-            slope_confirmed = self.ema_fast > self.ema50_history[-EMA_SLOPE_LOOKBACK]
+            buy_slope_confirmed = self.ema_fast > self.ema50_history[-EMA_SLOPE_LOOKBACK]
+            sell_slope_confirmed = self.ema_fast < self.ema50_history[-EMA_SLOPE_LOOKBACK]
         if self.ema_fast is not None:
             self.ema50_history.append(self.ema_fast)
 
-        # price must not be collapsing away from EMA50 (max MAX_BELOW_EMA_ATR * ATR below)
-        price_near_ema = False
+        # Proximity to EMA50 (prevent buying collapsed candles or selling spiked candles)
+        buy_price_near_ema = False
+        sell_price_near_ema = False
         if self.ema_fast is not None and self.atr is not None:
-            price_near_ema = c >= (self.ema_fast - (self.atr * MAX_BELOW_EMA_ATR))
+            buy_price_near_ema = c >= (self.ema_fast - (self.atr * MAX_BELOW_EMA_ATR))
+            sell_price_near_ema = c <= (self.ema_fast + (self.atr * MAX_BELOW_EMA_ATR))
 
         vol_ok = volume_confirmed if REQUIRE_VOLUME_CONFIRM else True
-        trend_ok = trend_confirmed if REQUIRE_TREND_CONFIRM else True
-        slope_ok = slope_confirmed if REQUIRE_EMA_SLOPE else True
-        rsi_ok = (self.rsi is not None and RSI_MIN < self.rsi < RSI_MAX)
         atr_ok = (self.atr is not None and self.atr > MIN_ATR)
+
+        # Long checks
+        buy_trend_ok = buy_trend_confirmed if REQUIRE_TREND_CONFIRM else True
+        buy_slope_ok = buy_slope_confirmed if REQUIRE_EMA_SLOPE else True
+        buy_rsi_ok = (self.rsi is not None and RSI_MIN < self.rsi < RSI_MAX)
+
+        # Short checks (symmetric bounds)
+        sell_trend_ok = sell_trend_confirmed if REQUIRE_TREND_CONFIRM else True
+        sell_slope_ok = sell_slope_confirmed if REQUIRE_EMA_SLOPE else True
+        sell_rsi_ok = (self.rsi is not None and (100.0 - RSI_MAX) < self.rsi < (100.0 - RSI_MIN))
 
         in_trade = self.trade_active
         if TRADING_MODE == "LIVE":
             positions = mt5.positions_get(symbol=SYMBOL, magic=MAGIC_NUMBER)
             in_trade = (positions is not None and len(positions) > 0)
 
+        # Funnel tracking
         if dynamic_floor is not None:
             if tested_floor:
                 self.hit_tested_floor += 1
-            if valid_rejection:
+            if valid_buy_rejection:
                 self.hit_valid_rejection += 1
             if held_support:
                 self.hit_held_support += 1
             if volume_confirmed:
                 self.hit_volume_confirmed += 1
-            if trend_confirmed:
+            if buy_trend_confirmed:
                 self.hit_trend_confirmed += 1
-            if slope_ok:
+            if buy_slope_ok:
                 self.hit_slope_confirmed += 1
-            if price_near_ema:
+            if buy_price_near_ema:
                 self.hit_price_near_ema += 1
 
-        if (
+            if tested_ceiling:
+                self.hit_sell_tested_ceiling += 1
+            if valid_sell_rejection:
+                self.hit_sell_valid_rejection += 1
+            if held_resistance:
+                self.hit_sell_held_resistance += 1
+            if sell_trend_confirmed:
+                self.hit_sell_trend_confirmed += 1
+            if sell_slope_ok:
+                self.hit_sell_slope_confirmed += 1
+            if sell_price_near_ema:
+                self.hit_sell_price_near_ema += 1
+
+        buy_signal = (
             dynamic_floor is not None
             and self.ema_slow is not None
             and self.atr is not None
             and tested_floor
-            and valid_rejection
+            and valid_buy_rejection
             and held_support
             and vol_ok
-            and trend_ok
-            and slope_ok
-            and price_near_ema
-            and rsi_ok
+            and buy_trend_ok
+            and buy_slope_ok
+            and buy_price_near_ema
+            and buy_rsi_ok
             and atr_ok
             and not in_trade
-        ):
-            self.hit_all += 1
+        )
 
+        sell_signal = (
+            dynamic_ceiling is not None
+            and self.ema_slow is not None
+            and self.atr is not None
+            and tested_ceiling
+            and valid_sell_rejection
+            and held_resistance
+            and vol_ok
+            and sell_trend_ok
+            and sell_slope_ok
+            and sell_price_near_ema
+            and sell_rsi_ok
+            and atr_ok
+            and not in_trade
+        )
+
+        if buy_signal:
+            self.hit_all += 1
             allow, reason = should_take_trade(
                 current_atr=self.atr,
                 current_price=c,
@@ -578,7 +661,7 @@ class GoldEngine:
 
             if not allow:
                 msg = (
-                    f"TRADE SKIPPED\nReason: `{reason}`\n"
+                    f"BUY SETUP SKIPPED\nReason: `{reason}`\n"
                     f"Price: `${c:.2f}` | RSI: `{self.rsi:.1f}` | ATR: `{self.atr:.2f}`"
                 )
                 self.send_telegram(msg)
@@ -586,37 +669,70 @@ class GoldEngine:
                 return
 
             if TRADING_MODE == "LIVE":
-                self.execute_live_trade(c, wick_ratio, ts, dynamic_floor)
+                self.execute_live_trade("BUY", c, lower_wick_ratio, ts)
             else:
-                self.execute_simulated_trade(c, wick_ratio, ts, dynamic_floor)
+                self.execute_simulated_trade("BUY", c, lower_wick_ratio, ts)
 
-    def execute_live_trade(self, c, wick_ratio, ts, dynamic_floor):
-        print("\nALL CONDITIONS MET! PREPARING LIVE ORDER...")
-        sl_price = c - (self.atr * ATR_SL_MULT)
-        tp_price = c + (self.atr * ATR_TP_MULT)
+        elif sell_signal:
+            self.hit_sell_all += 1
+            allow, reason = should_take_trade(
+                current_atr=self.atr,
+                current_price=c,
+                ema_fast=self.ema_fast,
+                ema_slow=self.ema_slow,
+            )
+
+            if not allow:
+                msg = (
+                    f"SELL SETUP SKIPPED\nReason: `{reason}`\n"
+                    f"Price: `${c:.2f}` | RSI: `{self.rsi:.1f}` | ATR: `{self.atr:.2f}`"
+                )
+                self.send_telegram(msg)
+                print(f"\nTrade skipped -> {reason}\n")
+                return
+
+            if TRADING_MODE == "LIVE":
+                self.execute_live_trade("SELL", c, upper_wick_ratio, ts)
+            else:
+                self.execute_simulated_trade("SELL", c, upper_wick_ratio, ts)
+
+    def execute_live_trade(self, direction: str, c: float, wick_ratio: float, ts: str):
+        print(f"\nALL CONDITIONS MET! PREPARING LIVE {direction} ORDER...")
         point = mt5.symbol_info(SYMBOL).point
-        sl_price = round(sl_price / point) * point
-        tp_price = round(tp_price / point) * point
         tick = mt5.symbol_info_tick(SYMBOL)
         if tick is None:
             print("Failed to get tick data")
             return
 
+        if direction == "BUY":
+            price = tick.ask
+            order_type = mt5.ORDER_TYPE_BUY
+            sl_price = price - (self.atr * ATR_SL_MULT)
+            tp_price = price + (self.atr * ATR_TP_MULT)
+        else:
+            price = tick.bid
+            order_type = mt5.ORDER_TYPE_SELL
+            sl_price = price + (self.atr * ATR_SL_MULT)
+            tp_price = price - (self.atr * ATR_TP_MULT)
+
+        sl_price = round(sl_price / point) * point
+        tp_price = round(tp_price / point) * point
+
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": SYMBOL,
             "volume": LOT_SIZE,
-            "type": mt5.ORDER_TYPE_BUY,
-            "price": tick.ask,
+            "type": order_type,
+            "price": price,
             "sl": sl_price,
             "tp": tp_price,
             "deviation": 20,
             "magic": MAGIC_NUMBER,
-            "comment": "Gold Engine Live",
+            "comment": f"Gold Engine Live {direction}",
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_FOK,
         }
-        print(f"   Sending: BUY {LOT_SIZE} {SYMBOL} @ {tick.ask:.2f} | SL: {sl_price:.2f} | TP: {tp_price:.2f}")
+        print(f"   Sending: {direction} {LOT_SIZE} {SYMBOL} @ {price:.2f} | SL: {sl_price:.2f} | TP: {tp_price:.2f}")
 
         result = mt5.order_send(request)
         if result.retcode != mt5.TRADE_RETCODE_DONE:
@@ -627,21 +743,27 @@ class GoldEngine:
             self.next_trade_num += 1
             print(f"ORDER SUCCESS! Ticket: {result.order} | Trade #{self.current_trade_num}")
             self.send_telegram(
-                f"LIVE GOLD BUY EXECUTED\n"
+                f"LIVE GOLD {direction} EXECUTED\n"
                 f"Ticket: `{result.order}` | Trade #{self.current_trade_num}\n"
-                f"Entry: `${tick.ask:.2f}`\n"
+                f"Entry: `${price:.2f}`\n"
                 f"SL: `${sl_price:.2f}`\n"
                 f"TP: `${tp_price:.2f}`"
             )
 
-    def execute_simulated_trade(self, c, wick_ratio, ts, dynamic_floor):
+    def execute_simulated_trade(self, direction: str, c: float, wick_ratio: float, ts: str):
         self.trade_active = True
+        self.trade_type = direction
         self.current_trade_num = self.next_trade_num
         self.next_trade_num += 1
 
         self.entry_price = c
-        self.stop_loss = c - (self.atr * ATR_SL_MULT)
-        self.take_profit = c + (self.atr * ATR_TP_MULT)
+        if direction == "BUY":
+            self.stop_loss = c - (self.atr * ATR_SL_MULT)
+            self.take_profit = c + (self.atr * ATR_TP_MULT)
+        else:
+            self.stop_loss = c + (self.atr * ATR_SL_MULT)
+            self.take_profit = c - (self.atr * ATR_TP_MULT)
+
         self.entry_time = ts
         self.entry_rsi = self.rsi
         self.entry_atr = self.atr
@@ -650,43 +772,71 @@ class GoldEngine:
         self.entry_ema_slow = self.ema_slow
 
         msg = (
-            f"GOLD BUY SETUP #{self.current_trade_num}\n"
+            f"GOLD {direction} SETUP #{self.current_trade_num}\n"
             f"Entry: `${self.entry_price:.2f}`\n"
             f"RSI: `{self.rsi:.1f}` | ATR: `{self.atr:.2f}`\n"
             f"SL: `${self.stop_loss:.2f}`\n"
             f"TP: `${self.take_profit:.2f}`"
         )
         self.send_telegram(msg)
-        print(f"\nAlert sent -> Trade #{self.current_trade_num}\n")
+        print(f"\nAlert sent -> {direction} Trade #{self.current_trade_num}\n")
         self.save_status()
 
     def check_position(self, price: float):
         if not self.trade_active:
             return
-        if price >= self.take_profit:
-            profit = price - self.entry_price
-            self.balance += profit
-            self.wins += 1
-            self.trade_active = False
-            self.log_trade(exit_price=price, exit_reason="TP", profit=profit)
-            self.send_telegram(
-                f"TP HIT (#{self.current_trade_num})\n"
-                f"Exit: `${price:.2f}` (+${profit:.2f})\n"
-                f"Equity: `${self.balance:.2f}`"
-            )
-            self.save_status()
-        elif price <= self.stop_loss:
-            loss = self.entry_price - price
-            self.balance -= loss
-            self.losses += 1
-            self.trade_active = False
-            self.log_trade(exit_price=price, exit_reason="SL", profit=-loss)
-            self.send_telegram(
-                f"SL HIT (#{self.current_trade_num})\n"
-                f"Exit: `${price:.2f}` (-${loss:.2f})\n"
-                f"Equity: `${self.balance:.2f}`"
-            )
-            self.save_status()
+
+        if self.trade_type == "BUY":
+            if price >= self.take_profit:
+                profit = price - self.entry_price
+                self.balance += profit
+                self.wins += 1
+                self.trade_active = False
+                self.log_trade(exit_price=price, exit_reason="TP", profit=profit)
+                self.send_telegram(
+                    f"TP HIT (BUY #{self.current_trade_num})\n"
+                    f"Exit: `${price:.2f}` (+${profit:.2f})\n"
+                    f"Equity: `${self.balance:.2f}`"
+                )
+                self.save_status()
+            elif price <= self.stop_loss:
+                loss = self.entry_price - price
+                self.balance -= loss
+                self.losses += 1
+                self.trade_active = False
+                self.log_trade(exit_price=price, exit_reason="SL", profit=-loss)
+                self.send_telegram(
+                    f"SL HIT (BUY #{self.current_trade_num})\n"
+                    f"Exit: `${price:.2f}` (-${loss:.2f})\n"
+                    f"Equity: `${self.balance:.2f}`"
+                )
+                self.save_status()
+
+        elif self.trade_type == "SELL":
+            if price <= self.take_profit:
+                profit = self.entry_price - price
+                self.balance += profit
+                self.wins += 1
+                self.trade_active = False
+                self.log_trade(exit_price=price, exit_reason="TP", profit=profit)
+                self.send_telegram(
+                    f"TP HIT (SELL #{self.current_trade_num})\n"
+                    f"Exit: `${price:.2f}` (+${profit:.2f})\n"
+                    f"Equity: `${self.balance:.2f}`"
+                )
+                self.save_status()
+            elif price >= self.stop_loss:
+                loss = price - self.entry_price
+                self.balance -= loss
+                self.losses += 1
+                self.trade_active = False
+                self.log_trade(exit_price=price, exit_reason="SL", profit=-loss)
+                self.send_telegram(
+                    f"SL HIT (SELL #{self.current_trade_num})\n"
+                    f"Exit: `${price:.2f}` (-${loss:.2f})\n"
+                    f"Equity: `${self.balance:.2f}`"
+                )
+                self.save_status()
 
     def aggregate_tick(self, price: float):
         minute_now = int(datetime.now(timezone.utc).timestamp() // 60)
@@ -701,27 +851,21 @@ class GoldEngine:
         self.tick_pool.append(price)
 
     def on_event(self, event):
-        if event.get("event") != "price":
-            return
-        try:
+        if event.get("event") == "price":
             price = float(event["price"])
             self.check_position(price)
             self.aggregate_tick(price)
-            print(f"${price:.2f} | ticks: {len(self.tick_pool)}   ", end="\r")
-            sys.stdout.flush()
-        except Exception:
-            return
 
     def run_live(self):
-        print(f"Gold Engine LIVE starting for {SYMBOL}...")
+        print("Gold Engine LIVE starting...")
         candles_fetched = 0
         while True:
             try:
-                rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_M1, 0, 250)
+                rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_M1, 0, 1)
                 if rates is None or len(rates) == 0:
-                    time.sleep(5)
+                    time.sleep(1)
                     continue
-                last_candle = rates[-2]
+                last_candle = rates[0]
                 o, h, l, c, vol = (
                     float(last_candle["open"]),
                     float(last_candle["high"]),

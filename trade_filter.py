@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Lightweight pre-trade filter - Medium-term version
+Lightweight pre-trade filter & Portfolio Risk Gatekeeper
 Acts as the final gatekeeper for portfolio/state-level rules.
 (Strategy-level rules like RSI, Wick, and Trend are handled in engine.py)
 
 Timestamps: engine.py writes Entry_Time / Exit_Time in UTC.
-This module also uses UTC for blackouts, cooldown, and skip logs.
+This module also uses UTC for blackouts, cooldowns, daily limits, and skip logs.
 """
 
 import csv
@@ -14,21 +14,24 @@ from datetime import datetime, time, timedelta, timezone
 
 TRADES_LOG = "/opt/gold/trades.csv"
 SKIP_LOG   = "/opt/gold/skipped_trades.csv"
-LOOKBACK   = 15
+LOOKBACK   = 30
 
-# === Settings (Medium-term) ===
-SL_COOLDOWN_MINUTES = 30          # Block new trades for 30 min after any SL
-MIN_ATR_TO_TRADE    = 1.10        # Do not trade when ATR is too low (Single source of truth)
-MAX_ATR_TO_TRADE    = 4.50
+# === Settings (Risk & Volatility Controls) ===
+SL_COOLDOWN_BASE_MINUTES = 30     # Base cooldown after 1 SL (30 min)
+SL_COOLDOWN_ESCALATED_MINUTES = 60 # Escalated cooldown after 2 consecutive SLs (60 min)
+MAX_DAILY_LOSSES         = 3      # Halt trading for the rest of the day after 3 SLs
+MIN_ATR_TO_TRADE         = 1.10   # Do not trade when ATR is too low
+MAX_ATR_TO_TRADE         = 4.50   # Block trades during extreme news spikes / illiquidity
 
-# === Simple time-based blackout (UTC) ===
-# London Open extended to 09:00 in the 2026-09-09 review: every historical
-# trade entered 08:00-09:00 UTC was a loss (0W/8L in hour 8, 0W/2L in hour 9).
+# === Session Blackout Windows (UTC) ===
+# High-risk session transitions, news windows, and rollover spread spikes:
 BLACKOUT_WINDOWS = [
-    (7, 55, 9, 0, "London Open"),
-    (12, 25, 12, 45, "NY Open"),
-    (13, 55, 14, 15, "NY Open volatility"),
+    (7, 55, 9, 0, "London Open & Early Session Kill-Zone"),
+    (12, 25, 12, 45, "NY Early Pre-Market"),
+    (13, 25, 15, 15, "NY Open & US High-Impact Macro Releases"),
+    (21, 45, 22, 30, "Daily Market Rollover & Spread Spike"),
 ]
+
 
 def is_in_blackout(now: datetime = None) -> tuple[bool, str]:
     if now is None:
@@ -42,7 +45,7 @@ def is_in_blackout(now: datetime = None) -> tuple[bool, str]:
     return False, ""
 
 
-def load_recent_trades(n=LOOKBACK):
+def load_recent_trades(n=LOOKBACK) -> list:
     if not os.path.isfile(TRADES_LOG):
         return []
     rows = []
@@ -56,48 +59,69 @@ def load_recent_trades(n=LOOKBACK):
     return rows[-n:] if rows else []
 
 
-def check_sl_cooldown(trades: list) -> tuple[bool, str]:
+def get_daily_sl_count(trades: list, now: datetime = None) -> int:
+    """Counts number of Stop Loss trades that exited today in UTC."""
+    if not trades:
+        return 0
+    if now is None:
+        now = datetime.now(timezone.utc)
+    today_str = now.strftime("%Y-%m-%d")
+    count = 0
+    for t in trades:
+        ext = t.get("Exit_Time") or t.get("Entry_Time") or ""
+        if ext.startswith(today_str) and (t.get("Exit_Reason") or "").strip().upper() == "SL":
+            count += 1
+    return count
+
+
+def get_consecutive_sl_count(trades: list) -> int:
+    """Counts uninterrupted trailing Stop Loss trades."""
+    if not trades:
+        return 0
+    count = 0
+    for t in reversed(trades):
+        reason = (t.get("Exit_Reason") or "").strip().upper()
+        if reason == "SL":
+            count += 1
+        elif reason == "TP":
+            break
+    return count
+
+
+def check_daily_loss_limit(trades: list, now: datetime = None) -> tuple[bool, str]:
+    """Circuit breaker: Halts trading if daily loss limit is hit."""
+    daily_sls = get_daily_sl_count(trades, now)
+    if daily_sls >= MAX_DAILY_LOSSES:
+        return True, f"Daily Loss Limit Reached ({daily_sls}/{MAX_DAILY_LOSSES} SLs today) - Trading Halted"
+    return False, ""
+
+
+def check_sl_cooldown(trades: list, now: datetime = None) -> tuple[bool, str]:
+    """Escalating cooldown based on consecutive losses."""
     if not trades:
         return False, ""
 
     last = trades[-1]
-    if last.get("Exit_Reason") != "SL":
+    if (last.get("Exit_Reason") or "").strip().upper() != "SL":
         return False, ""
+
+    consecutive_sls = get_consecutive_sl_count(trades)
+    cooldown_minutes = (
+        SL_COOLDOWN_ESCALATED_MINUTES if consecutive_sls >= 2 else SL_COOLDOWN_BASE_MINUTES
+    )
 
     try:
         # Exit_Time is written by engine.py in UTC
         exit_time = datetime.strptime(last["Exit_Time"], "%Y-%m-%d %H:%M:%S")
         exit_time = exit_time.replace(tzinfo=timezone.utc)
-        cooldown_end = exit_time + timedelta(minutes=SL_COOLDOWN_MINUTES)
-        now = datetime.now(timezone.utc)
+        cooldown_end = exit_time + timedelta(minutes=cooldown_minutes)
+        if now is None:
+            now = datetime.now(timezone.utc)
 
         if now < cooldown_end:
             remaining = int((cooldown_end - now).total_seconds() / 60) + 1
-            return True, f"SL Cooldown: {remaining} min remaining"
-    except Exception:
-        pass
-
-    return False, ""
-
-
-def analyze_recent(trades: list) -> tuple[bool, str]:
-    if len(trades) < 5:
-        return False, ""
-
-    # Look at the last 10 trades for context
-    recent = trades[-10:]
-    sl_trades = [t for t in recent if t.get("Exit_Reason") == "SL"]
-
-    # Circuit breaker: Recent SLs in elevated ATR
-    try:
-        high_atr_sl = 0
-        for t in sl_trades[-3:]:  # Check the last 3 SLs
-            atr = float(t.get("ATR_At_Entry", 0) or 0)
-            if atr >= 1.6:
-                high_atr_sl += 1
-        
-        if high_atr_sl >= 2:
-            return True, "Recent SLs occurred in elevated ATR (≥1.6)"
+            streak_info = f" ({consecutive_sls} consecutive SLs -> {cooldown_minutes}m cooldown)" if consecutive_sls >= 2 else ""
+            return True, f"SL Cooldown: {remaining} min remaining{streak_info}"
     except Exception:
         pass
 
@@ -123,45 +147,45 @@ def log_skip(reason: str, price=None, atr=None):
         print(f"⚠️ Failed to log skip: {e}")
 
 
-def should_take_trade(current_atr=None, current_price=None, ema_fast=None, ema_slow=None) -> tuple[bool, str]:
+def should_take_trade(current_atr=None, current_price=None, ema_fast=None, ema_slow=None, now: datetime = None) -> tuple[bool, str]:
     """
     Final gatekeeper for portfolio/state-level rules.
-    Note: RSI, Wick, and Trend direction are already validated in engine.py.
+    Note: RSI, Wick, Floor/Ceiling, and Trend direction are validated in engine.py.
     """
 
     # 1. Time blackout
-    in_bo, bo_reason = is_in_blackout()
+    in_bo, bo_reason = is_in_blackout(now)
     if in_bo:
         log_skip(bo_reason, current_price, current_atr)
         return False, bo_reason
 
     trades = load_recent_trades()
 
-    # 2. SL Cooldown
-    skip, reason = check_sl_cooldown(trades)
+    # 2. Daily Loss Circuit Breaker
+    halted, halt_reason = check_daily_loss_limit(trades, now)
+    if halted:
+        log_skip(halt_reason, current_price, current_atr)
+        return False, halt_reason
+
+    # 3. Escalating SL Cooldown
+    skip, reason = check_sl_cooldown(trades, now)
     if skip:
         log_skip(reason, current_price, current_atr)
         return False, reason
 
-    # 3. Minimum ATR (Single source of truth for volatility filter)
+    # 4. Minimum ATR (Volatility filter)
     if current_atr is not None and current_atr < MIN_ATR_TO_TRADE:
         reason = f"ATR too low ({current_atr:.2f} < {MIN_ATR_TO_TRADE})"
         log_skip(reason, current_price, current_atr)
         return False, reason
 
-     # 3b. Maximum ATR (Block extreme news volatility)
+    # 5. Maximum ATR (Block extreme news volatility / spreads)
     if current_atr is not None and current_atr > MAX_ATR_TO_TRADE:
         reason = f"ATR too high - News volatility ({current_atr:.2f} > {MAX_ATR_TO_TRADE})"
         log_skip(reason, current_price, current_atr)
         return False, reason
 
-    # 4. Recent SL pattern (Circuit breaker)
-    #skip, reason = analyze_recent(trades)
-    #if skip:
-    #    log_skip(reason, current_price, current_atr)
-    #    return False, reason
-
-    # All filters passed
+    # All portfolio filters passed
     return True, "OK"
 
 

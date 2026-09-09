@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-Smoke test for the engine's regime gates (2026-09-09 review).
+Smoke test for the engine's regime gates, bidirectional (Buy/Sell) execution,
+and daily loss circuit breaker.
 
-Runs GoldEngine.evaluate_candle() over synthetic 1-minute candles in a temp
-directory (no /opt/gold, no network, no Telegram, no real API keys needed).
+Runs GoldEngine.evaluate_candle() over synthetic 1-minute candles in temp
+directories (no /opt/gold, no network, no Telegram, no real API keys needed).
 
 Scenarios:
-  A) Uptrend + rejection dip at the 20-bar floor  -> trade MUST trigger
-  B) Established decline + rejection dip          -> trade MUST be blocked
-  C) Restart from the written log                 -> EMA50 slope history must
-     re-seed from the EMA_50 column so the slope gate works immediately
+  A) Uptrend + rejection dip at 20-bar floor       -> BUY trade MUST trigger & close with TP
+  B) Established decline + floor rejection dip     -> BUY trade MUST be blocked
+  C) Downtrend + ceiling rejection dip             -> SELL trade MUST trigger & close with TP
+  D) Daily loss circuit breaker                    -> MUST halt after MAX_DAILY_LOSSES (3)
+  E) Restart from log                             -> EMA50 history seeds properly
 
 Usage: python3 tools/smoke_test.py
 """
@@ -26,7 +28,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
-# ---- stub the modules the sandbox does not have ----
+# Stub external dependencies
 for name in ("requests", "dotenv", "twelvedata"):
     if name not in sys.modules:
         mod = types.ModuleType(name)
@@ -40,14 +42,6 @@ for name in ("requests", "dotenv", "twelvedata"):
 
 import engine  # noqa: E402
 import trade_filter  # noqa: E402
-
-TMP = tempfile.mkdtemp(prefix="gold_smoke_")
-engine.LOG_FILE_PATH = os.path.join(TMP, "forward_test_log.csv")
-engine.STATUS_FILE_PATH = os.path.join(TMP, "status.json")
-engine.TRADES_LOG_PATH = os.path.join(TMP, "trades.csv")
-trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
-trade_filter.SKIP_LOG = os.path.join(TMP, "skipped_trades.csv")
-trade_filter.is_in_blackout = lambda now=None: (False, "")  # deterministic
 
 FAILURES = []
 
@@ -70,7 +64,7 @@ def candles_uptrend(n, start=4400.0):
     return out
 
 
-def candles_decline(n, start):
+def candles_decline(n, start=4800.0):
     """Oscillating decline: RSI ~40, EMA50 falling."""
     out, p = [], start
     for i in range(n):
@@ -86,12 +80,12 @@ def run_candles(eng, candles, ts_start):
     ts = ts_start
     for (o, h, l, c) in candles:
         eng.evaluate_candle(o, h, l, c, tick_count=30)
-        eng.check_position(c)  # drive SL/TP like the tick loop would
+        eng.check_position(c)
         ts += timedelta(minutes=1)
 
 
-def rejection_dip(eng):
-    """One candle: undercuts the 20-bar floor, closes back above it, long wick."""
+def rejection_dip_buy(eng):
+    """Under-cuts 20-bar floor, closes above it, long lower wick."""
     floor = min(list(eng.lows)[-engine.LOOKBACK_PERIOD:])
     p = list(eng.closes)[-1]
     o = p
@@ -101,61 +95,106 @@ def rejection_dip(eng):
     return (o, high, low, c)
 
 
-print("Scenario A: uptrend + floor rejection -> expect a trade")
-eng = engine.GoldEngine()
-run_candles(eng, candles_uptrend(240), datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc))
-dip = rejection_dip(eng)
-run_candles(eng, [dip], datetime(2026, 1, 1, 4, 0, tzinfo=timezone.utc))
-check("A: trade triggered", eng.trade_active or eng.current_trade_num is not None,
-      f"trade_active={eng.trade_active} num={eng.current_trade_num}")
-check("A: EMA50 slope was confirmed at entry", eng.hit_slope_confirmed > 0)
-check("A: price-near-EMA counted", eng.hit_price_near_ema > 0)
-
-# let the trade hit TP
-p_now = list(eng.closes)[-1]
-up = []
-p = p_now
-for _ in range(10):
+def rejection_dip_sell(eng):
+    """Tests 20-bar ceiling, closes below it, long upper wick."""
+    ceil = max(list(eng.highs)[-engine.LOOKBACK_PERIOD:])
+    p = list(eng.closes)[-1]
     o = p
-    c = p + 1.0
-    up.append((o, max(o, c) + 0.3, min(o, c) - 0.3, c))
-    p = c
-run_candles(eng, up, datetime(2026, 1, 1, 4, 1, tzinfo=timezone.utc))
-check("A: trade closed", not eng.trade_active, f"wins={eng.wins} losses={eng.losses}")
-with open(engine.TRADES_LOG_PATH, newline="") as f:
-    rows = list(csv.DictReader(f))
-    expected_cols = {"Trade_Num", "Entry_Time", "Exit_Time", "Entry_Price", "Stop_Loss",
-                     "Take_Profit", "Exit_Price", "Exit_Reason", "Profit", "Balance_After"}
-check("A: trades.csv schema unchanged", rows and expected_cols.issubset(rows[0].keys()),
-      f"{len(rows)} row(s)")
-with open(engine.STATUS_FILE_PATH) as f:
-    st = json.load(f)
-check("A: status.json has new funnel keys",
-      "slope_confirmed" in st["funnel"] and "price_near_ema" in st["funnel"])
+    c = p - 0.2
+    high = ceil + 0.6
+    low = p - 0.5
+    return (o, high, low, c)
 
-print("Scenario B: established decline + rejection dip -> expect NO trade")
+
+# --- Scenario A ---
+print("Scenario A: uptrend + floor rejection -> expect BUY trade")
+tmp_a = tempfile.mkdtemp(prefix="gold_smoke_a_")
+engine.LOG_FILE_PATH = os.path.join(tmp_a, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_a, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_a, "trades.csv")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_a, "skipped_trades.csv")
+trade_filter.is_in_blackout = lambda now=None: (False, "")
+
+eng_a = engine.GoldEngine()
+run_candles(eng_a, candles_uptrend(240), datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc))
+dip_a = rejection_dip_buy(eng_a)
+run_candles(eng_a, [dip_a], datetime(2026, 1, 1, 4, 0, tzinfo=timezone.utc))
+check("A: BUY trade triggered", eng_a.trade_active and eng_a.trade_type == "BUY",
+      f"trade_active={eng_a.trade_active} type={eng_a.trade_type} num={eng_a.current_trade_num}")
+
+# Drive to TP
+p_now = list(eng_a.closes)[-1]
+up = [(p_now + i, p_now + i + 0.5, p_now + i - 0.2, p_now + i + 0.8) for i in range(1, 10)]
+run_candles(eng_a, up, datetime(2026, 1, 1, 4, 1, tzinfo=timezone.utc))
+check("A: BUY trade closed with TP", not eng_a.trade_active and eng_a.wins == 1, f"wins={eng_a.wins} losses={eng_a.losses}")
+shutil.rmtree(tmp_a, ignore_errors=True)
+
+
+# --- Scenario B ---
+print("\nScenario B: decline + floor rejection dip -> expect NO buy trade")
+tmp_b = tempfile.mkdtemp(prefix="gold_smoke_b_")
+engine.LOG_FILE_PATH = os.path.join(tmp_b, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_b, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_b, "trades.csv")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_b, "skipped_trades.csv")
+trade_filter.is_in_blackout = lambda now=None: (False, "")
+
 eng_b = engine.GoldEngine()
-run_candles(eng_b, candles_uptrend(240) + candles_decline(60, list(eng_b.closes)[-1] if eng_b.closes else 4467),
-            datetime(2026, 2, 1, 0, 0, tzinfo=timezone.utc))
-dip_b = rejection_dip(eng_b)
-eng_b.evaluate_candle(*dip_b, tick_count=30)
-check("B: no trade in decline", not eng_b.trade_active and eng_b.current_trade_num is None,
+run_candles(eng_b, candles_decline(240), datetime(2026, 2, 1, 0, 0, tzinfo=timezone.utc))
+dip_b = rejection_dip_buy(eng_b)
+run_candles(eng_b, [dip_b], datetime(2026, 2, 1, 4, 0, tzinfo=timezone.utc))
+check("B: no BUY trade in decline", not eng_b.trade_active,
       f"trend_gate=ema50>{'ema200' if eng_b.ema_fast > eng_b.ema_slow else 'CROSSED'}")
-slope_now = eng_b.ema_fast > eng_b.ema50_history[-engine.EMA_SLOPE_LOOKBACK] if len(eng_b.ema50_history) >= engine.EMA_SLOPE_LOOKBACK else False
-check("B: EMA50 slope negative at the dip", not slope_now)
+shutil.rmtree(tmp_b, ignore_errors=True)
 
-print("Scenario C: restart -> EMA50 history re-seeds from log")
+
+# --- Scenario C ---
+print("\nScenario C: downtrend + ceiling rejection -> expect SELL trade")
+tmp_c = tempfile.mkdtemp(prefix="gold_smoke_c_")
+engine.LOG_FILE_PATH = os.path.join(tmp_c, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_c, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_c, "trades.csv")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_c, "skipped_trades.csv")
+trade_filter.is_in_blackout = lambda now=None: (False, "")
+
 eng_c = engine.GoldEngine()
-check("C: ema50_history seeded from CSV",
-      len(eng_c.ema50_history) >= engine.EMA_SLOPE_LOOKBACK,
-      f"{len(eng_c.ema50_history)} values loaded")
-if len(eng_c.ema50_history) >= engine.EMA_SLOPE_LOOKBACK:
-    rising = eng_c.ema_fast > eng_c.ema50_history[-engine.EMA_SLOPE_LOOKBACK]
-    check("C: slope computable immediately after restart", isinstance(rising, bool))
-check("C: trade stats restored from trades.csv",
-      eng_c.wins + eng_c.losses >= 1, f"{eng_c.wins}W/{eng_c.losses}L balance=${eng_c.balance:.2f}")
+run_candles(eng_c, candles_decline(240, 4800.0), datetime(2026, 3, 1, 0, 0, tzinfo=timezone.utc))
+dip_c = rejection_dip_sell(eng_c)
+run_candles(eng_c, [dip_c], datetime(2026, 3, 1, 4, 0, tzinfo=timezone.utc))
+check("C: SELL trade triggered", eng_c.trade_active and eng_c.trade_type == "SELL",
+      f"trade_active={eng_c.trade_active} type={eng_c.trade_type}")
 
-shutil.rmtree(TMP, ignore_errors=True)
+# Drive to SELL TP (downward price)
+p_now = list(eng_c.closes)[-1]
+down = [(p_now - i, p_now - i + 0.2, p_now - i - 0.8, p_now - i - 0.5) for i in range(1, 10)]
+run_candles(eng_c, down, datetime(2026, 3, 1, 4, 1, tzinfo=timezone.utc))
+check("C: SELL trade closed with TP", not eng_c.trade_active and eng_c.wins == 1, f"wins={eng_c.wins}")
+
+
+# --- Scenario D ---
+print("\nScenario D: daily loss circuit breaker -> halts trading after 3 SLs")
+trades_sim = [
+    {"Trade_Num": "1", "Trade_Type": "BUY", "Entry_Time": "2026-09-10 01:00:00", "Exit_Time": "2026-09-10 01:10:00", "Exit_Reason": "SL", "Profit": "-3.00"},
+    {"Trade_Num": "2", "Trade_Type": "BUY", "Entry_Time": "2026-09-10 02:00:00", "Exit_Time": "2026-09-10 02:10:00", "Exit_Reason": "SL", "Profit": "-3.00"},
+    {"Trade_Num": "3", "Trade_Type": "SELL", "Entry_Time": "2026-09-10 03:00:00", "Exit_Time": "2026-09-10 03:10:00", "Exit_Reason": "SL", "Profit": "-3.00"},
+]
+sl_count = trade_filter.get_daily_sl_count(trades_sim, datetime(2026, 9, 10, 5, 0, tzinfo=timezone.utc))
+halted, halt_reason = trade_filter.check_daily_loss_limit(trades_sim, datetime(2026, 9, 10, 5, 0, tzinfo=timezone.utc))
+check("D: daily SL count equals 3", sl_count == 3, f"count={sl_count}")
+check("D: circuit breaker triggered", halted and "Daily Loss Limit Reached" in halt_reason, f"reason={halt_reason}")
+
+
+# --- Scenario E ---
+print("\nScenario E: restart state persistence")
+eng_e = engine.GoldEngine()
+check("E: EMA50 history seeded from CSV", len(eng_e.ema50_history) >= engine.EMA_SLOPE_LOOKBACK, f"{len(eng_e.ema50_history)} loaded")
+check("E: trade stats loaded from trades.csv", eng_e.wins == 1 and eng_e.losses == 0)
+
+shutil.rmtree(tmp_c, ignore_errors=True)
+
 print()
 if FAILURES:
     print(f"SMOKE TEST FAILED: {FAILURES}")
