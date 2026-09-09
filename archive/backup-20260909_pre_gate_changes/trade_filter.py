@@ -22,10 +22,8 @@ MIN_ATR_TO_TRADE    = 1.10        # Do not trade when ATR is too low (Single sou
 MAX_ATR_TO_TRADE    = 4.50
 
 # === Simple time-based blackout (UTC) ===
-# London Open extended to 09:00 in the 2026-09-09 review: every historical
-# trade entered 08:00-09:00 UTC was a loss (0W/8L in hour 8, 0W/2L in hour 9).
 BLACKOUT_WINDOWS = [
-    (7, 55, 9, 0, "London Open"),
+    (7, 55, 8, 15, "London Open"),
     (12, 25, 12, 45, "NY Open"),
     (13, 55, 14, 15, "NY Open volatility"),
 ]
