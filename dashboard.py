@@ -24,16 +24,27 @@ HTML_TEMPLATE = """
         <!-- Header -->
         <header class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 border-b border-slate-800 pb-4 gap-4">
             <div>
-                <h1 class="text-3xl font-bold text-amber-400">🪙 Gold Forward Test Dashboard</h1>
+                <h1 class="text-3xl font-bold text-amber-400">🪙 Gold Engine Dashboard</h1>
                 <p class="text-slate-400 text-sm">
-                    XAU/USD • Auto-refreshes every 5s • Last status: {{ status.last_update or '—' }}
+                    XAU/USD Bidirectional • Auto-refreshes every 5s • Last update: {{ status.last_update or '—' }}
                 </p>
             </div>
-            <div class="bg-slate-800 px-5 py-3 rounded-xl border border-slate-700 text-right">
-                <span class="text-xs text-slate-400 block">Simulated Equity</span>
-                <span class="text-3xl font-semibold {{ 'text-emerald-400' if status.equity >= 500 else 'text-rose-400' }}">
-                    ${{ "%.2f"|format(status.equity) }}
-                </span>
+            <div class="flex items-center gap-4">
+                <div class="bg-slate-800 px-4 py-2 rounded-xl border border-slate-700 text-right">
+                    <span class="text-xs text-slate-400 block">Daily SLs (Max {{ status.max_daily_losses or 3 }})</span>
+                    <span class="text-xl font-bold {{ 'text-rose-400' if (status.daily_losses or 0) >= (status.max_daily_losses or 3) else 'text-slate-200' }}">
+                        {{ status.daily_losses or 0 }} / {{ status.max_daily_losses or 3 }}
+                        {% if (status.daily_losses or 0) >= (status.max_daily_losses or 3) %}
+                        <span class="text-xs bg-rose-900/60 text-rose-300 px-2 py-0.5 rounded ml-1 font-semibold">HALTED</span>
+                        {% endif %}
+                    </span>
+                </div>
+                <div class="bg-slate-800 px-5 py-3 rounded-xl border border-slate-700 text-right">
+                    <span class="text-xs text-slate-400 block">Simulated Equity</span>
+                    <span class="text-3xl font-semibold {{ 'text-emerald-400' if status.equity >= 500 else 'text-rose-400' }}">
+                        ${{ "%.2f"|format(status.equity) }}
+                    </span>
+                </div>
             </div>
         </header>
 
@@ -60,9 +71,13 @@ HTML_TEMPLATE = """
                 <p class="text-2xl font-bold text-cyan-400">{{ status.next_trade_num or '—' }}</p>
             </div>
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <p class="text-xs text-slate-400">Open Trade</p>
+                <p class="text-xs text-slate-400">Active Trade</p>
                 <p class="text-2xl font-bold {{ 'text-emerald-400' if status.trade_active else 'text-slate-500' }}">
-                    {{ 'YES' if status.trade_active else 'No' }}
+                    {% if status.trade_active %}
+                        {{ status.trade_type or 'BUY' }}
+                    {% else %}
+                        No
+                    {% endif %}
                 </p>
             </div>
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
@@ -73,8 +88,13 @@ HTML_TEMPLATE = """
 
         <!-- Active Trade Panel -->
         {% if status.trade_active %}
-        <div class="bg-slate-800 border border-amber-700/50 rounded-xl p-4 mb-6">
-            <p class="text-sm text-amber-400 font-semibold mb-2">🔥 Active Virtual Trade</p>
+        <div class="bg-slate-800 border {{ 'border-emerald-600/50' if status.trade_type == 'BUY' else 'border-rose-600/50' }} rounded-xl p-4 mb-6">
+            <div class="flex items-center justify-between mb-2">
+                <p class="text-sm font-semibold {{ 'text-emerald-400' if status.trade_type == 'BUY' else 'text-rose-400' }}">
+                    🔥 Active {{ status.trade_type or 'BUY' }} Position (#{{ status.current_trade_num or '—' }})
+                </p>
+                <span class="text-xs text-slate-400">Entered: {{ status.entry_time or '—' }}</span>
+            </div>
             <div class="grid grid-cols-3 gap-4 text-sm">
                 <div>
                     <span class="text-slate-400">Entry</span><br>
@@ -120,35 +140,32 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
-        <!-- Funnel Stats (from status.json when available, else candle log) -->
-        <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
+        <!-- Funnel Stats -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+            <!-- Long Funnel -->
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <p class="text-xs text-slate-400">Candles Eval</p>
-                <p class="text-xl font-bold">{{ funnel.candles_evaluated }}</p>
+                <h3 class="text-sm font-semibold text-emerald-400 mb-3">📈 Buy (Long) Funnel</h3>
+                <div class="grid grid-cols-3 gap-2 text-xs">
+                    <div><span class="text-slate-400">Tested Floor:</span> <span class="font-bold text-blue-400">{{ funnel.tested_floor or 0 }}</span></div>
+                    <div><span class="text-slate-400">Valid Rej:</span> <span class="font-bold text-amber-400">{{ funnel.valid_rejection or 0 }}</span></div>
+                    <div><span class="text-slate-400">Held Floor:</span> <span class="font-bold text-emerald-400">{{ funnel.held_support or 0 }}</span></div>
+                    <div><span class="text-slate-400">Trend OK:</span> <span class="font-bold text-cyan-400">{{ funnel.trend_confirmed or 0 }}</span></div>
+                    <div><span class="text-slate-400">Slope OK:</span> <span class="font-bold text-purple-400">{{ funnel.slope_confirmed or 0 }}</span></div>
+                    <div><span class="text-slate-400">All Confirmed:</span> <span class="font-bold text-emerald-300">{{ funnel.all_confirmed or 0 }}</span></div>
+                </div>
             </div>
+
+            <!-- Short Funnel -->
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <p class="text-xs text-slate-400">Tested Floor</p>
-                <p class="text-xl font-bold text-blue-400">{{ funnel.tested_floor }}</p>
-            </div>
-            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <p class="text-xs text-slate-400">Valid Rejection</p>
-                <p class="text-xl font-bold text-amber-400">{{ funnel.valid_rejection }}</p>
-            </div>
-            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <p class="text-xs text-slate-400">Held Support</p>
-                <p class="text-xl font-bold text-emerald-400">{{ funnel.held_support }}</p>
-            </div>
-            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <p class="text-xs text-slate-400">Volume OK</p>
-                <p class="text-xl font-bold text-purple-400">{{ funnel.volume_confirmed }}</p>
-            </div>
-            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <p class="text-xs text-slate-400">Trend OK</p>
-                <p class="text-xl font-bold text-cyan-400">{{ funnel.trend_confirmed }}</p>
-            </div>
-            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <p class="text-xs text-slate-400">All Confirmed</p>
-                <p class="text-xl font-bold text-rose-400">{{ funnel.all_confirmed }}</p>
+                <h3 class="text-sm font-semibold text-rose-400 mb-3">📉 Sell (Short) Funnel</h3>
+                <div class="grid grid-cols-3 gap-2 text-xs">
+                    <div><span class="text-slate-400">Tested Ceil:</span> <span class="font-bold text-blue-400">{{ funnel.sell_tested_ceiling or 0 }}</span></div>
+                    <div><span class="text-slate-400">Valid Rej:</span> <span class="font-bold text-amber-400">{{ funnel.sell_valid_rejection or 0 }}</span></div>
+                    <div><span class="text-slate-400">Held Ceil:</span> <span class="font-bold text-rose-400">{{ funnel.sell_held_resistance or 0 }}</span></div>
+                    <div><span class="text-slate-400">Trend OK:</span> <span class="font-bold text-cyan-400">{{ funnel.sell_trend_confirmed or 0 }}</span></div>
+                    <div><span class="text-slate-400">Slope OK:</span> <span class="font-bold text-purple-400">{{ funnel.sell_slope_confirmed or 0 }}</span></div>
+                    <div><span class="text-slate-400">All Confirmed:</span> <span class="font-bold text-rose-300">{{ funnel.sell_all_confirmed or 0 }}</span></div>
+                </div>
             </div>
         </div>
 
@@ -240,6 +257,9 @@ def index():
         "losses": 0,
         "win_rate": 0.0,
         "trade_active": False,
+        "trade_type": None,
+        "daily_losses": 0,
+        "max_daily_losses": 3,
         "entry_price": None,
         "stop_loss": None,
         "take_profit": None,
@@ -258,13 +278,9 @@ def index():
         except Exception:
             pass
 
-    # Prefer live funnel from status.json; fall back to scanning the candle log
     funnel = status.get("funnel") or {}
     rows = []
     total_rows = 0
-    trend_count = 0
-    vol_count = 0
-    rejection_count = 0
 
     if os.path.isfile(LOG_FILE_PATH):
         try:
@@ -273,23 +289,8 @@ def index():
                 for line in reader:
                     rows.append(line)
                     total_rows += 1
-                    if line.get("Trend_Confirmed") == "True":
-                        trend_count += 1
-                    if line.get("Vol_Confirmed") == "True":
-                        vol_count += 1
-                    if line.get("Valid_Rejection") == "True":
-                        rejection_count += 1
         except Exception as e:
             print(f"Error reading log: {e}")
-
-    # Fill missing funnel keys from log scan if needed
-    funnel.setdefault("candles_evaluated", total_rows)
-    funnel.setdefault("tested_floor", 0)
-    funnel.setdefault("valid_rejection", rejection_count)
-    funnel.setdefault("held_support", 0)
-    funnel.setdefault("volume_confirmed", vol_count)
-    funnel.setdefault("trend_confirmed", trend_count)
-    funnel.setdefault("all_confirmed", 0)
 
     recent_rows = list(reversed(rows))[:30]
 

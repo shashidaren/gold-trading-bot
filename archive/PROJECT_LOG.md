@@ -33,19 +33,25 @@ For a BUY signal to trigger, ALL of the following must be true:
 - **Blackouts (UTC)**: London Open (07:55-08:15), NY Open (12:25-12:45), NY Volatility (13:55-14:15).
 
 ## 📝 Changelog & Recent Fixes
+- **[2026-09-10]** Bidirectional Trading + Capital Protection Upgrade:
+  - **Added Short-Selling (SELL) Funnel**: Symmetric Bearish setup when `EMA50 < EMA200`, testing 20-bar ceiling, upper-wick rejection $\ge 38\%$, holding resistance, falling EMA50 slope, and close near EMA50.
+  - **Added Daily Loss Circuit Breaker (`MAX_DAILY_LOSSES = 3`)**: Automatically halts trading for the rest of the UTC day upon reaching 3 Stop Losses to prevent drawdown spirals during trend days / chop.
+  - **Added Escalating SL Cooldowns**: 30 min cooldown after 1 SL, escalating to 60 min after 2 consecutive SLs, and halting on 3 SLs.
+  - **Expanded High-Impact Blackout Windows**: London Open (07:55–09:00 UTC), NY Open & US Macro Data (13:25–15:15 UTC), and Daily Rollover Spread Spikes (21:45–22:30 UTC).
+  - **Updated Web Dashboard**: Dual Long/Short funnel telemetry, active trade direction badges, and real-time daily loss tracking.
+- **[2026-09-09]** Added regime gates from win-rate review: EMA50 slope lookback (30 candles) and max distance below EMA50 ($0.3 \times \text{ATR}$).
 - **[2026-09-04]** Removed restrictive `MIN_EMA_GAP` filter from `trade_filter.py`. It was blocking valid pullbacks because the EMA gap naturally shrinks during pullbacks.
 - **[2026-09-04]** Aligned ATR thresholds. `engine.py` `MIN_ATR` changed from 0.70 to 1.10 to match `trade_filter.py`.
 - **[2026-09-04]** Fixed funnel diagnostics in `engine.py`. Added `self.hit_... += 1` counters so `status.json` accurately tracks where signals drop off.
 - **[2026-09-04]** Updated `datetime.utcnow()` to `datetime.now(timezone.utc)` in `trade_filter.py` to prevent Python 3.12+ deprecation warnings.
 
-## 📊 Forward Test Observations (Sep 4, 2026)
-- **Initial Run**: Bot took 8 consecutive SLs. Root cause: Market was transitioning from uptrend to downtrend. EMAs lagged, so `trend_ok` was still True while price was dropping.
-- **Filter Success**: After the 8 SLs, the bot correctly stopped taking trades because `EMA50 < EMA200` (downtrend).
-- **Capital Protection**: Bot took 1 TP (+$6.12) and 1 SL (-$3.75). After the SL, `trade_filter.py` successfully blocked 7 subsequent valid setups for 30 minutes to prevent revenge trading.
-- **Funnel Stats (248 candles)**: 135 tested floor -> 67 valid rejection -> 10 all_confirmed. 4% hit rate is healthy for this strict strategy.
+## 📊 Forward Test Observations (Sep 4–10, 2026)
+- **Review Findings**: Without daily circuit breakers, bad days (Sept 8 grind-down and Sept 9 afternoon news dump) resulted in 20 Stop Losses across 2 days. The new daily cap and US macro blackout directly protect against these scenarios.
+- **Funnel Stats**: System now monitors both dynamic floor (Long) and dynamic ceiling (Short) with slope and proximity confirmation.
 
 ## 🚀 Future Tweaks / To-Do
-- [ ] Add Short-Selling logic for when `EMA50 < EMA200`.
-- [ ] Consider adding a "Max Trades Per Day" limit to `trade_filter.py`.
-- [ ] Implement escalating SL cooldown (e.g., 60 mins after 2 consecutive SLs).
-- [ ] Enable `REQUIRE_VOLUME_CONFIRM` and tune `VOLUME_SPIKE_MULTIPLIER`.
+- [x] Add Short-Selling logic for when `EMA50 < EMA200`.
+- [x] Add Daily Loss limit (`MAX_DAILY_LOSSES = 3`) to `trade_filter.py`.
+- [x] Implement escalating SL cooldown (30 min -> 60 min on consecutive SLs).
+- [ ] Multi-Timeframe (15m/1h) higher-timeframe trend integration.
+- [ ] Live spread filter check before order dispatch.
