@@ -41,14 +41,6 @@ RSI_MIN = 30.0
 RSI_MAX = 68.0
 MIN_ATR = 1.10
 
-# --- Regime gates (added in 2026-09-09 win-rate review - see docs/REVIEW-2026-09-09.md) ---
-# Validated with tools/validate_gates.py against all 37 historical trades:
-# keeps 7/7 wins, blocks 15/30 losses (P&L -52.68 -> -16.65).
-REQUIRE_EMA_SLOPE = True       # EMA50 must be rising (short-term trend direction)
-EMA_SLOPE_LOOKBACK = 30        # ...compared to N candles ago
-MAX_BELOW_EMA_ATR = 0.30       # entry close may sit at most 0.3*ATR below EMA50
-                               # (blocks "buys" while price is collapsing away from the mean)
-
 SYMBOL = "GOLD"
 LOT_SIZE = 0.01
 MAGIC_NUMBER = 987654
@@ -78,7 +70,6 @@ class GoldEngine:
         self.tr_list = deque(maxlen=ATR_PERIOD)
         self.rsi_gains = deque(maxlen=RSI_PERIOD)
         self.rsi_losses = deque(maxlen=RSI_PERIOD)
-        self.ema50_history = deque(maxlen=EMA_SLOW)   # for the EMA-slope regime gate
 
         self.prev_close = None
         self.rsi = None
@@ -124,8 +115,6 @@ class GoldEngine:
         self.hit_volume_confirmed = 0
         self.hit_trend_confirmed = 0
         self.hit_all = 0
-        self.hit_slope_confirmed = 0
-        self.hit_price_near_ema = 0
 
         if TRADING_MODE == "LIVE":
             if not mt5.initialize():
@@ -145,22 +134,7 @@ class GoldEngine:
         self.balance = 500.00
 
         if not os.path.isfile(TRADES_LOG_PATH):
-            prior_closed = 0
-            if os.path.isfile(STATUS_FILE_PATH):
-                try:
-                    with open(STATUS_FILE_PATH) as f:
-                        prior_closed = json.load(f).get("total_trades", 0) or 0
-                except Exception:
-                    pass
-            if prior_closed:
-                # This happened on 2026-09-04/07: trades.csv went missing on restart,
-                # balance silently reset to $500 and trade numbering restarted at #1,
-                # which corrupted the equity history. Warn loudly instead.
-                print(f"WARNING: trades.csv is MISSING but status.json shows {prior_closed} "
-                      f"closed trades - balance/numbering will RESET to $500/#1!")
-                print("         Restore trades.csv from backup before continuing the ledger.")
-            else:
-                print("No trades.csv found - starting fresh (balance $500)")
+            print("No trades.csv found - starting fresh (balance $500)")
             return
 
         try:
@@ -267,13 +241,6 @@ class GoldEngine:
                     self.highs.append(high)
                     self.closes.append(close)
                     self.volumes.append(volume)
-                    # Seed EMA50 history for the slope gate (skip warm-up placeholders)
-                    ema50_str = row.get("EMA_50")
-                    try:
-                        if ema50_str not in ("Calculating", "", None):
-                            self.ema50_history.append(float(ema50_str))
-                    except (TypeError, ValueError):
-                        pass
                     if self.prev_close is not None:
                         change = close - self.prev_close
                         self.rsi_gains.append(max(change, 0))
@@ -367,8 +334,6 @@ class GoldEngine:
                 "held_support": self.hit_held_support,
                 "volume_confirmed": self.hit_volume_confirmed,
                 "trend_confirmed": self.hit_trend_confirmed,
-                "slope_confirmed": self.hit_slope_confirmed,
-                "price_near_ema": self.hit_price_near_ema,
                 "all_confirmed": self.hit_all,
             },
         }
@@ -510,24 +475,8 @@ class GoldEngine:
         self.update_indicators(h, l, c)
         self.save_status()
 
-        # --- Regime gates (2026-09-09 review) ---
-        # slope: EMA50 must be rising vs EMA_SLOPE_LOOKBACK candles ago.
-        # ema50_history holds the EMA50 of every PREVIOUS candle (current one
-        # is appended below), so [-LOOKBACK] is exactly N candles ago.
-        slope_confirmed = False
-        if self.ema_fast is not None and len(self.ema50_history) >= EMA_SLOPE_LOOKBACK:
-            slope_confirmed = self.ema_fast > self.ema50_history[-EMA_SLOPE_LOOKBACK]
-        if self.ema_fast is not None:
-            self.ema50_history.append(self.ema_fast)
-
-        # price must not be collapsing away from EMA50 (max MAX_BELOW_EMA_ATR * ATR below)
-        price_near_ema = False
-        if self.ema_fast is not None and self.atr is not None:
-            price_near_ema = c >= (self.ema_fast - (self.atr * MAX_BELOW_EMA_ATR))
-
         vol_ok = volume_confirmed if REQUIRE_VOLUME_CONFIRM else True
         trend_ok = trend_confirmed if REQUIRE_TREND_CONFIRM else True
-        slope_ok = slope_confirmed if REQUIRE_EMA_SLOPE else True
         rsi_ok = (self.rsi is not None and RSI_MIN < self.rsi < RSI_MAX)
         atr_ok = (self.atr is not None and self.atr > MIN_ATR)
 
@@ -547,10 +496,6 @@ class GoldEngine:
                 self.hit_volume_confirmed += 1
             if trend_confirmed:
                 self.hit_trend_confirmed += 1
-            if slope_ok:
-                self.hit_slope_confirmed += 1
-            if price_near_ema:
-                self.hit_price_near_ema += 1
 
         if (
             dynamic_floor is not None
@@ -561,8 +506,6 @@ class GoldEngine:
             and held_support
             and vol_ok
             and trend_ok
-            and slope_ok
-            and price_near_ema
             and rsi_ok
             and atr_ok
             and not in_trade

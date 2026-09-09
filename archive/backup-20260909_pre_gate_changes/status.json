@@ -1,0 +1,33 @@
+{
+  "equity": 463.27,
+  "total_trades": 37,
+  "next_trade_num": 38,
+  "wins": 7,
+  "losses": 30,
+  "win_rate": 18.9,
+  "trade_active": false,
+  "last_update": "2026-09-09 14:06:02",
+  "rsi": 50.5,
+  "ema_fast": 4417.39,
+  "ema_slow": 4408.61,
+  "atr": 2.31,
+  "entry_price": null,
+  "stop_loss": null,
+  "take_profit": null,
+  "entry_time": null,
+  "current_trade_num": null,
+  "entry_rsi": null,
+  "entry_atr": null,
+  "entry_wick_ratio": null,
+  "entry_ema_fast": null,
+  "entry_ema_slow": null,
+  "funnel": {
+    "candles_evaluated": 908,
+    "tested_floor": 783,
+    "valid_rejection": 252,
+    "held_support": 836,
+    "volume_confirmed": 785,
+    "trend_confirmed": 627,
+    "all_confirmed": 37
+  }
+}
