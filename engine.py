@@ -64,6 +64,10 @@ MAGIC_NUMBER = 987654
 
 LOG_FILE_PATH = "/opt/gold/forward_test_log.csv"
 STATUS_FILE_PATH = "/opt/gold/status.json"
+# DATA_SOURCE=MT5: the Wine sidecar (tools/mt5_feed.py) publishes the latest
+# closed M1 candle here; the engine reads this file instead of importing
+# MetaTrader5 (no Linux wheels exist for that package).
+MT5_FEED_FILE = os.getenv("MT5_FEED_FILE", "/opt/gold/mt5_last_candle.json")
 TRADES_LOG_PATH = "/opt/gold/trades.csv"
 
 # Canonical trades.csv schema (what log_trade() writes). Trade_Type was added
@@ -166,8 +170,7 @@ def latest_closed_candle_ts(rates):
     return int(rates[0]["time"])
 
 
-NEED_MT5 = (TRADING_MODE == "LIVE") or (TRADING_MODE == "FORWARD_TEST" and DATA_SOURCE == "MT5")
-if NEED_MT5:
+if TRADING_MODE == "LIVE":
     import MetaTrader5 as mt5
 else:
     from twelvedata import TDClient
@@ -253,14 +256,15 @@ class GoldEngine:
             print(f"Connected to MT5 | Account: {account.login} | Balance: {account.balance} {account.currency}")
             mt5.symbol_select(SYMBOL, True)
         elif DATA_SOURCE == "MT5":
-            # Simulated trading, but real broker data from the local Wine MT5
-            # terminal (no Twelve Data plan / WS-trial limits).
-            if not mt5.initialize():
-                print(f"MT5 Initialize failed (is the Wine terminal running and logged in?): {mt5.last_error()}")
-                sys.exit(1)
-            account = mt5.account_info()
-            print(f"Connected to MT5 (data feed, simulated trading) | Account: {account.login} | Symbol: {SYMBOL}")
-            mt5.symbol_select(SYMBOL, True)
+            # Simulated trading, but real broker data: the Wine sidecar
+            # (tools/mt5_feed.py, same pattern as the mt5-balance alias)
+            # publishes closed M1 candles to MT5_FEED_FILE.
+            if os.path.isfile(MT5_FEED_FILE):
+                print(f"MT5 feed file found: {MT5_FEED_FILE}")
+            else:
+                print(f"NOTE: {MT5_FEED_FILE} not found yet - is the mt5feed sidecar running? "
+                      f"(WINEPREFIX=~/.mt5 xvfb-run wine C:/Python312/python.exe "
+                      f"Z:/opt/gold/tools/mt5_feed.py)")
             self.load_history_from_csv()
             self.save_status()
         else:
@@ -1042,6 +1046,24 @@ class GoldEngine:
                 print(f"\nError: {e}")
                 time.sleep(10)
 
+    def read_mt5_feed(self):
+        """Read the latest closed M1 candle published by tools/mt5_feed.py
+        (Wine sidecar), normalized to the mt5 rate-dict shape, or None if the
+        file is missing/unreadable."""
+        try:
+            with open(MT5_FEED_FILE) as f:
+                d = json.load(f)
+            return [{
+                "time": int(d["ts"]),
+                "open": float(d["open"]),
+                "high": float(d["high"]),
+                "low": float(d["low"]),
+                "close": float(d["close"]),
+                "tick_volume": int(d["tick_volume"]),
+            }]
+        except Exception:
+            return None
+
     def mt5_next_candle(self, rates, last_ts):
         """Return (ts, o, h, l, c, tick_volume) if `rates` holds a closed M1
         candle newer than last_ts, else None. Dedup guard: a restart must
@@ -1054,12 +1076,12 @@ class GoldEngine:
                 float(r["close"]), int(r["tick_volume"]))
 
     def run_mt5_test(self):
-        """Forward test fed by the local MT5 terminal's closed M1 candles.
+        """Forward test fed by the Wine MT5 sidecar's closed M1 candles.
 
         Same strategy/risk code as run_forward_test(), but the data source is
-        the broker feed via the Wine MT5 terminal instead of the Twelve Data
-        WebSocket (immune to Twelve Data plan / WS-trial limits). One candle
-        row per closed minute, deduplicated by candle timestamp.
+        the broker feed (tools/mt5_feed.py publishes MT5_FEED_FILE, immune to
+        Twelve Data plan / WS-trial limits). One candle row per closed minute,
+        deduplicated by candle timestamp.
         """
         print("Gold Engine FORWARD TEST (MT5 feed) starting...")
         last_ts = 0
@@ -1076,11 +1098,7 @@ class GoldEngine:
                 last_ts = 0
         try:
             while True:
-                try:
-                    rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_M1, 1, 1)
-                except Exception as e:
-                    rates = None
-                    print(f"\nError (MT5 feed): {e}", flush=True)
+                rates = self.read_mt5_feed()
 
                 if rates is not None and len(rates) > 0:
                     candle = self.mt5_next_candle(rates, last_ts)
@@ -1099,28 +1117,23 @@ class GoldEngine:
                               f"{datetime.fromtimestamp(ts, tz=timezone.utc):%Y-%m-%d %H:%M} UTC "
                               f"| close {c:.2f}", flush=True)
                 else:
-                    print("MT5: no closed M1 candle - retrying in 5s "
-                          "(terminal running & logged in? symbol name?)", flush=True)
+                    print(f"MT5: no feed in {MT5_FEED_FILE} - retrying in 5s "
+                          "(is the mt5feed sidecar running? terminal logged in?)", flush=True)
                     time.sleep(5)
                     continue
 
-                # Stale-feed guard (same as run_forward_test): broker feed went
-                # quiet (terminal crashed / logged out / link lost) -> alert and
-                # retry the MT5 link.
+                # Stale-feed guard (same as run_forward_test): feed went quiet
+                # (sidecar crashed / terminal logged out) -> alert. The sidecar
+                # is a separate service: systemctl restart mt5feed.
                 stale = self.feed_stale_seconds()
                 if stale > STALE_FEED_SECONDS:
                     print(f"\nStale MT5 feed: no closed candles for {stale:.0f}s - "
-                          f"re-initializing MT5 link", flush=True)
+                          f"check the mt5feed sidecar (systemctl restart mt5feed)", flush=True)
                     if not is_market_quiet():
                         self.maybe_alert_stale_feed(stale)
-                    try:
-                        mt5.initialize()
-                    except Exception:
-                        pass
                 time.sleep(5)
         except KeyboardInterrupt:
             print("\nShutting down...")
-            mt5.shutdown()
 
     def run_forward_test(self):
         print("Gold Engine FORWARD TEST starting...")
