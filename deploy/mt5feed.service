@@ -21,6 +21,7 @@ After=network.target
 [Service]
 User=root
 Environment=WINEPREFIX=/root/.mt5
+Environment=WINEDEBUG=-all
 ExecStart=/usr/bin/xvfb-run --auto-servernum /usr/bin/wine C:\\Python312\\python.exe Z:\\opt\\gold\\tools\\mt5_feed.py
 WorkingDirectory=/root
 Restart=always

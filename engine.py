@@ -228,6 +228,7 @@ class GoldEngine:
         # Stale-feed guard state (see run_forward_test)
         self._last_price_mono = None
         self._last_stale_alert_mono = None
+        self._mt5_last_candle_ts = None
 
         # Buy Funnel Counters
         self.hit_tested_floor = 0
@@ -628,6 +629,43 @@ class GoldEngine:
                 "EMA50_At_Entry": f"{self.entry_ema_fast:.2f}" if self.entry_ema_fast is not None else "",
                 "EMA200_At_Entry": f"{self.entry_ema_slow:.2f}" if self.entry_ema_slow is not None else "",
             })
+
+    def resolve_open_trade_on_candle(self, o: float, h: float, l: float, c: float):
+        """Forward-test exit resolution for candle-driven data sources
+        (MT5 sidecar): there are no tick events, so an open simulated
+        position must be checked against the candle range BEFORE evaluating
+        new entries. Pessimistic intra-candle assumption: if both SL and TP
+        fall inside the range, the SL is assumed to have been hit first.
+        """
+        if not self.trade_active:
+            return
+
+        if self.trade_type == "BUY":
+            sl_hit, tp_hit = l <= self.stop_loss, h >= self.take_profit
+            exit_price, reason = (self.stop_loss, "SL") if sl_hit else (self.take_profit, "TP")
+        else:  # SELL
+            sl_hit, tp_hit = h >= self.stop_loss, l <= self.take_profit
+            exit_price, reason = (self.stop_loss, "SL") if sl_hit else (self.take_profit, "TP")
+
+        if not (sl_hit or tp_hit):
+            return
+        profit = (exit_price - self.entry_price if self.trade_type == "BUY"
+                  else self.entry_price - exit_price)
+        if reason == "SL":
+            self.balance += profit  # profit is negative here
+            self.losses += 1
+        else:
+            self.balance += profit
+            self.wins += 1
+        self.trade_active = False
+        self.log_trade(exit_price=exit_price, exit_reason=reason, profit=profit)
+        sign = "+" if profit >= 0 else "-"
+        self.send_telegram(
+            f"{reason} HIT ({self.trade_type} #{self.current_trade_num}, candle range)\n"
+            f"Exit: `${exit_price:.2f}` ({sign}${abs(profit):.2f})\n"
+            f"Equity: `${self.balance:.2f}`"
+        )
+        self.save_status()
 
     def evaluate_candle(self, o, h, l, c, tick_count):
         candle_range = h - l
@@ -1107,8 +1145,13 @@ class GoldEngine:
                         continue
                     ts, o, h, l, c, vol = candle
                     last_ts = ts
+                    self._mt5_last_candle_ts = ts
                     self._last_price_mono = time.monotonic()
                     try:
+                        # Candle-driven feed: no tick events, so SL/TP for an
+                        # open simulated position must be resolved against the
+                        # candle range before new entries are evaluated.
+                        self.resolve_open_trade_on_candle(o, h, l, c)
                         self.evaluate_candle(o, h, l, c, vol)
                     except Exception as e:
                         print(f"\nError evaluating candle @ {ts}: {e}", flush=True)
