@@ -71,3 +71,5 @@ Timestamp,Reason,Price,ATR
 2026-09-09 23:27:00,Daily Loss Limit Reached (11/3 SLs today) - Trading Halted,4397.34,1.45
 2026-09-09 23:31:05,Daily Loss Limit Reached (11/3 SLs today) - Trading Halted,4396.96,1.58
 2026-09-09 23:44:01,Daily Loss Limit Reached (11/3 SLs today) - Trading Halted,4393.67,1.10
+2026-09-10 06:29:04,SL Cooldown: 44 min remaining (10 consecutive SLs -> 60m cooldown),4416.76,2.37
+2026-09-10 06:30:05,SL Cooldown: 43 min remaining (10 consecutive SLs -> 60m cooldown),4417.34,2.38
