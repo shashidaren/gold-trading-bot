@@ -26,7 +26,10 @@ changelog.
 python3 tools/check_data.py       # 1. integrity gate — run FIRST, trust nothing before it passes
 python3 tools/validate_gates.py   # 2. replay entry gates against all historical trades
 python3 tools/phantom_trades.py   # 3. what did the blocked (skipped) signals actually do?
-python3 tools/smoke_test.py       # 4. engine regression tests (gates, SELL, drift auto-fix)
+python3 tools/pathwalk_sims.py    # 4. sequence-aware exit-rule replay (honest exit test)
+python3 tools/analyze_losers.py   # 5. winner/loser features + entry-filter experiments
+python3 tools/exit_sims.py        # 6. quick MFE exit scan (overstates — confirm via 4)
+python3 tools/smoke_test.py       # 7. engine regression tests (gates, SELL, drift auto-fix)
 ```
 
 All tools are read-only except the engine's own self-healing migration.

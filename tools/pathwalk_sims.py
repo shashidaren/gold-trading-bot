@@ -11,6 +11,11 @@ Clock skew note: bar feed can lag trades.csv by ~1 min, so the walk
 starts from the entry bar and runs to actual exit + 2 min. Entry bar
 itself is skipped (its range contains the entry print).
 
+BE-era note (ratchet live 2026-09-10 ~12:34 UTC): BE rows log the RATCHETED
+stop (Stop_Loss == Entry_Price), so the original 2xATR risk geometry is
+reconstructed from ATR_At_Entry and 1R of money is estimated as 2xATR.
+Trades with no bar path fall back to their ACTUAL outcome (incl. BE).
+
 Read-only: prints a table, writes nothing.
 """
 import csv
@@ -20,13 +25,22 @@ def load():
     T = []
     with open("trades.csv", newline="") as f:
         for r in csv.DictReader(f):
+            side = r["Trade_Type"]
+            entry = float(r["Entry_Price"])
+            reason = r["Exit_Reason"]
+            atr = float(r["ATR_At_Entry"])
+            sl, tp = float(r["Stop_Loss"]), float(r["Take_Profit"])
+            if reason == "BE":
+                if side == "BUY":
+                    sl, tp = entry - 2 * atr, entry + 3 * atr
+                else:
+                    sl, tp = entry + 2 * atr, entry - 3 * atr
             T.append(dict(
-                type=r["Trade_Type"],
+                type=side,
                 et=datetime.strptime(r["Entry_Time"], "%Y-%m-%d %H:%M:%S"),
                 xt=datetime.strptime(r["Exit_Time"], "%Y-%m-%d %H:%M:%S"),
-                entry=float(r["Entry_Price"]), sl=float(r["Stop_Loss"]),
-                tp=float(r["Take_Profit"]),
-                profit=float(r["Profit"]), reason=r["Exit_Reason"]))
+                entry=entry, sl=sl, tp=tp,
+                profit=float(r["Profit"]), reason=reason, atr=atr))
     bars = []
     with open("forward_test_log.csv", newline="") as f:
         for r in csv.DictReader(f):
@@ -42,7 +56,12 @@ def load():
 T, bars = load()
 for t in T:
     t["risk"] = abs(t["entry"] - t["sl"])
-    t["oneR_money"] = abs(t["profit"]) if t["reason"] == "SL" else abs(t["profit"]) / 1.5
+    if t["reason"] == "SL":
+        t["oneR_money"] = abs(t["profit"])
+    elif t["reason"] == "TP":
+        t["oneR_money"] = abs(t["profit"]) / 1.5
+    else:  # BE scratch: no realized R; original risk was 2xATR ($1/unit)
+        t["oneR_money"] = 2 * t["atr"]
     t["path"] = [b for b in bars
                  if t["et"] + timedelta(minutes=1) <= b[0] <= t["xt"] + timedelta(minutes=2)]
 
@@ -87,6 +106,8 @@ def walk(t, tp_R, be_trigger=None, partial_R=None):
     # neither hit within window: fall back to actual outcome
     if t["reason"] == "TP":
         return ("W", (half_banked or 0) / 2 + tp_R * (0.5 if half_banked else 1.0) if tp_R <= 1.5 else 1.5 * 0.97)
+    if t["reason"] == "BE":
+        return ("BE", 0.0)
     return ("L", -1.0)
 
 n = len(T)
@@ -100,6 +121,7 @@ def run(name, **kw):
             nobars += 1
             pnl += t["profit"]
             if t["reason"] == "TP": W += 1
+            elif t["reason"] == "BE": BE += 1
             else: L += 1
             continue
         out, r_mult = walk(t, **kw)
@@ -107,8 +129,8 @@ def run(name, **kw):
         if out == "W": W += 1
         elif out in ("BE", "P"): BE += 1
         else: L += 1
-    tot = n - nobars
-    print(f"{name:50s} {W:3d} {L:3d} {BE:4d} {(W/(W+L+BE) if W+L+BE else 0)*100:5.1f}% {nobars:6d} {pnl:9.2f}")
+    tot = W + L + BE
+    print(f"{name:50s} {W:3d} {L:3d} {BE:4d} {(W / tot if tot else 0) * 100:5.1f}% {nobars:6d} {pnl:9.2f}")
 
 print("--- pure TP levels ---")
 run("TP 0.33R", tp_R=0.33)
@@ -128,4 +150,6 @@ run("BE +0.25R, TP 1.0R", tp_R=1.0, be_trigger=0.25)
 run("BE +0.25R, TP 0.75R", tp_R=0.75, be_trigger=0.25)
 
 w = sum(1 for t in T if t["reason"] == "TP")
-print(f"\nActual baseline: {w}W/{n-w}L = {w/n*100:.1f}%, P/L {sum(t['profit'] for t in T):+.2f}")
+b = sum(1 for t in T if t["reason"] == "BE")
+print(f"\nActual baseline: {w}W/{n - w - b}L/{b}BE = {w / (n - b) * 100:.1f}% decisive, "
+      f"P/L {sum(t['profit'] for t in T):+.2f}")
