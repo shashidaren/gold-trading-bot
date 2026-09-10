@@ -16,6 +16,8 @@ Scenarios:
      restore correct risk-gate counting for SELL trades
   G) stale-feed guard (2026-09-10 silent WebSocket stall) -> MUST detect a quiet
      feed, classify market-quiet hours, and rate-limit Telegram alerts
+  H) MT5 feed candle selection (DATA_SOURCE=MT5) -> MUST evaluate each closed
+     M1 candle exactly once (no re-log after restart) and default to TWELVEDATA
 
 Usage: python3 tools/smoke_test.py
 """
@@ -287,6 +289,32 @@ first = eng_g.maybe_alert_stale_feed(stale)
 second = eng_g.maybe_alert_stale_feed(stale)
 check("G: stale alert fires once, then rate-limited", first is True and second is False)
 shutil.rmtree(tmp_g, ignore_errors=True)
+
+
+# --- Scenario H ---
+print("\nScenario H: MT5 feed candle selection (DATA_SOURCE=MT5)")
+tmp_h = tempfile.mkdtemp(prefix="gold_smoke_h_")
+engine.LOG_FILE_PATH = os.path.join(tmp_h, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_h, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_h, "trades.csv")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_h, "skipped_trades.csv")
+
+check("H: default data source stays TWELVEDATA", engine.DATA_SOURCE == "TWELVEDATA",
+      f"DATA_SOURCE={engine.DATA_SOURCE}")
+check("H: no rates -> None", engine.latest_closed_candle_ts(None) is None)
+check("H: empty rates -> None", engine.latest_closed_candle_ts([]) is None)
+
+eng_h = engine.GoldEngine()
+r1 = [{"time": 2000, "open": 4400.0, "high": 4401.0, "low": 4399.0, "close": 4400.5, "tick_volume": 12}]
+check("H: first closed candle accepted",
+      (lambda c: c is not None and c[0] == 2000 and c[1] == 4400.0 and c[5] == 12)(eng_h.mt5_next_candle(r1, 0)))
+check("H: same candle NOT re-evaluated (restart dedup)", eng_h.mt5_next_candle(r1, 2000) is None)
+check("H: older candle rejected", eng_h.mt5_next_candle([{"time": 1940, "open": 1, "high": 1, "low": 1, "close": 1, "tick_volume": 1}], 2000) is None)
+r2 = [{"time": 2060, "open": 4400.5, "high": 4402.0, "low": 4400.0, "close": 4401.5, "tick_volume": 34}]
+c2 = eng_h.mt5_next_candle(r2, 2000)
+check("H: next minute's candle accepted", c2 is not None and c2[0] == 2060 and c2[5] == 34)
+shutil.rmtree(tmp_h, ignore_errors=True)
 
 print()
 if FAILURES:
