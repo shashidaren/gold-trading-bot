@@ -8,9 +8,11 @@ from it (see docs/REVIEW-2026-09-09.md and REVIEW-2026-09-10.md).
 
 Checks:
   trades.csv        header/schema (16-field, Trade_Type column), row widths,
-                    Trade_Type/Exit_Reason domains, numbering, time order,
-                    Balance_After ledger continuity, true P&L from $500
-  forward_test_log  header, timestamp ordering, gaps > 5 min
+                    Trade_Type/Exit_Reason domains (TP/SL/BE), numbering,
+                    time order, Balance_After ledger continuity,
+                    true P&L from $500
+  forward_test_log  header, timestamp ordering, gaps > 5 min,
+                    same-minute multi-rows (INFO)
   skipped_trades    header/row width
   cross-file        every trade entry exists in the price log (+-2 min),
                     no open trade spans a price-log gap,
@@ -25,6 +27,7 @@ import csv
 import json
 import os
 import sys
+from collections import Counter
 from datetime import datetime
 
 ROOT = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -58,6 +61,10 @@ def warn(msg):
 
 def ok(msg):
     print(f"  [ ok ] {msg}")
+
+
+def info(msg):
+    print(f"  [info] {msg}")
 
 
 def parse_dt(s):
@@ -108,13 +115,13 @@ def check_trades():
         nums.append(d["num"])
         if d["Trade_Type"] not in ("BUY", "SELL"):
             bad_side += 1
-        if d["Exit_Reason"] not in ("TP", "SL"):
+        if d["Exit_Reason"] not in ("TP", "SL", "BE"):
             bad_reason += 1
         if not d["entry_dt"] or not d["exit_dt"] or d["entry_dt"] >= d["exit_dt"]:
             bad_time += 1
         trades.append(d)
     if bad_reason:
-        fail(f"{bad_reason} rows with unparsable numbers or Exit_Reason not in TP/SL")
+        fail(f"{bad_reason} rows with unparsable numbers or Exit_Reason not in TP/SL/BE")
     else:
         ok("Exit_Reason domain + numeric fields all parse")
     if bad_side:
@@ -142,11 +149,22 @@ def check_trades():
 
     true_pnl = sum(t["profit"] for t in trades)
     wins = sum(1 for t in trades if t["Exit_Reason"] == "TP")
-    losses = len(trades) - wins
+    losses = sum(1 for t in trades if t["Exit_Reason"] == "SL")
+    bes = sum(1 for t in trades if t["Exit_Reason"] == "BE")
+    dec = wins + losses
+    dec_wr = f"{wins / dec * 100:.1f}% decisive" if dec else "n/a"
     drift = trades[-1]["bal"] - (500 + true_pnl) if trades else 0
-    print(f"  [info] {wins}W/{losses}L over {len(trades)} trades | true P&L from $500: "
-          f"{true_pnl:+.2f} -> ${500 + true_pnl:.2f} | engine ledger: ${trades[-1]['bal']:.2f} "
-          f"(drift {drift:+.2f})")
+    print(f"  [info] {wins}W/{losses}L/{bes}BE over {len(trades)} trades ({dec_wr}) | "
+          f"true P&L from $500: {true_pnl:+.2f} -> ${500 + true_pnl:.2f} | "
+          f"engine ledger: ${trades[-1]['bal']:.2f} (drift {drift:+.2f})")
+    # BE scratches must exit at ~entry: a non-zero BE profit means the
+    # ratcheted stop was mis-logged (or the exit slipped a full level).
+    be_dust = [t for t in trades
+               if t["Exit_Reason"] == "BE" and abs(t["profit"]) > 0.02]
+    if be_dust:
+        warn(f"{len(be_dust)} BE rows with non-zero profit "
+             f"(e.g. #{be_dust[0]['num']}: {be_dust[0]['profit']:+.2f}) - "
+             f"scratches should exit at ~entry")
     if abs(drift) > 0.02:
         warn("engine ledger disagrees with sum of profits (documented reset gap)")
     return trades
@@ -191,6 +209,19 @@ def check_log():
              + (" ..." if len(gaps) > 8 else ""))
     else:
         ok("no gaps > 5 min")
+    # Same-minute multi-rows (REVIEW-2026-09-10-part2 to-do): restart
+    # re-evaluations and seconds-apart dupes append extra rows that mildly
+    # pollute the indicator deques. INFO only - harmless unless a trade
+    # entry/exit falls inside one (see cross-file entry matching).
+    minutes = Counter(d.strftime("%Y-%m-%d %H:%M") for d in dts)
+    dup_minutes = {m: c for m, c in minutes.items() if c > 1}
+    if dup_minutes:
+        worst = sorted(dup_minutes.items(), key=lambda kv: -kv[1])[:6]
+        extra = sum(dup_minutes.values()) - len(dup_minutes)
+        info(f"{len(dup_minutes)} minutes with >1 row ({extra} extra rows; e.g. "
+             + ", ".join(f"{m[5:]}x{c}" for m, c in worst) + ")")
+    else:
+        ok("no same-minute multi-rows")
     return dts
 
 
@@ -244,6 +275,9 @@ def check_cross(trades, log_dts):
             w = sum(1 for t in trades if t["Exit_Reason"] == "TP")
             if st.get("wins") not in (None, w):
                 mism.append(f"wins {st.get('wins')} != {w}")
+            b = sum(1 for t in trades if t["Exit_Reason"] == "BE")
+            if st.get("be_exits") not in (None, b):
+                mism.append(f"be_exits {st.get('be_exits')} != {b}")
             if st.get("equity") not in (None, trades[-1]["bal"]):
                 mism.append(f"equity {st.get('equity')} != ledger {trades[-1]['bal']}")
         if mism:

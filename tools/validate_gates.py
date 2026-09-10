@@ -25,6 +25,10 @@ as of the 2026-09-09 review - see docs/REVIEW-2026-09-09.md):
 Handles both the pre-SELL 15-field rows (all buys) and the current 16-field
 schema with Trade_Type (auto-detected, so it works even on a drifted file).
 
+BE scratches (exit reason BE, live since the 2026-09-10 BE ratchet) are
+reported separately - they are neutral, neither wins nor losses, and win
+rates below are over decisive (TP/SL) trades only.
+
 Usage: python3 tools/validate_gates.py [log.csv trades.csv]
 Read-only - no files are modified.
 """
@@ -94,6 +98,7 @@ def load_trades():
                 out.append({
                     "dt": datetime.strptime(entry_t, "%Y-%m-%d %H:%M:%S"),
                     "side": side,
+                    "reason": reason.strip().upper(),
                     "win": reason.strip().upper() == "TP",
                     "pnl": float(pnl),
                     "num": num,
@@ -171,23 +176,26 @@ def main():
     names = ["SLOPE30", "ABV50s", "NOH8", "RISE120", "ABOVE50", "PROX0.5", "PROX1.0", "OLD0.2%"]
     print(f"{'trade':<13} {'res':<4} {'pnl':>6}  " + "  ".join(f"{n:>8}" for n in names))
     for t, g in report:
-        mark = "WIN" if t["win"] else "loss"
+        mark = "WIN" if t["reason"] == "TP" else ("BE" if t["reason"] == "BE" else "loss")
         cells = "  ".join(f"{'PASS' if g[n] else 'BLOCK':>8}" for n in names)
         print(f"#{t['num']:>3} {t['side']:<4}{t['dt'].strftime('%m-%d %H:%M'):<10} {mark:<4} {t['pnl']:>+6.2f}  {cells}")
 
     def summ(name, fn):
         kept = [(t, g) for t, g in report if fn(t, g)]
-        w = sum(1 for t, g in kept if t["win"])
-        l = len(kept) - w
+        w = sum(1 for t, g in kept if t["reason"] == "TP")
+        b = sum(1 for t, g in kept if t["reason"] == "BE")
+        l = len(kept) - w - b
         pnl = sum(t["pnl"] for t, g in kept)
-        wr = w / len(kept) * 100 if kept else 0
+        dec = w + l
+        wr = w / dec * 100 if dec else 0
         k8 = [(t, g) for t, g in kept if t["dt"] >= datetime(2026, 9, 8)]
-        w8 = sum(1 for t, g in k8 if t["win"])
+        w8 = sum(1 for t, g in k8 if t["reason"] == "TP")
+        b8 = sum(1 for t, g in k8 if t["reason"] == "BE")
         p8 = sum(t["pnl"] for t, g in k8)
-        print(f"  {name:<28} all: {len(kept):>2} kept {w}W/{l}L ({wr:3.0f}%) {pnl:+8.2f}   "
-              f"9/8+: {len(k8)} kept {w8}W/{len(k8)-w8}L {p8:+7.2f}")
+        print(f"  {name:<28} all: {len(kept):>2} kept {w}W/{l}L/{b}BE ({wr:3.0f}% dec) {pnl:+8.2f}   "
+              f"9/8+: {len(k8)} kept {w8}W/{len(k8)-w8-b8}L/{b8}BE {p8:+7.2f}")
 
-    print("\n=== SINGLE GATES ===")
+    print("\n=== SINGLE GATES (WR over decisive trades; BE = neutral scratch) ===")
     for n in names:
         summ(n, lambda t, g, n=n: g[n])
 
@@ -201,8 +209,9 @@ def main():
 
     sells = [(t, g) for t, g in report if t["side"] == "SELL"]
     if sells:
-        w = sum(1 for t, g in sells if t["win"])
-        print(f"\n=== SELL trades: {len(sells)} ({w}W/{len(sells)-w}L, "
+        w = sum(1 for t, g in sells if t["reason"] == "TP")
+        b = sum(1 for t, g in sells if t["reason"] == "BE")
+        print(f"\n=== SELL trades: {len(sells)} ({w}W/{len(sells)-w-b}L/{b}BE, "
               f"{sum(t['pnl'] for t, g in sells):+.2f}) - n too small to validate gates ===")
 
 

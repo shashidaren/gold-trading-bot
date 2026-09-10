@@ -8,11 +8,18 @@ forward_test_log.csv (±2 min clock-skew tolerant window) and asks:
 
 Read-only. Prints a comparison table.
 
+BE-era note (ratchet live 2026-09-10 ~12:34 UTC): BE rows log the RATCHETED
+stop (Stop_Loss == Entry_Price), so the original 2xATR risk geometry is
+reconstructed from ATR_At_Entry and 1R of money is estimated as 2xATR.
+
 Caveats:
 - Bar timestamps can skew ~1 min vs trades.csv (different feeds), so
   TP/SL ordering inside a trade is approximate; sims credit the exit
   level when the move is unambiguous.
 - Winners are capped at 97% of nominal R to reflect spread/slippage.
+- MFE-based (not sequence-aware): overstates what tighter TPs capture
+  when the run-up happens after deep drawdown. tools/pathwalk_sims.py
+  is the honest sequence-aware test; use this file for quick scans only.
 """
 import csv
 from datetime import datetime, timedelta
@@ -21,13 +28,22 @@ def load():
     T = []
     with open("trades.csv", newline="") as f:
         for r in csv.DictReader(f):
+            side = r["Trade_Type"]
+            entry = float(r["Entry_Price"])
+            reason = r["Exit_Reason"]
+            atr = float(r["ATR_At_Entry"])
+            sl, tp = float(r["Stop_Loss"]), float(r["Take_Profit"])
+            if reason == "BE":
+                if side == "BUY":
+                    sl, tp = entry - 2 * atr, entry + 3 * atr
+                else:
+                    sl, tp = entry + 2 * atr, entry - 3 * atr
             T.append(dict(
-                type=r["Trade_Type"],
+                type=side,
                 et=datetime.strptime(r["Entry_Time"], "%Y-%m-%d %H:%M:%S"),
                 xt=datetime.strptime(r["Exit_Time"], "%Y-%m-%d %H:%M:%S"),
-                entry=float(r["Entry_Price"]), sl=float(r["Stop_Loss"]),
-                tp=float(r["Take_Profit"]),
-                profit=float(r["Profit"]), reason=r["Exit_Reason"]))
+                entry=entry, sl=sl, tp=tp,
+                profit=float(r["Profit"]), reason=reason, atr=atr))
     bars = []
     with open("forward_test_log.csv", newline="") as f:
         for r in csv.DictReader(f):
@@ -44,7 +60,12 @@ T, bars = load()
 
 for t in T:
     t["risk"] = abs(t["entry"] - t["sl"])
-    t["oneR_money"] = abs(t["profit"]) if t["reason"] == "SL" else abs(t["profit"]) / 1.5
+    if t["reason"] == "SL":
+        t["oneR_money"] = abs(t["profit"])
+    elif t["reason"] == "TP":
+        t["oneR_money"] = abs(t["profit"]) / 1.5
+    else:  # BE scratch: no realized R; original risk was 2xATR ($1/unit)
+        t["oneR_money"] = 2 * t["atr"]
     lo, hi = t["et"] - timedelta(minutes=2), t["xt"] + timedelta(minutes=2)
     path = [b for b in bars if lo <= b[0] <= hi]
     if path:
@@ -127,5 +148,6 @@ for t in T:
 report("COMBO: 50% at +0.5R, BE runner, early-cut -0.8R", res)
 
 w = sum(1 for t in T if t["reason"] == "TP")
-print(f"\nActual baseline: {w}W/{n - w}L = {w / n * 100:.1f}% win, "
+b = sum(1 for t in T if t["reason"] == "BE")
+print(f"\nActual baseline: {w}W/{n - w - b}L/{b}BE = {w / (n - b) * 100:.1f}% decisive, "
       f"P/L {sum(t['profit'] for t in T):+.2f}")

@@ -35,7 +35,7 @@ HTML_TEMPLATE = """
                     <span class="text-xl font-bold {{ 'text-rose-400' if (status.daily_losses or 0) >= (status.max_daily_losses or 3) else 'text-slate-200' }}">
                         {{ status.daily_losses or 0 }} / {{ status.max_daily_losses or 3 }}
                         {% if (status.daily_losses or 0) >= (status.max_daily_losses or 3) %}
-                        <span class="text-xs bg-rose-900/60 text-rose-300 px-2 py-0.5 rounded ml-1 font-semibold">HALTED</span>
+                        <span class="text-xs bg-amber-900/60 text-amber-300 px-2 py-0.5 rounded ml-1 font-semibold">TREND-ONLY</span>
                         {% endif %}
                     </span>
                 </div>
@@ -49,7 +49,7 @@ HTML_TEMPLATE = """
         </header>
 
         <!-- Main Stats -->
-        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-4 mb-6">
+        <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4 mb-6">
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
                 <p class="text-xs text-slate-400">Closed Trades</p>
                 <p class="text-2xl font-bold text-amber-400">{{ status.total_trades }}</p>
@@ -61,6 +61,10 @@ HTML_TEMPLATE = """
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
                 <p class="text-xs text-slate-400">Losses</p>
                 <p class="text-2xl font-bold text-rose-400">{{ status.losses }}</p>
+            </div>
+            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                <p class="text-xs text-slate-400">BE Scratches</p>
+                <p class="text-2xl font-bold text-slate-300">{{ status.be_exits or 0 }}</p>
             </div>
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
                 <p class="text-xs text-slate-400">Win Rate</p>
