@@ -53,6 +53,15 @@ def load_recent_trades(n=LOOKBACK) -> list:
         with open(TRADES_LOG, newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
+                # Schema-drift tripwire (2026-09-10 incident): if a row was
+                # written with a Trade_Type column but the header lacks it,
+                # Entry_Time parses as "BUY"/"SELL" and every later field is
+                # shifted - Exit_Reason becomes a price, so SL counting,
+                # cooldowns and the daily-loss breaker silently stop working.
+                if (row.get("Entry_Time") or "").strip().upper() in ("BUY", "SELL"):
+                    print("WARNING: trades.csv schema drift detected (Entry_Time == BUY/SELL). "
+                          "Risk-gate counts are UNRELIABLE until the file is migrated - "
+                          "restart the engine (it auto-migrates) or run engine.migrate_trades_csv().")
                 rows.append(row)
     except Exception:
         return []

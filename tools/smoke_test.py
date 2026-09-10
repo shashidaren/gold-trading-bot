@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Smoke test for the engine's regime gates, bidirectional (Buy/Sell) execution,
-and daily loss circuit breaker.
+daily loss circuit breaker, and trades.csv schema migration.
 
 Runs GoldEngine.evaluate_candle() over synthetic 1-minute candles in temp
 directories (no /opt/gold, no network, no Telegram, no real API keys needed).
@@ -12,6 +12,8 @@ Scenarios:
   C) Downtrend + ceiling rejection dip             -> SELL trade MUST trigger & close with TP
   D) Daily loss circuit breaker                    -> MUST halt after MAX_DAILY_LOSSES (3)
   E) Restart from log                             -> EMA50 history seeds properly
+  F) trades.csv schema drift (2026-09-10 incident) -> engine MUST auto-migrate and
+     restore correct risk-gate counting for SELL trades
 
 Usage: python3 tools/smoke_test.py
 """
@@ -194,6 +196,61 @@ check("E: EMA50 history seeded from CSV", len(eng_e.ema50_history) >= engine.EMA
 check("E: trade stats loaded from trades.csv", eng_e.wins == 1 and eng_e.losses == 0)
 
 shutil.rmtree(tmp_c, ignore_errors=True)
+
+
+# --- Scenario F ---
+print("\nScenario F: trades.csv schema drift (pre-SELL header + SELL row) -> auto-migrate")
+OLD_HEADER = ["Trade_Num", "Entry_Time", "Exit_Time", "Entry_Price", "Stop_Loss", "Take_Profit",
+              "Exit_Price", "Exit_Reason", "Profit", "Balance_After", "RSI_At_Entry",
+              "ATR_At_Entry", "Wick_Ratio_At_Entry", "EMA50_At_Entry", "EMA200_At_Entry"]
+tmp_f = tempfile.mkdtemp(prefix="gold_smoke_f_")
+engine.LOG_FILE_PATH = os.path.join(tmp_f, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_f, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_f, "trades.csv")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_f, "skipped_trades.csv")
+
+with open(engine.TRADES_LOG_PATH, "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(OLD_HEADER)
+    # two old-schema BUY rows (15 fields)
+    w.writerow(["1", "2026-09-09 01:00:00", "2026-09-09 01:05:00", "4400.00", "4397.00", "4404.50",
+                "4404.50", "TP", "4.50", "504.50", "55.0", "1.50", "50.0%", "4395.00", "4390.00"])
+    w.writerow(["2", "2026-09-09 02:00:00", "2026-09-09 02:05:00", "4402.00", "4399.00", "4406.50",
+                "4398.90", "SL", "-3.10", "501.40", "50.0", "1.55", "45.0%", "4396.00", "4391.00"])
+    # the incident: 16-field SELL row appended under the 15-field header
+    w.writerow(["3", "SELL", "2026-09-10 00:09:00", "2026-09-10 00:11:04", "4391.74", "4393.95",
+                "4388.44", "4394.06", "SL", "-2.32", "450.40", "36.4", "1.10", "55.6%", "4395.23", "4399.46"])
+
+# 1) demonstrate the incident: with drift, the SELL SL is invisible to the risk gates
+drifted = trade_filter.load_recent_trades()
+cnt_before = trade_filter.get_daily_sl_count(drifted, datetime(2026, 9, 10, 1, 0, tzinfo=timezone.utc))
+check("F: drifted file misses the SELL SL (bug reproduced)", cnt_before == 0, f"daily_sls={cnt_before}")
+
+# 2) engine start must auto-migrate and resync stats
+eng_f = engine.GoldEngine()
+with open(engine.TRADES_LOG_PATH, newline="") as f:
+    rdr = csv.DictReader(f)
+    rows_f = list(rdr)
+    hdr_f = rdr.fieldnames
+check("F: header migrated to 16-field schema", hdr_f == engine.TRADES_FIELDNAMES, f"{hdr_f}")
+check("F: old rows backfilled as BUY", all(r["Trade_Type"] == "BUY" for r in rows_f[:2]))
+check("F: SELL row aligned (Exit_Reason=SL, Profit=-2.32)",
+      rows_f[2]["Trade_Type"] == "SELL" and rows_f[2]["Exit_Reason"] == "SL"
+      and rows_f[2]["Profit"] == "-2.32" and rows_f[2]["Balance_After"] == "450.40")
+check("F: engine stats resynced (1W/2L, next=#4)",
+      eng_f.wins == 1 and eng_f.losses == 2 and eng_f.next_trade_num == 4 and abs(eng_f.balance - 450.40) < 0.01,
+      f"{eng_f.wins}W/{eng_f.losses}L next=#{eng_f.next_trade_num} bal={eng_f.balance}")
+
+# 3) risk gates see the SELL SL now
+migrated = trade_filter.load_recent_trades()
+cnt_after = trade_filter.get_daily_sl_count(migrated, datetime(2026, 9, 10, 1, 0, tzinfo=timezone.utc))
+check("F: daily SL count sees the SELL SL after migration", cnt_after == 1, f"daily_sls={cnt_after}")
+
+# 4) migration is idempotent and keeps a backup
+check("F: re-migration is a no-op", engine.migrate_trades_csv(engine.TRADES_LOG_PATH) is False)
+check("F: backup kept", os.path.exists(engine.TRADES_LOG_PATH + ".bak-pre-migration"))
+shutil.rmtree(tmp_f, ignore_errors=True)
 
 print()
 if FAILURES:
