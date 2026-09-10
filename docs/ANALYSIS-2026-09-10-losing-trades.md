@@ -105,6 +105,36 @@ as strong evidence (17.8% vs ~48–65%, ~p≈0.001).
    instrument we have. Re-run all three tools after the next ~2 weeks of
    data; only then promote replay winners to live params.
 
+## 5. Implementation status (adopted 2026-09-10, same day)
+
+All three recommendations were implemented and pass `tools/smoke_test.py`
+(scenarios A–J green; I and J are new and cover exactly these rules):
+
+1. **BE-stop ratchet — `BE_TRIGGER_R = 0.30`** (engine.py). Arms when a trade
+   is +0.30R ahead (tick path `check_position`, candle path
+   `resolve_open_trade_on_candle`, pessimistic SL-first ordering preserved),
+   moves SL to entry, logs exit reason `BE` (a scratch: counted in the new
+   `be_exits` status counter, NOT in wins/losses, does not trigger the SL
+   cooldown). State survives restarts via status.json. Replay: −82.51 →
+   **−62.36** (5W/28L/12BE). ⚠️ LIVE-mode caveat: this moves the engine-side
+   stop only — a broker-side SL modify for real orders is future work.
+2. **Direction-aware London blackout** (trade_filter.py). 07:55–09:00 UTC now
+   blocks BUYs only; SELLs pass (phantom evidence: 5W/1L +20.09). Other
+   windows unchanged (both sides). `side=None` callers keep legacy behavior.
+3. **Daily-loss breaker → trend-side-only** (trade_filter.py). After
+   `MAX_DAILY_LOSSES` SLs, entries must align with 60-min momentum read from
+   the price log (tail-read, 15-min staleness guard); counter-momentum side
+   is skipped with a `Daily Loss Limit ... Trend-Side Only` reason (keeps the
+   `phantom_trades.py` "daily-halt" bucketing). Without side or momentum it
+   falls back to the original hard halt.
+   **Config drift reconciled**: repo keeps `MAX_DAILY_LOSSES = 10` — the bump
+   3→10 on 09-10 was intentional (see smoke D comment); old live rows showing
+   "(11/3 SLs today)" predate it.
+
+Not implemented (needs more data, per recommendation #5): RSI<45 entry skip
+and further entry-side filters — revisit after ~2 more weeks of forward data
+with the new rules live.
+
 ## Appendix — data quality notes
 
 - `trades.csv` has 3 batches (Trade_Num resets on 09-04) from the documented

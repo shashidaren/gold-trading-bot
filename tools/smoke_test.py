@@ -19,6 +19,11 @@ Scenarios:
   H) MT5 sidecar feed file (DATA_SOURCE=MT5) -> engine MUST read the sidecar's
      JSON file, evaluate each closed M1 candle exactly once (no re-log after
      restart), and default to TWELVEDATA
+  I) Breakeven ratchet (BE_TRIGGER_R) -> MUST arm at +0.30R, exit at entry with
+     reason "BE" (scratch: counted separately from SL/TP, survives restart)
+  J) Direction-aware risk gates -> London blackout blocks BUY but allows SELL;
+     daily-loss breaker degrades to trend-side-only (momentum from price log),
+     legacy no-side calls keep the old hard halt
 
 Usage: python3 tools/smoke_test.py
 """
@@ -50,6 +55,9 @@ for name in ("requests", "dotenv", "twelvedata"):
 
 import engine  # noqa: E402
 import trade_filter  # noqa: E402
+
+# Scenarios A-C monkey-patch this away; J needs the real implementation.
+REAL_IS_IN_BLACKOUT = trade_filter.is_in_blackout
 
 FAILURES = []
 
@@ -122,7 +130,7 @@ engine.STATUS_FILE_PATH = os.path.join(tmp_a, "status.json")
 engine.TRADES_LOG_PATH = os.path.join(tmp_a, "trades.csv")
 trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
 trade_filter.SKIP_LOG = os.path.join(tmp_a, "skipped_trades.csv")
-trade_filter.is_in_blackout = lambda now=None: (False, "")
+trade_filter.is_in_blackout = lambda now=None, side=None: (False, "")
 
 eng_a = engine.GoldEngine()
 run_candles(eng_a, candles_uptrend(240), datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc))
@@ -147,7 +155,7 @@ engine.STATUS_FILE_PATH = os.path.join(tmp_b, "status.json")
 engine.TRADES_LOG_PATH = os.path.join(tmp_b, "trades.csv")
 trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
 trade_filter.SKIP_LOG = os.path.join(tmp_b, "skipped_trades.csv")
-trade_filter.is_in_blackout = lambda now=None: (False, "")
+trade_filter.is_in_blackout = lambda now=None, side=None: (False, "")
 
 eng_b = engine.GoldEngine()
 run_candles(eng_b, candles_decline(240), datetime(2026, 2, 1, 0, 0, tzinfo=timezone.utc))
@@ -166,7 +174,7 @@ engine.STATUS_FILE_PATH = os.path.join(tmp_c, "status.json")
 engine.TRADES_LOG_PATH = os.path.join(tmp_c, "trades.csv")
 trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
 trade_filter.SKIP_LOG = os.path.join(tmp_c, "skipped_trades.csv")
-trade_filter.is_in_blackout = lambda now=None: (False, "")
+trade_filter.is_in_blackout = lambda now=None, side=None: (False, "")
 
 eng_c = engine.GoldEngine()
 run_candles(eng_c, candles_decline(240, 4800.0), datetime(2026, 3, 1, 0, 0, tzinfo=timezone.utc))
@@ -335,6 +343,97 @@ check("H: corrupt feed file -> None (no crash)", eng_h.read_mt5_feed() is None)
 check("H: no rates -> None", engine.latest_closed_candle_ts(None) is None)
 check("H: empty rates -> None", engine.latest_closed_candle_ts([]) is None)
 shutil.rmtree(tmp_h, ignore_errors=True)
+
+# --- Scenario I ---
+print("\nScenario I: breakeven ratchet -> +0.30R arms, dip back to entry exits at ~0 (reason BE)")
+tmp_i = tempfile.mkdtemp(prefix="gold_smoke_i_")
+engine.LOG_FILE_PATH = os.path.join(tmp_i, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_i, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_i, "trades.csv")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_i, "skipped_trades.csv")
+trade_filter.is_in_blackout = lambda now=None, side=None: (False, "")
+
+eng_i = engine.GoldEngine()
+run_candles(eng_i, candles_uptrend(240), datetime(2026, 5, 1, 0, 0, tzinfo=timezone.utc))
+dip_i = rejection_dip_buy(eng_i)
+run_candles(eng_i, [dip_i], datetime(2026, 5, 1, 4, 0, tzinfo=timezone.utc))
+check("I: BUY trade triggered", eng_i.trade_active and eng_i.trade_type == "BUY",
+      f"trade_active={eng_i.trade_active}")
+
+entry_i = eng_i.entry_price
+risk_i = entry_i - eng_i.stop_loss
+check("I: risk sane", risk_i > 0, f"entry={entry_i} sl={eng_i.stop_loss}")
+
+# push price to just past the BE trigger (+0.30R), then collapse back below entry
+be_level = entry_i + engine.BE_TRIGGER_R * risk_i
+up_i = [(entry_i + 0.05, be_level + 0.07, entry_i + 0.01, be_level + 0.02)]
+run_candles(eng_i, up_i, datetime(2026, 5, 1, 4, 1, tzinfo=timezone.utc))
+check("I: BE ratchet armed at +0.30R", eng_i.be_armed and eng_i.stop_loss == round(entry_i, 2),
+      f"armed={eng_i.be_armed} sl={eng_i.stop_loss} entry={entry_i}")
+
+bal_before = eng_i.balance
+down_i = [(entry_i - 0.05, entry_i + 0.02, entry_i - 0.5, entry_i - 0.4)]
+run_candles(eng_i, down_i, datetime(2026, 5, 1, 4, 2, tzinfo=timezone.utc))
+check("I: trade closed as scratch (not a loss)",
+      not eng_i.trade_active and eng_i.losses == 0 and eng_i.be_exits == 1,
+      f"losses={eng_i.losses} be_exits={eng_i.be_exits} wins={eng_i.wins}")
+check("I: balance ~unchanged after BE exit",
+      abs(eng_i.balance - bal_before) <= max(1.0, risk_i) and eng_i.balance >= bal_before - risk_i - 0.01,
+      f"balance={eng_i.balance} before={bal_before}")
+
+with open(engine.TRADES_LOG_PATH, newline="") as f:
+    rows_i = list(csv.DictReader(f))
+check("I: trades.csv row logged with Exit_Reason=BE",
+      len(rows_i) == 1 and rows_i[0]["Exit_Reason"] == "BE",
+      f"rows={len(rows_i)} reason={rows_i[0]['Exit_Reason'] if rows_i else 'n/a'}")
+
+# restart must restore BE-aware stats without crashing on the 'BE' reason
+eng_i2 = engine.GoldEngine()
+check("I: stats restore counts BE separately",
+      eng_i2.be_exits == 1 and eng_i2.losses == 0 and eng_i2.wins == 0,
+      f"wins={eng_i2.wins} losses={eng_i2.losses} be_exits={eng_i2.be_exits}")
+shutil.rmtree(tmp_i, ignore_errors=True)
+
+
+# --- Scenario J ---
+print("\nScenario J: direction-aware gates (London BUY blackout / SELL allowed, trend-side breaker)")
+trade_filter.is_in_blackout = REAL_IS_IN_BLACKOUT  # undo the A/B/C stub
+bo_buy, _ = trade_filter.is_in_blackout(datetime(2026, 9, 10, 8, 30, tzinfo=timezone.utc), side="BUY")
+bo_sell, _ = trade_filter.is_in_blackout(datetime(2026, 9, 10, 8, 30, tzinfo=timezone.utc), side="SELL")
+check("J: London window blocks BUY", bo_buy)
+check("J: London window allows SELL (phantom edge)", not bo_sell)
+bo_ny_buy, _ = trade_filter.is_in_blackout(datetime(2026, 9, 10, 14, 0, tzinfo=timezone.utc), side="BUY")
+bo_ny_sell, _ = trade_filter.is_in_blackout(datetime(2026, 9, 10, 14, 0, tzinfo=timezone.utc), side="SELL")
+check("J: NY window still blocks both sides", bo_ny_buy and bo_ny_sell)
+
+# trend-side daily-loss breaker: momentum file says DOWN -> SELL passes, BUY blocked
+tmp_j = tempfile.mkdtemp(prefix="gold_smoke_j_")
+now_j = datetime(2026, 9, 10, 20, 0, tzinfo=timezone.utc)
+pl_j = os.path.join(tmp_j, "forward_test_log.csv")
+with open(pl_j, "w") as f:
+    f.write("Timestamp,Open,High,Low,Close\n")
+    f.write("2026-09-10 18:59:00,4400.0,4400.5,4399.5,4400.0\n")   # ~60 min before now
+    f.write("2026-09-10 19:59:30,4379.0,4379.5,4378.5,4379.0\n")  # latest: clearly down
+trade_filter.PRICE_LOG = pl_j
+trades_j = [
+    {"Trade_Num": str(i + 1), "Trade_Type": "BUY",
+     "Entry_Time": f"2026-09-10 {1 + i:02d}:00:00", "Exit_Time": f"2026-09-10 {1 + i:02d}:10:00",
+     "Exit_Reason": "SL", "Profit": "-3.00"}
+    for i in range(trade_filter.MAX_DAILY_LOSSES)
+]
+blocked_buy, r_buy = trade_filter.check_daily_loss_limit(trades_j, now_j, side="BUY")
+blocked_sell, r_sell = trade_filter.check_daily_loss_limit(trades_j, now_j, side="SELL")
+check("J: momentum reads SELL from log", trade_filter.get_momentum_side(now_j) == "SELL")
+check("J: after limit, counter-momentum BUY blocked with Daily Loss reason",
+      blocked_buy and r_buy.startswith("Daily Loss Limit"), f"reason={r_buy}")
+check("J: after limit, trend-side SELL still allowed", not blocked_sell, f"reason={r_sell}")
+blocked_legacy, r_legacy = trade_filter.check_daily_loss_limit(trades_j, now_j)  # no side -> hard halt
+check("J: legacy no-side call keeps hard halt",
+      blocked_legacy and "Trading Halted" in r_legacy, f"reason={r_legacy}")
+trade_filter.PRICE_LOG = "/opt/gold/forward_test_log.csv"
+shutil.rmtree(tmp_j, ignore_errors=True)
+
 
 print()
 if FAILURES:

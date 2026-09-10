@@ -117,8 +117,9 @@ run("TP 0.75R", tp_R=0.75)
 run("TP 1.00R", tp_R=1.00)
 run("TP 1.50R (should ~= actual)", tp_R=1.50)
 print("--- BE-stop ratchet, TP 1.5R ---")
-for trig in (0.2, 0.25, 0.33, 0.5):
-    run(f"BE-stop armed at +{trig:.2f}R", tp_R=1.5, be_trigger=trig)
+for trig in (0.2, 0.25, 0.30, 0.33, 0.5):
+    tag = " <-- ADOPTED 2026-09-10" if abs(trig - 0.30) < 1e-9 else ""
+    run(f"BE-stop armed at +{trig:.2f}R{tag}", tp_R=1.5, be_trigger=trig)
 print("--- partial 50% + BE runner ---")
 for p in (0.33, 0.5):
     run(f"50% at +{p:.2f}R, BE runner to 1.5R", tp_R=1.5, partial_R=p)

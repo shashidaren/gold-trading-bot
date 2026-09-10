@@ -42,6 +42,11 @@ FLOOR_BUFFER_PCT = 0.0020
 ATR_SL_MULT = 2.0
 ATR_TP_MULT = 3.0
 
+# Breakeven stop ratchet (adopted 2026-09-10, docs/ANALYSIS-2026-09-10-losing-trades.md):
+# once a trade is +0.30R in profit, SL moves to entry. Sequence-aware replay of all
+# 45 sample trades: -82.51 actual -> ~-63 with the ratchet (12-14 losers scratch).
+BE_TRIGGER_R = 0.30
+
 REQUIRE_VOLUME_CONFIRM = False
 VOLUME_SPIKE_MULTIPLIER = 0.9
 REQUIRE_TREND_CONFIRM = True
@@ -205,6 +210,7 @@ class GoldEngine:
         self.entry_price = 0.0
         self.stop_loss = 0.0
         self.take_profit = 0.0
+        self.be_armed = False  # True once the breakeven ratchet (BE_TRIGGER_R) fired
         self.current_trade_num = None
 
         self.next_trade_num = 1
@@ -276,6 +282,7 @@ class GoldEngine:
         self.next_trade_num = 1
         self.wins = 0
         self.losses = 0
+        self.be_exits = 0
         self.balance = 500.00
 
         if not os.path.isfile(TRADES_LOG_PATH):
@@ -314,6 +321,8 @@ class GoldEngine:
                         self.wins += 1
                     elif reason == "SL":
                         self.losses += 1
+                    elif reason == "BE":
+                        self.be_exits += 1
 
                     try:
                         bal = float(row.get("Balance_After", 0) or 0)
@@ -334,6 +343,7 @@ class GoldEngine:
             self.next_trade_num = 1
             self.wins = 0
             self.losses = 0
+            self.be_exits = 0
             self.balance = 500.00
 
     def restore_open_trade_from_status(self):
@@ -362,6 +372,11 @@ class GoldEngine:
         self.entry_price = float(entry)
         self.stop_loss = float(sl)
         self.take_profit = float(tp)
+        # Breakeven ratchet state survives restarts; if the flag disagrees
+        # with the stored SL, the ratcheted (safer) level wins.
+        self.be_armed = bool(data.get("be_armed", False))
+        if self.be_armed:
+            self.stop_loss = round(self.entry_price, 2)
         self.entry_time = data.get("entry_time") or utc_now_str()
         self.current_trade_num = data.get("current_trade_num")
         if self.current_trade_num is None:
@@ -468,8 +483,10 @@ class GoldEngine:
         self.prev_close = close
 
     def save_status(self):
-        closed = self.wins + self.losses
-        win_rate = (self.wins / closed * 100) if closed > 0 else 0.0
+        closed = self.wins + self.losses + self.be_exits
+        # win_rate is over decisive trades only; BE scratches are neutral
+        decisive = self.wins + self.losses
+        win_rate = (self.wins / decisive * 100) if decisive > 0 else 0.0
         active_trade = self.trade_active
 
         # Calculate daily losses count for circuit breaker visibility
@@ -482,6 +499,7 @@ class GoldEngine:
             "next_trade_num": self.next_trade_num,
             "wins": self.wins,
             "losses": self.losses,
+            "be_exits": self.be_exits,
             "win_rate": round(win_rate, 1),
             "trade_active": active_trade,
             "trade_type": self.trade_type if active_trade else None,
@@ -496,6 +514,7 @@ class GoldEngine:
             "entry_price": round(self.entry_price, 2) if active_trade and self.entry_price else None,
             "stop_loss": round(self.stop_loss, 2) if active_trade and self.stop_loss else None,
             "take_profit": round(self.take_profit, 2) if active_trade and self.take_profit else None,
+            "be_armed": self.be_armed if active_trade else None,
             "entry_time": self.entry_time if active_trade else None,
             "current_trade_num": self.current_trade_num if active_trade else None,
             "entry_rsi": round(self.entry_rsi, 1) if active_trade and self.entry_rsi is not None else None,
@@ -631,6 +650,37 @@ class GoldEngine:
                 "EMA200_At_Entry": f"{self.entry_ema_slow:.2f}" if self.entry_ema_slow is not None else "",
             })
 
+    def _arm_breakeven(self):
+        """Ratchet the stop to entry once the trade is +BE_TRIGGER_R ahead.
+        One-way: once armed it stays armed (and persists via save_status)."""
+        self.be_armed = True
+        self.stop_loss = round(self.entry_price, 2)
+        print(f"🛡 BE stop armed for trade #{self.current_trade_num}: "
+              f"SL -> entry ${self.stop_loss:.2f}")
+        self.send_telegram(
+            f"🛡 BE STOP ARMED (#{self.current_trade_num})\n"
+            f"SL moved to entry: `${self.stop_loss:.2f}`"
+        )
+        self.save_status()
+
+    def _maybe_arm_breakeven(self, price: float = None, h: float = None, l: float = None):
+        """Arm the BE ratchet if unrealized profit >= BE_TRIGGER_R * initial risk.
+        Tick path passes price=; candle path passes h=/l= (pessimistic SL-first
+        ordering is preserved because arming happens before the SL check)."""
+        if not self.trade_active or self.be_armed:
+            return
+        risk = abs(self.entry_price - self.stop_loss)
+        if risk <= 0:
+            return
+        if price is not None:
+            gain = (price - self.entry_price) if self.trade_type == "BUY" else (self.entry_price - price)
+        elif self.trade_type == "BUY":
+            gain = (h - self.entry_price) if h is not None else 0.0
+        else:
+            gain = (self.entry_price - l) if l is not None else 0.0
+        if gain >= BE_TRIGGER_R * risk - 1e-9:  # epsilon: exact-boundary float dust
+            self._arm_breakeven()
+
     def resolve_open_trade_on_candle(self, o: float, h: float, l: float, c: float):
         """Forward-test exit resolution for candle-driven data sources
         (MT5 sidecar): there are no tick events, so an open simulated
@@ -640,6 +690,7 @@ class GoldEngine:
         """
         if not self.trade_active:
             return
+        self._maybe_arm_breakeven(h=h, l=l)
         if self.trade_type == "BUY":
             if l <= self.stop_loss:
                 self.check_position(self.stop_loss)
@@ -833,6 +884,7 @@ class GoldEngine:
                 current_price=c,
                 ema_fast=self.ema_fast,
                 ema_slow=self.ema_slow,
+                side="BUY",
             )
 
             if not allow:
@@ -856,6 +908,7 @@ class GoldEngine:
                 current_price=c,
                 ema_fast=self.ema_fast,
                 ema_slow=self.ema_slow,
+                side="SELL",
             )
 
             if not allow:
@@ -917,6 +970,7 @@ class GoldEngine:
         else:
             self.current_trade_num = self.next_trade_num
             self.next_trade_num += 1
+            self.be_armed = False
             print(f"ORDER SUCCESS! Ticket: {result.order} | Trade #{self.current_trade_num}")
             self.send_telegram(
                 f"LIVE GOLD {direction} EXECUTED\n"
@@ -931,6 +985,7 @@ class GoldEngine:
         self.trade_type = direction
         self.current_trade_num = self.next_trade_num
         self.next_trade_num += 1
+        self.be_armed = False  # fresh trade: ratchet re-arms at +BE_TRIGGER_R
 
         self.entry_price = c
         if direction == "BUY":
@@ -962,12 +1017,15 @@ class GoldEngine:
         if not self.trade_active:
             return
 
+        self._maybe_arm_breakeven(price=price)
+
         if self.trade_type == "BUY":
             if price >= self.take_profit:
                 profit = price - self.entry_price
                 self.balance += profit
                 self.wins += 1
                 self.trade_active = False
+                self.be_armed = False
                 self.log_trade(exit_price=price, exit_reason="TP", profit=profit)
                 self.send_telegram(
                     f"TP HIT (BUY #{self.current_trade_num})\n"
@@ -978,11 +1036,17 @@ class GoldEngine:
             elif price <= self.stop_loss:
                 loss = self.entry_price - price
                 self.balance -= loss
-                self.losses += 1
+                was_be = self.be_armed
+                if was_be:
+                    self.be_exits += 1   # scratch: not a loss, not a win
+                else:
+                    self.losses += 1
                 self.trade_active = False
-                self.log_trade(exit_price=price, exit_reason="SL", profit=-loss)
+                self.be_armed = False
+                reason = "BE" if was_be else "SL"
+                self.log_trade(exit_price=price, exit_reason=reason, profit=-loss)
                 self.send_telegram(
-                    f"SL HIT (BUY #{self.current_trade_num})\n"
+                    f"{'🛡 BE EXIT' if was_be else 'SL HIT'} (BUY #{self.current_trade_num})\n"
                     f"Exit: `${price:.2f}` (-${loss:.2f})\n"
                     f"Equity: `${self.balance:.2f}`"
                 )
@@ -994,6 +1058,7 @@ class GoldEngine:
                 self.balance += profit
                 self.wins += 1
                 self.trade_active = False
+                self.be_armed = False
                 self.log_trade(exit_price=price, exit_reason="TP", profit=profit)
                 self.send_telegram(
                     f"TP HIT (SELL #{self.current_trade_num})\n"
@@ -1004,11 +1069,17 @@ class GoldEngine:
             elif price >= self.stop_loss:
                 loss = price - self.entry_price
                 self.balance -= loss
-                self.losses += 1
+                was_be = self.be_armed
+                if was_be:
+                    self.be_exits += 1   # scratch: not a loss, not a win
+                else:
+                    self.losses += 1
                 self.trade_active = False
-                self.log_trade(exit_price=price, exit_reason="SL", profit=-loss)
+                self.be_armed = False
+                reason = "BE" if was_be else "SL"
+                self.log_trade(exit_price=price, exit_reason=reason, profit=-loss)
                 self.send_telegram(
-                    f"SL HIT (SELL #{self.current_trade_num})\n"
+                    f"{'🛡 BE EXIT' if was_be else 'SL HIT'} (SELL #{self.current_trade_num})\n"
                     f"Exit: `${price:.2f}` (-${loss:.2f})\n"
                     f"Equity: `${self.balance:.2f}`"
                 )

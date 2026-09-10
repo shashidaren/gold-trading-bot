@@ -9,8 +9,8 @@ changelog.
 
 | Path | What it is |
 |---|---|
-| `engine.py` | Data ingestion, indicators (EMA/RSI/ATR), the Buy/Sell signal funnel, trade execution. Includes `migrate_trades_csv()` — self-healing schema fix (see 09-10 review). |
-| `trade_filter.py` | Risk gatekeeper: session blackouts, SL cooldowns, daily-loss circuit breaker, ATR bounds. |
+| `engine.py` | Data ingestion, indicators (EMA/RSI/ATR), the Buy/Sell signal funnel, trade execution. Includes `migrate_trades_csv()` — self-healing schema fix (see 09-10 review) — and the breakeven stop ratchet (`BE_TRIGGER_R`, 09-10 losing-trade analysis). |
+| `trade_filter.py` | Risk gatekeeper: direction-aware session blackouts (London blocks BUYs, allows SELLs), SL cooldowns, momentum-gated daily-loss breaker (trend-side-only after limit), ATR bounds. |
 | `dashboard.py` | Web dashboard (funnel telemetry, equity, active trade). |
 | `trades.csv` | **The ledger** — one row per closed trade (16-field schema with `Trade_Type`). |
 | `forward_test_log.csv` | 1-minute candle log with all indicator values per bar. |
