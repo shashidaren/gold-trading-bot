@@ -488,6 +488,7 @@ class GoldEngine:
             "daily_losses": daily_losses,
             "max_daily_losses": MAX_DAILY_LOSSES,
             "last_update": utc_now_str(),
+            "mt5_last_candle_ts": self._mt5_last_candle_ts,
             "rsi": round(self.rsi, 1) if self.rsi else None,
             "ema_fast": round(self.ema_fast, 2) if self.ema_fast else None,
             "ema_slow": round(self.ema_slow, 2) if self.ema_slow else None,
@@ -639,33 +640,16 @@ class GoldEngine:
         """
         if not self.trade_active:
             return
-
         if self.trade_type == "BUY":
-            sl_hit, tp_hit = l <= self.stop_loss, h >= self.take_profit
-            exit_price, reason = (self.stop_loss, "SL") if sl_hit else (self.take_profit, "TP")
-        else:  # SELL
-            sl_hit, tp_hit = h >= self.stop_loss, l <= self.take_profit
-            exit_price, reason = (self.stop_loss, "SL") if sl_hit else (self.take_profit, "TP")
-
-        if not (sl_hit or tp_hit):
-            return
-        profit = (exit_price - self.entry_price if self.trade_type == "BUY"
-                  else self.entry_price - exit_price)
-        if reason == "SL":
-            self.balance += profit  # profit is negative here
-            self.losses += 1
+            if l <= self.stop_loss:
+                self.check_position(self.stop_loss)
+            elif h >= self.take_profit:
+                self.check_position(self.take_profit)
         else:
-            self.balance += profit
-            self.wins += 1
-        self.trade_active = False
-        self.log_trade(exit_price=exit_price, exit_reason=reason, profit=profit)
-        sign = "+" if profit >= 0 else "-"
-        self.send_telegram(
-            f"{reason} HIT ({self.trade_type} #{self.current_trade_num}, candle range)\n"
-            f"Exit: `${exit_price:.2f}` ({sign}${abs(profit):.2f})\n"
-            f"Equity: `${self.balance:.2f}`"
-        )
-        self.save_status()
+            if h >= self.stop_loss:
+                self.check_position(self.stop_loss)
+            elif l <= self.take_profit:
+                self.check_position(self.take_profit)
 
     def evaluate_candle(self, o, h, l, c, tick_count):
         candle_range = h - l
@@ -1123,17 +1107,11 @@ class GoldEngine:
         """
         print("Gold Engine FORWARD TEST (MT5 feed) starting...")
         last_ts = 0
-        if os.path.isfile(LOG_FILE_PATH):
-            try:
-                with open(LOG_FILE_PATH) as f:
-                    for line in f:
-                        if line.strip():
-                            pass
-                ts_str = line.split(",")[0].strip()
-                last_ts = int(datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-                              .replace(tzinfo=timezone.utc).timestamp())
-            except Exception:
-                last_ts = 0
+        try:
+            with open(STATUS_FILE_PATH) as f:
+                last_ts = int(json.load(f).get("mt5_last_candle_ts") or 0)
+        except Exception:
+            last_ts = 0
         try:
             while True:
                 rates = self.read_mt5_feed()
@@ -1157,7 +1135,7 @@ class GoldEngine:
                         print(f"\nError evaluating candle @ {ts}: {e}", flush=True)
                     if ts % 3600 == 0:
                         print(f"Heartbeat: candle @ "
-                              f"{datetime.fromtimestamp(ts, tz=timezone.utc):%Y-%m-%d %H:%M} UTC "
+                              f"{datetime.fromtimestamp(ts, tz=timezone.utc):%Y-%m-%d %H:%M} MT5-server-time "
                               f"| close {c:.2f}", flush=True)
                 else:
                     print(f"MT5: no feed in {MT5_FEED_FILE} - retrying in 5s "

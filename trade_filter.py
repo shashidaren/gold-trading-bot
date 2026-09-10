@@ -19,7 +19,7 @@ LOOKBACK   = 30
 # === Settings (Risk & Volatility Controls) ===
 SL_COOLDOWN_BASE_MINUTES = 30     # Base cooldown after 1 SL (30 min)
 SL_COOLDOWN_ESCALATED_MINUTES = 60 # Escalated cooldown after 2 consecutive SLs (60 min)
-MAX_DAILY_LOSSES         = 3      # Halt trading for the rest of the day after 3 SLs
+MAX_DAILY_LOSSES         = 10     # Halt trading for the rest of the day after 10 SLs
 MIN_ATR_TO_TRADE         = 1.10   # Do not trade when ATR is too low
 MAX_ATR_TO_TRADE         = 4.50   # Block trades during extreme news spikes / illiquidity
 

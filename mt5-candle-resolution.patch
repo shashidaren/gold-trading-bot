@@ -1,0 +1,103 @@
+From 0f110be4374640efcd11e13b25083ebe37c09ac6 Mon Sep 17 00:00:00 2001
+From: shashidaren <16284436+shashidaren@users.noreply.github.com>
+Date: Thu, 10 Sep 2026 07:28:52 +0000
+Subject: [PATCH] mt5 feed: resolve open simulated trade on candle range;
+ dedupe init; silence wine debug
+
+- engine.py: add GoldEngine.resolve_open_trade_on_candle() so the MT5
+  sidecar path (no tick events) settles open SL/TP against each closed
+  candle range before entry evaluation (pessimistic SL-first).
+- init single _mt5_last_candle_ts (was duplicated in the local diff).
+- deploy/mt5feed.service: WINEDEBUG=-all to keep fixme noise out of the journal.
+
+Co-authored-by: arena-agent <297053741+arena-agent@users.noreply.github.com>
+---
+ deploy/mt5feed.service |  1 +
+ engine.py              | 43 ++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 44 insertions(+)
+
+diff --git a/deploy/mt5feed.service b/deploy/mt5feed.service
+index 6c2deec..ea87f81 100644
+--- a/deploy/mt5feed.service
++++ b/deploy/mt5feed.service
+@@ -21,6 +21,7 @@ After=network.target
+ [Service]
+ User=root
+ Environment=WINEPREFIX=/root/.mt5
++Environment=WINEDEBUG=-all
+ ExecStart=/usr/bin/xvfb-run --auto-servernum /usr/bin/wine C:\\Python312\\python.exe Z:\\opt\\gold\\tools\\mt5_feed.py
+ WorkingDirectory=/root
+ Restart=always
+diff --git a/engine.py b/engine.py
+index c97625d..8b62d91 100644
+--- a/engine.py
++++ b/engine.py
+@@ -228,6 +228,7 @@ class GoldEngine:
+         # Stale-feed guard state (see run_forward_test)
+         self._last_price_mono = None
+         self._last_stale_alert_mono = None
++        self._mt5_last_candle_ts = None
+ 
+         # Buy Funnel Counters
+         self.hit_tested_floor = 0
+@@ -629,6 +630,43 @@ class GoldEngine:
+                 "EMA200_At_Entry": f"{self.entry_ema_slow:.2f}" if self.entry_ema_slow is not None else "",
+             })
+ 
++    def resolve_open_trade_on_candle(self, o: float, h: float, l: float, c: float):
++        """Forward-test exit resolution for candle-driven data sources
++        (MT5 sidecar): there are no tick events, so an open simulated
++        position must be checked against the candle range BEFORE evaluating
++        new entries. Pessimistic intra-candle assumption: if both SL and TP
++        fall inside the range, the SL is assumed to have been hit first.
++        """
++        if not self.trade_active:
++            return
++
++        if self.trade_type == "BUY":
++            sl_hit, tp_hit = l <= self.stop_loss, h >= self.take_profit
++            exit_price, reason = (self.stop_loss, "SL") if sl_hit else (self.take_profit, "TP")
++        else:  # SELL
++            sl_hit, tp_hit = h >= self.stop_loss, l <= self.take_profit
++            exit_price, reason = (self.stop_loss, "SL") if sl_hit else (self.take_profit, "TP")
++
++        if not (sl_hit or tp_hit):
++            return
++        profit = (exit_price - self.entry_price if self.trade_type == "BUY"
++                  else self.entry_price - exit_price)
++        if reason == "SL":
++            self.balance += profit  # profit is negative here
++            self.losses += 1
++        else:
++            self.balance += profit
++            self.wins += 1
++        self.trade_active = False
++        self.log_trade(exit_price=exit_price, exit_reason=reason, profit=profit)
++        sign = "+" if profit >= 0 else "-"
++        self.send_telegram(
++            f"{reason} HIT ({self.trade_type} #{self.current_trade_num}, candle range)\n"
++            f"Exit: `${exit_price:.2f}` ({sign}${abs(profit):.2f})\n"
++            f"Equity: `${self.balance:.2f}`"
++        )
++        self.save_status()
++
+     def evaluate_candle(self, o, h, l, c, tick_count):
+         candle_range = h - l
+         if candle_range <= 0:
+@@ -1107,8 +1145,13 @@ class GoldEngine:
+                         continue
+                     ts, o, h, l, c, vol = candle
+                     last_ts = ts
++                    self._mt5_last_candle_ts = ts
+                     self._last_price_mono = time.monotonic()
+                     try:
++                        # Candle-driven feed: no tick events, so SL/TP for an
++                        # open simulated position must be resolved against the
++                        # candle range before new entries are evaluated.
++                        self.resolve_open_trade_on_candle(o, h, l, c)
+                         self.evaluate_candle(o, h, l, c, vol)
+                     except Exception as e:
+                         print(f"\nError evaluating candle @ {ts}: {e}", flush=True)
+-- 
+2.39.5
+
