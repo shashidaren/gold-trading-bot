@@ -10,7 +10,7 @@ Scenarios:
   A) Uptrend + rejection dip at 20-bar floor       -> BUY trade MUST trigger & close with TP
   B) Established decline + floor rejection dip     -> BUY trade MUST be blocked
   C) Downtrend + ceiling rejection dip             -> SELL trade MUST trigger & close with TP
-  D) Daily loss circuit breaker                    -> MUST halt after MAX_DAILY_LOSSES (3)
+  D) Daily loss circuit breaker                    -> MUST halt after MAX_DAILY_LOSSES SLs
   E) Restart from log                             -> EMA50 history seeds properly
   F) trades.csv schema drift (2026-09-10 incident) -> engine MUST auto-migrate and
      restore correct risk-gate counting for SELL trades
@@ -183,15 +183,18 @@ check("C: SELL trade closed with TP", not eng_c.trade_active and eng_c.wins == 1
 
 
 # --- Scenario D ---
-print("\nScenario D: daily loss circuit breaker -> halts trading after 3 SLs")
+print("\nScenario D: daily loss circuit breaker -> halts trading after MAX_DAILY_LOSSES SLs")
+# Build exactly MAX_DAILY_LOSSES SL exits so the scenario stays valid
+# however the constant is tuned (3 -> 10 on 2026-09-10).
 trades_sim = [
-    {"Trade_Num": "1", "Trade_Type": "BUY", "Entry_Time": "2026-09-10 01:00:00", "Exit_Time": "2026-09-10 01:10:00", "Exit_Reason": "SL", "Profit": "-3.00"},
-    {"Trade_Num": "2", "Trade_Type": "BUY", "Entry_Time": "2026-09-10 02:00:00", "Exit_Time": "2026-09-10 02:10:00", "Exit_Reason": "SL", "Profit": "-3.00"},
-    {"Trade_Num": "3", "Trade_Type": "SELL", "Entry_Time": "2026-09-10 03:00:00", "Exit_Time": "2026-09-10 03:10:00", "Exit_Reason": "SL", "Profit": "-3.00"},
+    {"Trade_Num": str(i + 1), "Trade_Type": "SELL" if i == 2 else "BUY",
+     "Entry_Time": f"2026-09-10 {1 + i:02d}:00:00", "Exit_Time": f"2026-09-10 {1 + i:02d}:10:00",
+     "Exit_Reason": "SL", "Profit": "-3.00"}
+    for i in range(trade_filter.MAX_DAILY_LOSSES)
 ]
-sl_count = trade_filter.get_daily_sl_count(trades_sim, datetime(2026, 9, 10, 5, 0, tzinfo=timezone.utc))
-halted, halt_reason = trade_filter.check_daily_loss_limit(trades_sim, datetime(2026, 9, 10, 5, 0, tzinfo=timezone.utc))
-check("D: daily SL count equals 3", sl_count == 3, f"count={sl_count}")
+sl_count = trade_filter.get_daily_sl_count(trades_sim, datetime(2026, 9, 10, 20, 0, tzinfo=timezone.utc))
+halted, halt_reason = trade_filter.check_daily_loss_limit(trades_sim, datetime(2026, 9, 10, 20, 0, tzinfo=timezone.utc))
+check("D: daily SL count equals MAX_DAILY_LOSSES", sl_count == trade_filter.MAX_DAILY_LOSSES, f"count={sl_count}")
 check("D: circuit breaker triggered", halted and "Daily Loss Limit Reached" in halt_reason, f"reason={halt_reason}")
 
 
