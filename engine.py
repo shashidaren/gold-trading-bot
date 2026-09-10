@@ -228,6 +228,7 @@ class GoldEngine:
         # Stale-feed guard state (see run_forward_test)
         self._last_price_mono = None
         self._last_stale_alert_mono = None
+        self._mt5_last_candle_ts = None
 
         # Buy Funnel Counters
         self.hit_tested_floor = 0
@@ -487,6 +488,7 @@ class GoldEngine:
             "daily_losses": daily_losses,
             "max_daily_losses": MAX_DAILY_LOSSES,
             "last_update": utc_now_str(),
+            "mt5_last_candle_ts": self._mt5_last_candle_ts,
             "rsi": round(self.rsi, 1) if self.rsi else None,
             "ema_fast": round(self.ema_fast, 2) if self.ema_fast else None,
             "ema_slow": round(self.ema_slow, 2) if self.ema_slow else None,
@@ -628,6 +630,26 @@ class GoldEngine:
                 "EMA50_At_Entry": f"{self.entry_ema_fast:.2f}" if self.entry_ema_fast is not None else "",
                 "EMA200_At_Entry": f"{self.entry_ema_slow:.2f}" if self.entry_ema_slow is not None else "",
             })
+
+    def resolve_open_trade_on_candle(self, o: float, h: float, l: float, c: float):
+        """Forward-test exit resolution for candle-driven data sources
+        (MT5 sidecar): there are no tick events, so an open simulated
+        position must be checked against the candle range BEFORE evaluating
+        new entries. Pessimistic intra-candle assumption: if both SL and TP
+        fall inside the range, the SL is assumed to have been hit first.
+        """
+        if not self.trade_active:
+            return
+        if self.trade_type == "BUY":
+            if l <= self.stop_loss:
+                self.check_position(self.stop_loss)
+            elif h >= self.take_profit:
+                self.check_position(self.take_profit)
+        else:
+            if h >= self.stop_loss:
+                self.check_position(self.stop_loss)
+            elif l <= self.take_profit:
+                self.check_position(self.take_profit)
 
     def evaluate_candle(self, o, h, l, c, tick_count):
         candle_range = h - l
@@ -1085,17 +1107,11 @@ class GoldEngine:
         """
         print("Gold Engine FORWARD TEST (MT5 feed) starting...")
         last_ts = 0
-        if os.path.isfile(LOG_FILE_PATH):
-            try:
-                with open(LOG_FILE_PATH) as f:
-                    for line in f:
-                        if line.strip():
-                            pass
-                ts_str = line.split(",")[0].strip()
-                last_ts = int(datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-                              .replace(tzinfo=timezone.utc).timestamp())
-            except Exception:
-                last_ts = 0
+        try:
+            with open(STATUS_FILE_PATH) as f:
+                last_ts = int(json.load(f).get("mt5_last_candle_ts") or 0)
+        except Exception:
+            last_ts = 0
         try:
             while True:
                 rates = self.read_mt5_feed()
@@ -1107,14 +1123,19 @@ class GoldEngine:
                         continue
                     ts, o, h, l, c, vol = candle
                     last_ts = ts
+                    self._mt5_last_candle_ts = ts
                     self._last_price_mono = time.monotonic()
                     try:
+                        # Candle-driven feed: no tick events, so SL/TP for an
+                        # open simulated position must be resolved against the
+                        # candle range before new entries are evaluated.
+                        self.resolve_open_trade_on_candle(o, h, l, c)
                         self.evaluate_candle(o, h, l, c, vol)
                     except Exception as e:
                         print(f"\nError evaluating candle @ {ts}: {e}", flush=True)
                     if ts % 3600 == 0:
                         print(f"Heartbeat: candle @ "
-                              f"{datetime.fromtimestamp(ts, tz=timezone.utc):%Y-%m-%d %H:%M} UTC "
+                              f"{datetime.fromtimestamp(ts, tz=timezone.utc):%Y-%m-%d %H:%M} MT5-server-time "
                               f"| close {c:.2f}", flush=True)
                 else:
                     print(f"MT5: no feed in {MT5_FEED_FILE} - retrying in 5s "
