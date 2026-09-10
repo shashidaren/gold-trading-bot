@@ -139,4 +139,115 @@ if [ "$NEED_MERGE" = "1" ]; then
 
         MERGE_RC=0
         if ! git merge "$REMOTE/$BRANCH" -m "autosync: merge upstream (live data kept local)" >/dev/null 2>&1; then
-            log "merge conflict - resolving: data 
+            log "merge conflict - resolving: data files=ours, everything else=theirs"
+            for f in $(git diff --name-only --diff-filter=U); do
+                case "$f" in
+                    trades.csv|forward_test_log.csv|skipped_trades.csv|status.json)
+                        git checkout --ours -- "$f" ;;
+                    *) git checkout --theirs -- "$f" ;;
+                esac
+                git add -- "$f" >/dev/null 2>&1 || true
+            done
+            git commit -q -m "autosync: merge upstream (live data kept local)" >/dev/null 2>&1 || MERGE_RC=1
+        fi
+
+        SMOKE="not run (no code change)"
+        if [ "$MERGE_RC" = "0" ] && [ "$SMOKE_GATE" = "1" ] && [ "$CODE_CHANGED" -gt 0 ]; then
+            if python3 tools/smoke_test.py >/tmp/autosync_smoke.log 2>&1; then
+                SMOKE="ok"
+            else
+                SMOKE="FAIL"
+            fi
+        fi
+
+        if [ "$MERGE_RC" != "0" ] || [ "$SMOKE" = "FAIL" ]; then
+            log "deploy failed (merge_rc=$MERGE_RC smoke=$SMOKE) - rolling back to $PRE_MERGE"
+            [ -f .git/MERGE_HEAD ] && git merge --abort >/dev/null 2>&1
+            git reset --hard "$PRE_MERGE" >/dev/null 2>&1
+            DEPLOY_MSG="ROLLED BACK (smoke=$SMOKE) - needs a manual look"
+            EXTRA="$EXTRA
+🚨 deploy rolled back - start a review session"
+        else
+            DEPLOY_MSG="deployed $(git rev-parse --short HEAD) (code files: $CODE_CHANGED, smoke: $SMOKE)"
+        fi
+
+        if [ "$CORE_CHANGED" -gt 0 ]; then
+            if [ -n "$SVC" ]; then
+                log "starting engine ($SVC)"
+                systemctl start "$SVC" >/dev/null 2>&1 || DEPLOY_MSG="$DEPLOY_MSG; FAILED to start $SVC"
+                sleep 20
+                if systemctl is-active --quiet "$SVC" 2>/dev/null; then
+                    if [ -z "$(find status.json -mmin -3 2>/dev/null)" ]; then
+                        DEPLOY_MSG="$DEPLOY_MSG; engine active but status.json looks STALE"
+                    fi
+                else
+                    DEPLOY_MSG="$DEPLOY_MSG; ENGINE SERVICE NOT ACTIVE"
+                fi
+            else
+                DEPLOY_MSG="$DEPLOY_MSG; engine service NOT FOUND - restart engine manually"
+                EXTRA="$EXTRA
+⚠️ engine service not detected - manual restart needed"
+            fi
+        fi
+        if [ "$DASH_CHANGED" -gt 0 ]; then
+            DSVC=$(detect_service 'dashboard\.py' "$DASHBOARD_SERVICE" || true)
+            if [ -n "$DSVC" ]; then
+                log "restarting dashboard ($DSVC)"
+                systemctl restart "$DSVC" >/dev/null 2>&1 \
+                    || DEPLOY_MSG="$DEPLOY_MSG; FAILED to restart $DSVC"
+            else
+                DEPLOY_MSG="$DEPLOY_MSG; dashboard service NOT FOUND - restart dashboard manually"
+            fi
+        fi
+    fi
+fi
+
+# --- phase 3: push -------------------------------------------------------------
+PUSH_MSG="ok"
+if ! git push "$REMOTE" "$BRANCH" >/dev/null 2>&1; then
+    PUSH_MSG="FAILED (data is safe in a local commit; retries next run)"
+    EXTRA="$EXTRA
+⚠️ push to $REMOTE failed"
+fi
+log "push: $PUSH_MSG"
+
+# --- phase 4: integrity + stats --------------------------------------------------
+CHECK_MSG="not run"
+python3 tools/check_data.py >/tmp/autosync_check.log 2>&1
+CHECK_RC=$?
+CHECK_MSG=$(grep -E '^== result' /tmp/autosync_check.log | tail -n1 | sed 's/^== result: //')
+if [ -z "$CHECK_MSG" ]; then
+    CHECK_MSG="check_data FAILED to run (rc=$CHECK_RC)"
+fi
+if [ "$CHECK_RC" != "0" ]; then
+    EXTRA="$EXTRA
+🚨 check_data: $CHECK_MSG - start a review session"
+fi
+
+STATS=$(python3 - <<'PYEOF' 2>/dev/null
+import json
+try:
+    s = json.load(open("status.json"))
+    print("equity {eq} | {w}W/{l}L | daily SLs {d}/{m} | open trade: {a} | updated {u} UTC".format(
+        eq=s.get("equity"), w=s.get("wins"), l=s.get("losses"),
+        d=s.get("daily_losses"), m=s.get("max_daily_losses"),
+        a="yes" if s.get("trade_active") else "no", u=s.get("last_update")))
+except Exception as e:
+    print("status.json unreadable: %s" % e)
+PYEOF
+)
+
+log "done. data=[$DATA_MSG] deploy=[$DEPLOY_MSG] check=[$CHECK_MSG]"
+
+QUIET_SKIP=0
+if [ "$NOTIFY" = "quiet" ] && [ "$DATA_MSG" = "no new data" ] && [ "$DEPLOY_MSG" = "none" ] \
+   && [ "$PUSH_MSG" = "ok" ] && [ -z "$EXTRA" ]; then
+    QUIET_SKIP=1
+fi
+if [ "$QUIET_SKIP" = "0" ]; then
+    tg "🤖 gold autosync — $(date -u '+%m-%d %H:%M') UTC
+📦 data: $DATA_MSG (push: $PUSH_MSG)
+🚀 deploy: $DEPLOY_MSG
+🩺 integrity: $CHECK_MSG
+💰 $STATS$EXTRA"
+fi
