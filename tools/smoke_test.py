@@ -14,6 +14,11 @@ Scenarios:
   E) Restart from log                             -> EMA50 history seeds properly
   F) trades.csv schema drift (2026-09-10 incident) -> engine MUST auto-migrate and
      restore correct risk-gate counting for SELL trades
+  G) stale-feed guard (2026-09-10 silent WebSocket stall) -> MUST detect a quiet
+     feed, classify market-quiet hours, and rate-limit Telegram alerts
+  H) MT5 sidecar feed file (DATA_SOURCE=MT5) -> engine MUST read the sidecar's
+     JSON file, evaluate each closed M1 candle exactly once (no re-log after
+     restart), and default to TWELVEDATA
 
 Usage: python3 tools/smoke_test.py
 """
@@ -23,6 +28,7 @@ import json
 import csv
 import shutil
 import tempfile
+import time
 import types
 from datetime import datetime, timezone, timedelta
 
@@ -251,6 +257,81 @@ check("F: daily SL count sees the SELL SL after migration", cnt_after == 1, f"da
 check("F: re-migration is a no-op", engine.migrate_trades_csv(engine.TRADES_LOG_PATH) is False)
 check("F: backup kept", os.path.exists(engine.TRADES_LOG_PATH + ".bak-pre-migration"))
 shutil.rmtree(tmp_f, ignore_errors=True)
+
+
+# --- Scenario G ---
+print("\nScenario G: stale-feed guard (silent WebSocket stall)")
+tmp_g = tempfile.mkdtemp(prefix="gold_smoke_g_")
+engine.LOG_FILE_PATH = os.path.join(tmp_g, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_g, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_g, "trades.csv")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_g, "skipped_trades.csv")
+
+eng_g = engine.GoldEngine()
+
+# fresh feed -> not stale
+eng_g._last_price_mono = time.monotonic()
+check("G: fresh feed not stale", eng_g.feed_stale_seconds() < 1.0, f"{eng_g.feed_stale_seconds():.2f}s")
+
+# 11 min without ticks -> stale
+eng_g._last_price_mono = time.monotonic() - (engine.STALE_FEED_SECONDS + 60)
+stale = eng_g.feed_stale_seconds()
+check("G: 11-min gap detected as stale", stale > engine.STALE_FEED_SECONDS, f"{stale:.0f}s")
+
+# quiet-hours classification (no weekend/break alert spam)
+check("G: Saturday 12:00 UTC is quiet", engine.is_market_quiet(datetime(2026, 9, 12, 12, 0, tzinfo=timezone.utc)))
+check("G: Friday 23:00 UTC is quiet (daily break)", engine.is_market_quiet(datetime(2026, 9, 11, 23, 0, tzinfo=timezone.utc)))
+check("G: Thursday 01:30 UTC is quiet (daily break)", engine.is_market_quiet(datetime(2026, 9, 10, 1, 30, tzinfo=timezone.utc)))
+check("G: Thursday 12:00 UTC is NOT quiet", not engine.is_market_quiet(datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)))
+
+# alert rate-limit: first alert fires, immediate second is suppressed
+first = eng_g.maybe_alert_stale_feed(stale)
+second = eng_g.maybe_alert_stale_feed(stale)
+check("G: stale alert fires once, then rate-limited", first is True and second is False)
+shutil.rmtree(tmp_g, ignore_errors=True)
+
+
+# --- Scenario H ---
+print("\nScenario H: MT5 sidecar feed file (DATA_SOURCE=MT5)")
+tmp_h = tempfile.mkdtemp(prefix="gold_smoke_h_")
+engine.LOG_FILE_PATH = os.path.join(tmp_h, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_h, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_h, "trades.csv")
+engine.MT5_FEED_FILE = os.path.join(tmp_h, "mt5_last_candle.json")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_h, "skipped_trades.csv")
+
+check("H: default data source stays TWELVEDATA", engine.DATA_SOURCE == "TWELVEDATA",
+      f"DATA_SOURCE={engine.DATA_SOURCE}")
+
+eng_h = engine.GoldEngine()
+check("H: missing feed file -> None", eng_h.read_mt5_feed() is None)
+
+# sidecar publishes the latest closed candle; engine reads + normalizes it
+feed1 = {"ts": 2000, "open": 4400.0, "high": 4401.0, "low": 4399.0,
+         "close": 4400.5, "tick_volume": 12, "updated_at": "2026-09-10 05:01:03"}
+with open(engine.MT5_FEED_FILE, "w") as f:
+    json.dump(feed1, f)
+r1 = eng_h.read_mt5_feed()
+check("H: feed file normalized to rate shape",
+      r1 is not None and r1[0]["time"] == 2000 and r1[0]["open"] == 4400.0 and r1[0]["tick_volume"] == 12)
+check("H: first closed candle accepted",
+      (lambda c: c is not None and c[0] == 2000 and c[1] == 4400.0 and c[5] == 12)(eng_h.mt5_next_candle(r1, 0)))
+check("H: same candle NOT re-evaluated (restart dedup)", eng_h.mt5_next_candle(r1, 2000) is None)
+
+with open(engine.MT5_FEED_FILE, "w") as f:
+    json.dump({"ts": 2060, "open": 4400.5, "high": 4402.0, "low": 4400.0,
+               "close": 4401.5, "tick_volume": 34, "updated_at": "2026-09-10 05:02:03"}, f)
+c2 = eng_h.mt5_next_candle(eng_h.read_mt5_feed(), 2000)
+check("H: next minute's candle accepted", c2 is not None and c2[0] == 2060 and c2[5] == 34)
+
+with open(engine.MT5_FEED_FILE, "w") as f:
+    f.write("corrupted")
+check("H: corrupt feed file -> None (no crash)", eng_h.read_mt5_feed() is None)
+check("H: no rates -> None", engine.latest_closed_candle_ts(None) is None)
+check("H: empty rates -> None", engine.latest_closed_candle_ts([]) is None)
+shutil.rmtree(tmp_h, ignore_errors=True)
 
 print()
 if FAILURES:

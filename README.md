@@ -38,6 +38,26 @@ Production files live at `/opt/gold/` (paths hardcoded in `engine.py` /
 On restart the engine auto-migrates `trades.csv` if needed (keeps a
 `.bak-pre-migration` backup) and resyncs `status.json`.
 
+## 📡 Forward-test data source
+
+Default is the **Twelve Data WebSocket** (`TWELVE_DATA_API_KEY`). The free plan's
+WebSocket access is a *trial* allotment — when it expires the endpoint accepts
+the handshake and immediately closes the connection, so the log silently stops.
+Check the plan/WS status at [api.twelvedata.com](https://api.twelvedata.com) if
+`forward_test_log.csv` stops growing.
+
+Alternative: `DATA_SOURCE=MT5` in `.env` sources closed M1 GOLD candles from the
+local Wine MT5 terminal (broker feed, no plan limits). Architecture: the Linux
+engine never imports `MetaTrader5` (the package has no Linux wheels) — instead a
+small sidecar `tools/mt5_feed.py` runs under the Wine Python in the same prefix
+as the terminal (the same pattern as the `mt5-balance` shell alias:
+`WINEPREFIX=~/.mt5 xvfb-run wine C:/Python312/python.exe ...`) and publishes the
+latest closed candle to `/opt/gold/mt5_last_candle.json`, which the engine reads.
+Run the sidecar as a service: `sudo cp deploy/mt5feed.service /etc/systemd/system/
+&& sudo systemctl daemon-reload && sudo systemctl enable --now mt5feed`.
+Trading stays simulated either way. The engine auto-reconnects stale feeds and
+alerts on Telegram (10-min silence threshold, muted during the daily break).
+
 ## 🆕 Starting a new session / handing off to a new agent
 
 Read, in this order:

@@ -20,6 +20,13 @@ TRADING_MODE = "FORWARD_TEST"
 
 load_dotenv(dotenv_path="/opt/gold/.env")
 
+# Data source for FORWARD_TEST mode: "TWELVEDATA" (WebSocket, default) or
+# "MT5" (local Wine MT5 terminal - broker feed, no API plan limits).
+# Set DATA_SOURCE=MT5 in /opt/gold/.env to switch (the MT5 terminal must be
+# running and logged in; see archive/wine_mt5_setup.md). Trading stays
+# simulated either way.
+DATA_SOURCE = (os.getenv("DATA_SOURCE") or "TWELVEDATA").strip().upper()
+
 TWELVE_DATA_KEY = os.getenv("TWELVE_DATA_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -42,6 +49,10 @@ RSI_MIN = 30.0
 RSI_MAX = 68.0
 MIN_ATR = 1.10
 
+# --- Stale feed guard (silent Twelve Data WebSocket stalls, 2026-09-10) ---
+STALE_FEED_SECONDS = 10 * 60            # force reconnect if no price event this long
+STALE_ALERT_COOLDOWN_SECONDS = 30 * 60  # Telegram alert at most this often
+
 # --- Regime gates (EMA Slope & Distance from Mean) ---
 REQUIRE_EMA_SLOPE = True       # EMA50 slope direction filter
 EMA_SLOPE_LOOKBACK = 30        # Compare EMA50 vs N candles ago
@@ -53,6 +64,10 @@ MAGIC_NUMBER = 987654
 
 LOG_FILE_PATH = "/opt/gold/forward_test_log.csv"
 STATUS_FILE_PATH = "/opt/gold/status.json"
+# DATA_SOURCE=MT5: the Wine sidecar (tools/mt5_feed.py) publishes the latest
+# closed M1 candle here; the engine reads this file instead of importing
+# MetaTrader5 (no Linux wheels exist for that package).
+MT5_FEED_FILE = os.getenv("MT5_FEED_FILE", "/opt/gold/mt5_last_candle.json")
 TRADES_LOG_PATH = "/opt/gold/trades.csv"
 
 # Canonical trades.csv schema (what log_trade() writes). Trade_Type was added
@@ -132,6 +147,29 @@ def utc_now_str() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def is_market_quiet(now_utc: datetime = None) -> bool:
+    """True during hours where no price ticks are expected.
+
+    Gold spot trades roughly 02:00-21:00 UTC Mon-Fri; the broker daily break
+    observed in our price log runs ~21:15-01:41 UTC. Outside that window (and
+    all weekend) a silent feed is normal, so the stale-feed guard reconnects
+    quietly instead of alerting.
+    """
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    if now_utc.weekday() >= 5:  # Saturday/Sunday
+        return True
+    return now_utc.hour >= 21 or now_utc.hour < 2
+
+
+def latest_closed_candle_ts(rates):
+    """Timestamp of the most recent closed M1 candle from mt5.copy_rates_*
+    results (position 1), or None if no data was returned."""
+    if rates is None or len(rates) == 0:
+        return None
+    return int(rates[0]["time"])
+
+
 if TRADING_MODE == "LIVE":
     import MetaTrader5 as mt5
 else:
@@ -187,6 +225,10 @@ class GoldEngine:
         self.warmup_logged = False
         self.candles_evaluated = 0
 
+        # Stale-feed guard state (see run_forward_test)
+        self._last_price_mono = None
+        self._last_stale_alert_mono = None
+
         # Buy Funnel Counters
         self.hit_tested_floor = 0
         self.hit_valid_rejection = 0
@@ -213,6 +255,18 @@ class GoldEngine:
             account = mt5.account_info()
             print(f"Connected to MT5 | Account: {account.login} | Balance: {account.balance} {account.currency}")
             mt5.symbol_select(SYMBOL, True)
+        elif DATA_SOURCE == "MT5":
+            # Simulated trading, but real broker data: the Wine sidecar
+            # (tools/mt5_feed.py, same pattern as the mt5-balance alias)
+            # publishes closed M1 candles to MT5_FEED_FILE.
+            if os.path.isfile(MT5_FEED_FILE):
+                print(f"MT5 feed file found: {MT5_FEED_FILE}")
+            else:
+                print(f"NOTE: {MT5_FEED_FILE} not found yet - is the mt5feed sidecar running? "
+                      f"(WINEPREFIX=~/.mt5 xvfb-run wine C:/Python312/python.exe "
+                      f"Z:/opt/gold/tools/mt5_feed.py)")
+            self.load_history_from_csv()
+            self.save_status()
         else:
             self.load_history_from_csv()
             self.save_status()
@@ -483,6 +537,26 @@ class GoldEngine:
             )
         except Exception as e:
             print(f"Telegram failed: {e}")
+
+    def feed_stale_seconds(self, now_mono: float = None) -> float:
+        """Seconds since the last price event (0.0 while the feed is fresh)."""
+        if self._last_price_mono is None:
+            return 0.0
+        if now_mono is None:
+            now_mono = time.monotonic()
+        return max(0.0, now_mono - self._last_price_mono)
+
+    def maybe_alert_stale_feed(self, stale_seconds: float) -> bool:
+        """Rate-limited Telegram alert for a stalled feed. True if it alerted."""
+        if self._last_stale_alert_mono is not None and \
+                time.monotonic() - self._last_stale_alert_mono < STALE_ALERT_COOLDOWN_SECONDS:
+            return False
+        self._last_stale_alert_mono = time.monotonic()
+        self.send_telegram(
+            f"⚠️ gold engine: no price ticks for {stale_seconds / 60:.0f} min — "
+            f"stale-feed guard forced a WebSocket reconnect"
+        )
+        return True
 
     def log_candle(self, timestamp, o, h, l, c, ratio, tick_count, vol_ma, dynamic_floor, ema_f, ema_s, tested, rejected, held, vol_conf, trend_conf, rsi_val, atr_val):
         file_exists = os.path.isfile(LOG_FILE_PATH)
@@ -932,6 +1006,7 @@ class GoldEngine:
 
     def on_event(self, event):
         if event.get("event") == "price":
+            self._last_price_mono = time.monotonic()
             price = float(event["price"])
             self.check_position(price)
             self.aggregate_tick(price)
@@ -971,22 +1046,125 @@ class GoldEngine:
                 print(f"\nError: {e}")
                 time.sleep(10)
 
+    def read_mt5_feed(self):
+        """Read the latest closed M1 candle published by tools/mt5_feed.py
+        (Wine sidecar), normalized to the mt5 rate-dict shape, or None if the
+        file is missing/unreadable."""
+        try:
+            with open(MT5_FEED_FILE) as f:
+                d = json.load(f)
+            return [{
+                "time": int(d["ts"]),
+                "open": float(d["open"]),
+                "high": float(d["high"]),
+                "low": float(d["low"]),
+                "close": float(d["close"]),
+                "tick_volume": int(d["tick_volume"]),
+            }]
+        except Exception:
+            return None
+
+    def mt5_next_candle(self, rates, last_ts):
+        """Return (ts, o, h, l, c, tick_volume) if `rates` holds a closed M1
+        candle newer than last_ts, else None. Dedup guard: a restart must
+        never re-log the candle the previous session already wrote."""
+        ts = latest_closed_candle_ts(rates)
+        if ts is None or ts <= last_ts:
+            return None
+        r = rates[0]
+        return (ts, float(r["open"]), float(r["high"]), float(r["low"]),
+                float(r["close"]), int(r["tick_volume"]))
+
+    def run_mt5_test(self):
+        """Forward test fed by the Wine MT5 sidecar's closed M1 candles.
+
+        Same strategy/risk code as run_forward_test(), but the data source is
+        the broker feed (tools/mt5_feed.py publishes MT5_FEED_FILE, immune to
+        Twelve Data plan / WS-trial limits). One candle row per closed minute,
+        deduplicated by candle timestamp.
+        """
+        print("Gold Engine FORWARD TEST (MT5 feed) starting...")
+        last_ts = 0
+        if os.path.isfile(LOG_FILE_PATH):
+            try:
+                with open(LOG_FILE_PATH) as f:
+                    for line in f:
+                        if line.strip():
+                            pass
+                ts_str = line.split(",")[0].strip()
+                last_ts = int(datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                              .replace(tzinfo=timezone.utc).timestamp())
+            except Exception:
+                last_ts = 0
+        try:
+            while True:
+                rates = self.read_mt5_feed()
+
+                if rates is not None and len(rates) > 0:
+                    candle = self.mt5_next_candle(rates, last_ts)
+                    if candle is None:
+                        time.sleep(5)  # same closed candle - wait for next minute
+                        continue
+                    ts, o, h, l, c, vol = candle
+                    last_ts = ts
+                    self._last_price_mono = time.monotonic()
+                    try:
+                        self.evaluate_candle(o, h, l, c, vol)
+                    except Exception as e:
+                        print(f"\nError evaluating candle @ {ts}: {e}", flush=True)
+                    if ts % 3600 == 0:
+                        print(f"Heartbeat: candle @ "
+                              f"{datetime.fromtimestamp(ts, tz=timezone.utc):%Y-%m-%d %H:%M} UTC "
+                              f"| close {c:.2f}", flush=True)
+                else:
+                    print(f"MT5: no feed in {MT5_FEED_FILE} - retrying in 5s "
+                          "(is the mt5feed sidecar running? terminal logged in?)", flush=True)
+                    time.sleep(5)
+                    continue
+
+                # Stale-feed guard (same as run_forward_test): feed went quiet
+                # (sidecar crashed / terminal logged out) -> alert. The sidecar
+                # is a separate service: systemctl restart mt5feed.
+                stale = self.feed_stale_seconds()
+                if stale > STALE_FEED_SECONDS:
+                    print(f"\nStale MT5 feed: no closed candles for {stale:.0f}s - "
+                          f"check the mt5feed sidecar (systemctl restart mt5feed)", flush=True)
+                    if not is_market_quiet():
+                        self.maybe_alert_stale_feed(stale)
+                time.sleep(5)
+        except KeyboardInterrupt:
+            print("\nShutting down...")
+
     def run_forward_test(self):
         print("Gold Engine FORWARD TEST starting...")
         if not TWELVE_DATA_KEY:
             print("TWELVE_DATA_API_KEY missing")
             sys.exit(1)
         while True:
+            ws = None
             try:
                 td = TDClient(apikey=TWELVE_DATA_KEY)
                 ws = td.websocket(on_event=self.on_event)
                 ws.subscribe(["XAU/USD"])
                 ws.connect()
                 print("Connected to Twelve Data\n")
+                self._last_price_mono = time.monotonic()
                 while True:
                     try:
                         ws.heartbeat()
                         time.sleep(15)
+                        # Stale-feed guard: a silently-dead WebSocket delivers no
+                        # price events and heartbeat() never raises, so without
+                        # this the engine idles forever collecting nothing
+                        # (2026-09-10: 00:47 and 02:05 UTC stalls, 2.5h+ of lost
+                        # data, zero alerts). Force a reconnect if the feed is
+                        # quiet beyond STALE_FEED_SECONDS.
+                        stale = self.feed_stale_seconds()
+                        if stale > STALE_FEED_SECONDS:
+                            print(f"\nStale feed: no price events for {stale:.0f}s - forcing reconnect")
+                            if not is_market_quiet():
+                                self.maybe_alert_stale_feed(stale)
+                            break
                     except Exception as e:
                         print(f"\nConnection issue: {e}")
                         print("Reconnecting in 10s...")
@@ -999,10 +1177,18 @@ class GoldEngine:
                 print(f"\nError: {e}")
                 print("Restarting in 15s...")
                 time.sleep(15)
+            finally:
+                if ws is not None:
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
 
     def run(self):
         if TRADING_MODE == "LIVE":
             self.run_live()
+        elif DATA_SOURCE == "MT5":
+            self.run_mt5_test()
         else:
             self.run_forward_test()
 
