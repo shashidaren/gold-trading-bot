@@ -42,6 +42,10 @@ RSI_MIN = 30.0
 RSI_MAX = 68.0
 MIN_ATR = 1.10
 
+# --- Stale feed guard (silent Twelve Data WebSocket stalls, 2026-09-10) ---
+STALE_FEED_SECONDS = 10 * 60            # force reconnect if no price event this long
+STALE_ALERT_COOLDOWN_SECONDS = 30 * 60  # Telegram alert at most this often
+
 # --- Regime gates (EMA Slope & Distance from Mean) ---
 REQUIRE_EMA_SLOPE = True       # EMA50 slope direction filter
 EMA_SLOPE_LOOKBACK = 30        # Compare EMA50 vs N candles ago
@@ -132,6 +136,21 @@ def utc_now_str() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def is_market_quiet(now_utc: datetime = None) -> bool:
+    """True during hours where no price ticks are expected.
+
+    Gold spot trades roughly 02:00-21:00 UTC Mon-Fri; the broker daily break
+    observed in our price log runs ~21:15-01:41 UTC. Outside that window (and
+    all weekend) a silent feed is normal, so the stale-feed guard reconnects
+    quietly instead of alerting.
+    """
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    if now_utc.weekday() >= 5:  # Saturday/Sunday
+        return True
+    return now_utc.hour >= 21 or now_utc.hour < 2
+
+
 if TRADING_MODE == "LIVE":
     import MetaTrader5 as mt5
 else:
@@ -186,6 +205,10 @@ class GoldEngine:
 
         self.warmup_logged = False
         self.candles_evaluated = 0
+
+        # Stale-feed guard state (see run_forward_test)
+        self._last_price_mono = None
+        self._last_stale_alert_mono = None
 
         # Buy Funnel Counters
         self.hit_tested_floor = 0
@@ -483,6 +506,26 @@ class GoldEngine:
             )
         except Exception as e:
             print(f"Telegram failed: {e}")
+
+    def feed_stale_seconds(self, now_mono: float = None) -> float:
+        """Seconds since the last price event (0.0 while the feed is fresh)."""
+        if self._last_price_mono is None:
+            return 0.0
+        if now_mono is None:
+            now_mono = time.monotonic()
+        return max(0.0, now_mono - self._last_price_mono)
+
+    def maybe_alert_stale_feed(self, stale_seconds: float) -> bool:
+        """Rate-limited Telegram alert for a stalled feed. True if it alerted."""
+        if self._last_stale_alert_mono is not None and \
+                time.monotonic() - self._last_stale_alert_mono < STALE_ALERT_COOLDOWN_SECONDS:
+            return False
+        self._last_stale_alert_mono = time.monotonic()
+        self.send_telegram(
+            f"⚠️ gold engine: no price ticks for {stale_seconds / 60:.0f} min — "
+            f"stale-feed guard forced a WebSocket reconnect"
+        )
+        return True
 
     def log_candle(self, timestamp, o, h, l, c, ratio, tick_count, vol_ma, dynamic_floor, ema_f, ema_s, tested, rejected, held, vol_conf, trend_conf, rsi_val, atr_val):
         file_exists = os.path.isfile(LOG_FILE_PATH)
@@ -932,6 +975,7 @@ class GoldEngine:
 
     def on_event(self, event):
         if event.get("event") == "price":
+            self._last_price_mono = time.monotonic()
             price = float(event["price"])
             self.check_position(price)
             self.aggregate_tick(price)
@@ -977,16 +1021,30 @@ class GoldEngine:
             print("TWELVE_DATA_API_KEY missing")
             sys.exit(1)
         while True:
+            ws = None
             try:
                 td = TDClient(apikey=TWELVE_DATA_KEY)
                 ws = td.websocket(on_event=self.on_event)
                 ws.subscribe(["XAU/USD"])
                 ws.connect()
                 print("Connected to Twelve Data\n")
+                self._last_price_mono = time.monotonic()
                 while True:
                     try:
                         ws.heartbeat()
                         time.sleep(15)
+                        # Stale-feed guard: a silently-dead WebSocket delivers no
+                        # price events and heartbeat() never raises, so without
+                        # this the engine idles forever collecting nothing
+                        # (2026-09-10: 00:47 and 02:05 UTC stalls, 2.5h+ of lost
+                        # data, zero alerts). Force a reconnect if the feed is
+                        # quiet beyond STALE_FEED_SECONDS.
+                        stale = self.feed_stale_seconds()
+                        if stale > STALE_FEED_SECONDS:
+                            print(f"\nStale feed: no price events for {stale:.0f}s - forcing reconnect")
+                            if not is_market_quiet():
+                                self.maybe_alert_stale_feed(stale)
+                            break
                     except Exception as e:
                         print(f"\nConnection issue: {e}")
                         print("Reconnecting in 10s...")
@@ -999,6 +1057,12 @@ class GoldEngine:
                 print(f"\nError: {e}")
                 print("Restarting in 15s...")
                 time.sleep(15)
+            finally:
+                if ws is not None:
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
 
     def run(self):
         if TRADING_MODE == "LIVE":

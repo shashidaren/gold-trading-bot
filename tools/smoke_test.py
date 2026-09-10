@@ -14,6 +14,8 @@ Scenarios:
   E) Restart from log                             -> EMA50 history seeds properly
   F) trades.csv schema drift (2026-09-10 incident) -> engine MUST auto-migrate and
      restore correct risk-gate counting for SELL trades
+  G) stale-feed guard (2026-09-10 silent WebSocket stall) -> MUST detect a quiet
+     feed, classify market-quiet hours, and rate-limit Telegram alerts
 
 Usage: python3 tools/smoke_test.py
 """
@@ -23,6 +25,7 @@ import json
 import csv
 import shutil
 import tempfile
+import time
 import types
 from datetime import datetime, timezone, timedelta
 
@@ -251,6 +254,39 @@ check("F: daily SL count sees the SELL SL after migration", cnt_after == 1, f"da
 check("F: re-migration is a no-op", engine.migrate_trades_csv(engine.TRADES_LOG_PATH) is False)
 check("F: backup kept", os.path.exists(engine.TRADES_LOG_PATH + ".bak-pre-migration"))
 shutil.rmtree(tmp_f, ignore_errors=True)
+
+
+# --- Scenario G ---
+print("\nScenario G: stale-feed guard (silent WebSocket stall)")
+tmp_g = tempfile.mkdtemp(prefix="gold_smoke_g_")
+engine.LOG_FILE_PATH = os.path.join(tmp_g, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_g, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_g, "trades.csv")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_g, "skipped_trades.csv")
+
+eng_g = engine.GoldEngine()
+
+# fresh feed -> not stale
+eng_g._last_price_mono = time.monotonic()
+check("G: fresh feed not stale", eng_g.feed_stale_seconds() < 1.0, f"{eng_g.feed_stale_seconds():.2f}s")
+
+# 11 min without ticks -> stale
+eng_g._last_price_mono = time.monotonic() - (engine.STALE_FEED_SECONDS + 60)
+stale = eng_g.feed_stale_seconds()
+check("G: 11-min gap detected as stale", stale > engine.STALE_FEED_SECONDS, f"{stale:.0f}s")
+
+# quiet-hours classification (no weekend/break alert spam)
+check("G: Saturday 12:00 UTC is quiet", engine.is_market_quiet(datetime(2026, 9, 12, 12, 0, tzinfo=timezone.utc)))
+check("G: Friday 23:00 UTC is quiet (daily break)", engine.is_market_quiet(datetime(2026, 9, 11, 23, 0, tzinfo=timezone.utc)))
+check("G: Thursday 01:30 UTC is quiet (daily break)", engine.is_market_quiet(datetime(2026, 9, 10, 1, 30, tzinfo=timezone.utc)))
+check("G: Thursday 12:00 UTC is NOT quiet", not engine.is_market_quiet(datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)))
+
+# alert rate-limit: first alert fires, immediate second is suppressed
+first = eng_g.maybe_alert_stale_feed(stale)
+second = eng_g.maybe_alert_stale_feed(stale)
+check("G: stale alert fires once, then rate-limited", first is True and second is False)
+shutil.rmtree(tmp_g, ignore_errors=True)
 
 print()
 if FAILURES:
