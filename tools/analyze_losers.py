@@ -3,6 +3,11 @@
 Losing-trade analysis: replay every trade's 1-min bar path to find
 why winners win and losers lose, and test counterfactual exits/filters.
 Read-only: writes nothing to the CSVs.
+
+BE-era note (ratchet live 2026-09-10 ~12:34 UTC): BE rows log the RATCHETED
+stop (Stop_Loss == Entry_Price), so the original 2xATR risk geometry is
+reconstructed from ATR_At_Entry wherever R-multiples are needed. BE
+scratches are reported as a neutral third outcome, never lumped with losses.
 """
 import csv, statistics
 from datetime import datetime, timedelta
@@ -11,18 +16,31 @@ def load_trades():
     rows = []
     with open("trades.csv", newline="") as f:
         for r in csv.DictReader(f):
+            side = r["Trade_Type"]
+            entry = float(r["Entry_Price"])
+            reason = r["Exit_Reason"]
+            atr = float(r["ATR_At_Entry"])
+            sl = float(r["Stop_Loss"])
+            tp = float(r["Take_Profit"])
+            if reason == "BE":
+                # Logged SL is the ratcheted stop (= entry). Reconstruct the
+                # original 2xATR/3xATR geometry for R math.
+                if side == "BUY":
+                    sl, tp = entry - 2 * atr, entry + 3 * atr
+                else:
+                    sl, tp = entry + 2 * atr, entry - 3 * atr
             rows.append({
-                "type": r["Trade_Type"],
+                "type": side,
                 "entry_t": datetime.strptime(r["Entry_Time"], "%Y-%m-%d %H:%M:%S"),
                 "exit_t": datetime.strptime(r["Exit_Time"], "%Y-%m-%d %H:%M:%S"),
-                "entry": float(r["Entry_Price"]),
-                "sl": float(r["Stop_Loss"]),
-                "tp": float(r["Take_Profit"]),
+                "entry": entry,
+                "sl": sl,
+                "tp": tp,
                 "exit_p": float(r["Exit_Price"]),
-                "reason": r["Exit_Reason"],
+                "reason": reason,
                 "profit": float(r["Profit"]),
                 "rsi": float(r["RSI_At_Entry"]),
-                "atr": float(r["ATR_At_Entry"]),
+                "atr": atr,
                 "wick": float(r["Wick_Ratio_At_Entry"].replace("%", "")),
                 "ema50": float(r["EMA50_At_Entry"]),
                 "ema200": float(r["EMA200_At_Entry"]),
@@ -51,10 +69,13 @@ print(f"Loaded {len(trades)} trades, {len(bars)} 1-min bars "
 # ---------- 1. Baseline stats ----------
 wins  = [t for t in trades if t["reason"] == "TP"]
 losses = [t for t in trades if t["reason"] == "SL"]
+bes   = [t for t in trades if t["reason"] == "BE"]
 gross_w = sum(t["profit"] for t in wins)
 gross_l = sum(t["profit"] for t in losses)
-print(f"== BASELINE ==  Trades: {len(trades)}  W: {len(wins)}  L: {len(losses)}")
-print(f"Win rate: {len(wins)/len(trades)*100:.1f}%   Net P/L: {gross_w+gross_l:+.2f} "
+dec = wins + losses
+print(f"== BASELINE ==  Trades: {len(trades)}  W: {len(wins)}  L: {len(losses)}  BE: {len(bes)}")
+print(f"Win rate: {len(wins)/len(dec)*100:.1f}% decisive ({len(wins)}/{len(dec)}), "
+      f"{len(wins)/len(trades)*100:.1f}% all-in   Net P/L: {gross_w+gross_l:+.2f} "
       f"(+{gross_w:.2f} / {gross_l:.2f})")
 avg_rr = statistics.mean((t['tp']-t['entry'])/(t['entry']-t['sl']) if t['type']=='BUY'
                          else (t['entry']-t['tp'])/(t['sl']-t['entry']) for t in trades)
@@ -62,7 +83,7 @@ avg_risk = statistics.mean(abs(t['entry']-t['sl']) for t in trades)
 avg_reward = statistics.mean(abs(t['tp']-t['entry']) for t in trades)
 print(f"Avg risk/trade: ${avg_risk:.2f}  Avg TP distance: ${avg_reward:.2f}  "
       f"Avg planned R:R = 1:{avg_rr:.2f}")
-print(f"Breakeven win rate at 1:1.5 R:R = 40.0%  -> actual {len(wins)/len(trades)*100:.1f}% is way below\n")
+print(f"Breakeven win rate at 1:1.5 R:R = 40.0% (decisive)  -> actual {len(wins)/len(dec)*100:.1f}% is way below\n")
 
 # ---------- 2. Replay trades on 1-min bars: MAE / MFE ----------
 def replay(t):
@@ -100,6 +121,7 @@ for th in thresh:
 print()
 # Winners' MAE = how much heat winners take
 win_re = [t for t in wins if "mfe_R" in t]
+be_re = [t for t in bes if "mfe_R" in t]
 if win_re:
     print(f"  Winners: avg MAE {statistics.mean(t['mae_R'] for t in win_re):.2f}R "
           f"| avg MFE {statistics.mean(t['mfe_R'] for t in win_re):.2f}R")
@@ -107,6 +129,10 @@ if los_re:
     print(f"  Losers : avg MAE {statistics.mean(t['mae_R'] for t in los_re):.2f}R "
           f"| avg MFE {statistics.mean(t['mfe_R'] for t in los_re):.2f}R  "
           f"<- losers DO move our way first\n")
+if be_re:
+    print(f"  BE     : avg MAE {statistics.mean(t['mae_R'] for t in be_re):.2f}R "
+          f"| avg MFE {statistics.mean(t['mfe_R'] for t in be_re):.2f}R  "
+          f"<- scratches arm (+0.30R) then return to entry\n")
 
 # ---------- 4. Counterfactual take-profit levels ----------
 print("== COUNTERFACTUAL: what if TP were closer? (replay, TP vs SL first) ==")
@@ -118,6 +144,7 @@ def simulate(tp_mult_r, trail_be_at=None):
         if "mfe_R" not in t:
             # no bars -> keep original outcome
             if t["reason"] == "TP": w += 1; pnl += t["profit"]
+            elif t["reason"] == "BE": be += 1; pnl += t["profit"]
             else: l += 1; pnl += t["profit"]
             continue
         mfe_r = t["mfe_R"]; mae_r = t["mae_R"]
@@ -149,10 +176,13 @@ for be_trig in [0.33, 0.5, 0.66, 0.75]:
 print()
 
 # ---------- 5. Feature comparison ----------
-print("== ENTRY FEATURES: winners vs losers ==")
+print("== ENTRY FEATURES: winners vs losers vs BE ==")
 def feat(name, fn):
-    ws = [fn(t) for t in wins]; ls = [fn(t) for t in losses]
-    print(f"  {name:28s} W avg {statistics.mean(ws):8.2f}   L avg {statistics.mean(ls):8.2f}")
+    ws = [fn(t) for t in wins]; ls = [fn(t) for t in losses]; bs = [fn(t) for t in bes]
+    line = f"  {name:28s} W avg {statistics.mean(ws):8.2f}   L avg {statistics.mean(ls):8.2f}"
+    if bs:
+        line += f"   BE avg {statistics.mean(bs):8.2f}"
+    print(line)
 feat("RSI at entry", lambda t: t["rsi"])
 feat("ATR at entry", lambda t: t["atr"])
 feat("Wick ratio %", lambda t: t["wick"])
@@ -165,15 +195,18 @@ print()
 # ---------- 6. Time-of-day analysis ----------
 print("== TIME OF DAY (UTC) ==")
 from collections import defaultdict
-by_hour = defaultdict(lambda: [0, 0])
+by_hour = defaultdict(lambda: [0, 0, 0])  # W, L, BE
 for t in trades:
     h = t["entry_t"].hour
     if t["reason"] == "TP": by_hour[h][0] += 1
+    elif t["reason"] == "BE": by_hour[h][2] += 1
     else: by_hour[h][1] += 1
 for h in sorted(by_hour):
-    w_, l_ = by_hour[h]
-    bar = "#" * w_ + "-" * l_
-    print(f"  {h:02d}:00  W{w_} L{l_}  {bar}  ({w_/(w_+l_)*100:.0f}% win)")
+    w_, l_, b_ = by_hour[h]
+    bar = "#" * w_ + "-" * l_ + "=" * b_
+    dec_h = w_ + l_
+    wr = f"{w_/dec_h*100:.0f}% dec" if dec_h else "no decisive"
+    print(f"  {h:02d}:00  W{w_} L{l_} BE{b_}  {bar}  ({wr})")
 print()
 
 # ---------- 7. ATR buckets ----------
@@ -183,7 +216,10 @@ for lo, hi in buckets:
     ts = [t for t in trades if lo <= t["atr"] < hi]
     if not ts: continue
     w_ = sum(1 for t in ts if t["reason"] == "TP")
-    print(f"  ATR {lo:.1f}-{hi if hi<90 else 'up'}: {len(ts)} trades, {w_} wins ({w_/len(ts)*100:.0f}%)")
+    b_ = sum(1 for t in ts if t["reason"] == "BE")
+    l_ = len(ts) - w_ - b_
+    wr = f"{w_/(w_+l_)*100:.0f}% dec" if (w_ + l_) else "no decisive"
+    print(f"  ATR {lo:.1f}-{hi if hi<90 else 'up'}: {len(ts)} trades, W{w_}/L{l_}/BE{b_} ({wr})")
 print()
 
 # ---------- 8. RSI buckets ----------
@@ -192,20 +228,24 @@ for lo, hi in [(30, 45), (45, 55), (55, 62), (62, 70)]:
     ts = [t for t in trades if lo <= t["rsi"] < hi]
     if not ts: continue
     w_ = sum(1 for t in ts if t["reason"] == "TP")
-    print(f"  RSI {lo}-{hi}: {len(ts)} trades, {w_} wins ({w_/len(ts)*100:.0f}%)")
+    b_ = sum(1 for t in ts if t["reason"] == "BE")
+    l_ = len(ts) - w_ - b_
+    wr = f"{w_/(w_+l_)*100:.0f}% dec" if (w_ + l_) else "no decisive"
+    print(f"  RSI {lo}-{hi}: {len(ts)} trades, W{w_}/L{l_}/BE{b_} ({wr})")
 print()
 
 # ---------- 9. Consecutive loss clusters & day analysis ----------
 print("== BY DAY ==")
-by_day = defaultdict(lambda: [0, 0, 0.0])
+by_day = defaultdict(lambda: [0, 0, 0, 0.0])  # W, L, BE, pnl
 for t in trades:
     d = t["entry_t"].date()
     if t["reason"] == "TP": by_day[d][0] += 1
+    elif t["reason"] == "BE": by_day[d][2] += 1
     else: by_day[d][1] += 1
-    by_day[d][2] += t["profit"]
+    by_day[d][3] += t["profit"]
 for d in sorted(by_day):
-    w_, l_, p = by_day[d]
-    print(f"  {d}: W{w_} L{l_}  P/L {p:+.2f}")
+    w_, l_, b_, p = by_day[d]
+    print(f"  {d}: W{w_} L{l_} BE{b_}  P/L {p:+.2f}")
 print()
 
 # ---------- 10. Filter ideas: what if we skipped trades with feature X ----------
@@ -214,14 +254,18 @@ def experiment(name, keep_fn):
     kept = [t for t in trades if keep_fn(t)]
     skipped = [t for t in trades if not keep_fn(t)]
     if not kept or not skipped: return
-    kw = sum(1 for t in kept if t["reason"] == "TP")
-    sw = sum(1 for t in skipped if t["reason"] == "TP")
-    kp = sum(t["profit"] for t in kept); sp = sum(t["profit"] for t in skipped)
-    print(f"  {name:46s} keep {len(kept):2d} ({kw/len(kept)*100:4.0f}%W, {kp:+7.2f}) "
-          f"| skipped {len(skipped):2d} ({sw/len(skipped)*100:4.0f}%W, {sp:+7.2f})")
+    def stats(ts):
+        w = sum(1 for t in ts if t["reason"] == "TP")
+        b = sum(1 for t in ts if t["reason"] == "BE")
+        l = len(ts) - w - b
+        dec = w + l
+        wr = w / dec * 100 if dec else 0
+        return f"{len(ts):2d} ({wr:4.0f}%W dec, {sum(t['profit'] for t in ts):+7.2f})"
+    print(f"  {name:46s} keep {stats(kept)} | skipped {stats(skipped)}")
 
 experiment("RSI <= 60 (skip momentum-chasing)", lambda t: t["rsi"] <= 60)
 experiment("RSI between 40-60", lambda t: 40 <= t["rsi"] <= 60)
+experiment("RSI >= 45 (skip weak-hand entries)", lambda t: t["rsi"] >= 45)
 experiment("ATR <= 1.8 (skip high vol)", lambda t: t["atr"] <= 1.8)
 experiment("ATR between 1.1-1.6", lambda t: 1.1 <= t["atr"] <= 1.6)
 experiment("EMA gap >= 8 (strong trend only)", lambda t: abs(t["ema50"]-t["ema200"]) >= 8)
