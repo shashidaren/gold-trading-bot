@@ -9,7 +9,8 @@ Paste this file at the start of a new session:
 - **PR #7 MERGED** (2026-09-10 12:33 UTC): BE ratchet + direction-aware London
   blackout + trend-side daily breaker are on `main` and **live since the
   ~12:34 UTC engine restart** (15 new-regime trades so far: 0W/2L/13BE).
-  Work branch: `arena/01a08d75-gold-trading-bot` → PR to `main` (see below).
+  Work branch: `arena/01a08d75-gold-trading-bot` → **PR #8** (PM review +
+  BE-aware tooling; merge → pull on the box; engine restart NOT required).
 - Live bot runs from `/opt/gold` via systemd (`goldbot.service` =
   engine, `mt5feed.service` = price-feed sidecar, see §3). Deploy = merge
   PR → pull on the box → `sudo systemctl restart goldbot`. Restarts are
