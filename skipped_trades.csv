@@ -79,3 +79,20 @@ Timestamp,Reason,Price,ATR
 2026-09-10 08:22:08,Blackout: London Open & Early Session Kill-Zone,4405.65,1.42
 2026-09-10 08:24:04,Blackout: London Open & Early Session Kill-Zone,4406.68,1.46
 2026-09-10 08:53:05,Blackout: London Open & Early Session Kill-Zone,4396.63,2.07
+2026-09-10 12:09:07,SL Cooldown: 18 min remaining (2 consecutive SLs -> 60m cooldown),4373.64,3.32
+2026-09-10 12:10:08,SL Cooldown: 17 min remaining (2 consecutive SLs -> 60m cooldown),4372.03,3.33
+2026-09-10 12:13:09,SL Cooldown: 14 min remaining (2 consecutive SLs -> 60m cooldown),4374.01,3.17
+2026-09-10 12:31:05,Blackout: NY Early Pre-Market,4359.81,3.71
+2026-09-10 12:55:06,ATR too high - News volatility (5.81 > 4.5),4343.17,5.81
+2026-09-10 13:01:07,ATR too high - News volatility (5.09 > 4.5),4342.88,5.09
+2026-09-10 13:05:03,ATR too high - News volatility (5.24 > 4.5),4350.85,5.24
+2026-09-10 13:06:04,ATR too high - News volatility (5.22 > 4.5),4348.44,5.22
+2026-09-10 13:07:05,ATR too high - News volatility (5.06 > 4.5),4347.53,5.06
+2026-09-10 13:08:06,ATR too high - News volatility (5.25 > 4.5),4347.19,5.25
+2026-09-10 13:09:06,ATR too high - News volatility (5.24 > 4.5),4348.56,5.24
+2026-09-10 13:10:07,ATR too high - News volatility (5.29 > 4.5),4347.17,5.29
+2026-09-10 13:11:03,ATR too high - News volatility (5.30 > 4.5),4348.62,5.30
+2026-09-10 13:13:04,ATR too high - News volatility (5.27 > 4.5),4345.56,5.27
+2026-09-10 13:14:05,ATR too high - News volatility (5.15 > 4.5),4346.27,5.15
+2026-09-10 13:15:06,ATR too high - News volatility (4.90 > 4.5),4343.66,4.90
+2026-09-10 14:54:07,Blackout: NY Open & US High-Impact Macro Releases,4360.74,3.19
