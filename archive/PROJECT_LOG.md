@@ -33,6 +33,10 @@ For a BUY signal to trigger, ALL of the following must be true:
 - **Blackouts (UTC)**: London Open (07:55-08:15), NY Open (12:25-12:45), NY Volatility (13:55-14:15).
 
 ## 📝 Changelog & Recent Fixes
+- **[2026-09-10 post-review]** trades.csv schema-drift fix + learning tooling (see `docs/REVIEW-2026-09-10.md`):
+  - **Critical**: SELL rows were appended under the pre-SELL 15-field header, misaligning every field (`Exit_Reason` read as a price) and silently disabling the daily-loss breaker, cooldowns and stat reload for SELL trades. `engine.migrate_trades_csv()` now self-heals the file on startup and before every append (backup kept); `trade_filter` has a loud drift tripwire; repo data migrated (raw copy: `archive/trades.csv.bak.20260910_pre_schema_fix`).
+  - **New tools**: `tools/check_data.py` (integrity gate: schema/ledger/gaps/cross-file), `tools/phantom_trades.py` (replays blocked skip-log signals as phantom trades — reconstruction validated 99–100% vs logged indicators), `tools/validate_gates.py` now direction-aware (SELL mirrors, both schemas).
+  - `tools/smoke_test.py` Scenario F: regression test reproducing the drift incident.
 - **[2026-09-10]** Bidirectional Trading + Capital Protection Upgrade:
   - **Added Short-Selling (SELL) Funnel**: Symmetric Bearish setup when `EMA50 < EMA200`, testing 20-bar ceiling, upper-wick rejection $\ge 38\%$, holding resistance, falling EMA50 slope, and close near EMA50.
   - **Added Daily Loss Circuit Breaker (`MAX_DAILY_LOSSES = 3`)**: Automatically halts trading for the rest of the UTC day upon reaching 3 Stop Losses to prevent drawdown spirals during trend days / chop.

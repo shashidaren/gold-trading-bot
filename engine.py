@@ -4,6 +4,7 @@ import csv
 import json
 import time
 import sys
+import shutil
 import requests
 from collections import deque
 from datetime import datetime, timezone
@@ -53,6 +54,77 @@ MAGIC_NUMBER = 987654
 LOG_FILE_PATH = "/opt/gold/forward_test_log.csv"
 STATUS_FILE_PATH = "/opt/gold/status.json"
 TRADES_LOG_PATH = "/opt/gold/trades.csv"
+
+# Canonical trades.csv schema (what log_trade() writes). Trade_Type was added
+# when SELL support went live (2026-09-09); older rows/files have 15 fields.
+TRADES_FIELDNAMES = [
+    "Trade_Num", "Trade_Type", "Entry_Time", "Exit_Time", "Entry_Price", "Stop_Loss", "Take_Profit",
+    "Exit_Price", "Exit_Reason", "Profit", "Balance_After", "RSI_At_Entry",
+    "ATR_At_Entry", "Wick_Ratio_At_Entry", "EMA50_At_Entry", "EMA200_At_Entry",
+]
+
+
+def migrate_trades_csv(path: str = TRADES_LOG_PATH) -> bool:
+    """Self-heal trades.csv schema drift (2026-09-10 incident).
+
+    log_trade() writes 16-field rows (Trade_Type in position 2), but if the
+    file on disk still has the pre-SELL 15-field header, every appended row is
+    silently MISALIGNED with it: Exit_Reason reads as the exit price, Profit
+    reads as "SL"/"TP", Balance_After reads as the profit. Downstream readers
+    (engine stats reload, daily-loss circuit breaker, SL cooldowns) then
+    quietly stop counting those trades - the risk gates were effectively OFF
+    for SELL trade #41 on 2026-09-10.
+
+    This rewrites the file in place (backup kept next to it as
+    <path>.bak-pre-migration) so that:
+      - the header is the 16-field schema above
+      - old 15-field rows get Trade_Type="BUY" inserted (every pre-SELL trade was a buy)
+      - already-16-field rows are kept byte-for-byte
+    Returns True if a migration was performed, False if already current.
+    """
+    if not os.path.isfile(path):
+        return False
+    try:
+        with open(path, newline="") as f:
+            raw = [r for r in csv.reader(f) if r]
+    except Exception as e:
+        print(f"WARNING: could not read {path} for schema check: {e}")
+        return False
+    if not raw:
+        return False
+
+    header = [h.strip() for h in raw[0]]
+    if header == TRADES_FIELDNAMES:
+        return False  # already current
+
+    migrated, odd = [], 0
+    for r in raw[1:]:
+        if len(r) == len(TRADES_FIELDNAMES):          # already new-schema row
+            migrated.append(r)
+        elif len(r) == len(TRADES_FIELDNAMES) - 1:    # pre-SELL row -> all buys
+            migrated.append([r[0], "BUY"] + r[1:])
+        else:
+            migrated.append(r)
+            odd += 1
+
+    backup = path + ".bak-pre-migration"
+    tmp = path + ".tmp-migration"
+    try:
+        shutil.copy2(path, backup)
+        with open(tmp, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(TRADES_FIELDNAMES)
+            w.writerows(migrated)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f"WARNING: trades.csv schema migration FAILED ({e}) - "
+              f"risk gates may miscount SELL trades until fixed!")
+        return False
+
+    print(f"WARNING: migrated {path} to the 16-field schema "
+          f"(Trade_Type column added; {len(raw) - 1} rows rewritten, "
+          f"{odd} unrecognisable). Backup saved to {backup}.")
+    return True
 
 
 def utc_now_str() -> str:
@@ -165,6 +237,9 @@ class GoldEngine:
             else:
                 print("No trades.csv found - starting fresh (balance $500)")
             return
+
+        # Self-heal schema drift (e.g. pre-SELL header + 16-field SELL rows)
+        migrate_trades_csv(TRADES_LOG_PATH)
 
         try:
             with open(TRADES_LOG_PATH, newline="") as f:
@@ -445,6 +520,11 @@ class GoldEngine:
 
     def log_trade(self, exit_price, exit_reason, profit):
         file_exists = os.path.isfile(TRADES_LOG_PATH)
+        if file_exists:
+            # Never append new-schema rows under an old-schema header
+            # (that misaligns every field and blinds the risk gates - see
+            # migrate_trades_csv). migrate_trades_csv is a no-op if current.
+            migrate_trades_csv(TRADES_LOG_PATH)
         with open(TRADES_LOG_PATH, mode="a", newline="") as f:
             writer = csv.DictWriter(
                 f,
