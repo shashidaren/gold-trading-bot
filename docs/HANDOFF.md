@@ -15,9 +15,7 @@ Paste this file at the start of a new session:
   - Engine equity ≈ $429.94 (true P&L from $500 ≈ −$94.77; known ledger drift +$24.71)
   - **New-regime trades (post-BE deploy) ≈ 18** (0W / 3L / 15BE)
 - Live bot runs from `/opt/gold` via systemd (`goldbot.service` =
-  engine, `mt5feed.service` = price-feed sidecar, see §3). Deploy = merge
-  → pull on the box → `sudo systemctl restart goldbot` only if engine/
-  trade_filter changed. Tooling/docs-only changes need no engine restart.
+  engine, `mt5feed.service` = price-feed sidecar).
 
 **Current stance:** Keep collecting live data. Do **not** change strategy
 parameters until ≥30 new-regime trades (ideally 100+ before treating as
@@ -56,12 +54,6 @@ How MT5 works (feed-only, trading stays simulated):
       --days 365 --timeframe M1 --out Z:/opt/gold/history_m1.csv
   ```
 - Remember: broker history ≠ live feed. Live forward-test remains the authority.
-
-Manual sidecar start (or use systemd):
-```bash
-export WINEPREFIX=~/.mt5 && xvfb-run --auto-servernum \
-  wine C:/Python312/python.exe Z:/opt/gold/tools/mt5_feed.py
-```
 
 Stale-feed guard still active. Feed price scale is the **broker demo GOLD
 feed** (~4.4k), not spot XAUUSD.
@@ -138,7 +130,42 @@ python3 tools/check_data.py          # expect "0 fail"
 
 `engine.py` · `trade_filter.py` · `trades.csv` · `forward_test_log.csv` ·
 `skipped_trades.csv` · `status.json` · `tools/` (analysis + `mt5_feed.py` +
-**`mt5_history_dump.py`**) · `docs/REVIEW-*.md` · `docs/HANDOFF.md`
+**`mt5_history_dump.py`** + `autosync.sh`) · `docs/REVIEW-*.md` · `docs/HANDOFF.md`
+
+---
+
+## 10. Autosync & deploy rhythm (single reference)
+
+**Cron (on the box):**
+```cron
+0 */3 * * * /opt/gold/tools/autosync.sh >> /var/log/gold_autosync.log 2>&1
+```
+
+**What autosync does every 3 hours:**
+1. Commits any new live data (`trades.csv`, `forward_test_log.csv`,
+   `skipped_trades.csv`, `status.json`) and pushes to `origin/main`.
+2. If `origin/main` has moved (new code/docs from a session):
+   - Stops the engine **only if** `engine.py` or `trade_filter.py` changed
+   - Merges (data files = server wins, everything else = remote wins)
+   - Runs `tools/smoke_test.py` — automatic rollback on failure
+   - Restarts the engine (and dashboard if needed)
+   - Verifies `status.json` is fresh
+3. Runs `tools/check_data.py`
+4. Sends a short Telegram digest
+
+**Working agreement:**
+- Code, tools, and docs changes are pushed to `main` from sessions.
+- The box picks them up automatically on the next autosync cycle (≤ 3 h).
+- No need for manual `git pull` or engine restarts in normal operation.
+- Only intervene when Telegram reports a problem (rollback, check_data fail,
+  engine not active, etc.).
+
+**Safety guarantees already in the script:**
+- `flock` prevents overlapping runs
+- Data is committed *before* any merge (rollback never loses trades)
+- Refuses to deploy if someone hand-edited code files on the server
+- Smoke-test gate + automatic rollback
+- `.env` is never committed
 
 ---
 
