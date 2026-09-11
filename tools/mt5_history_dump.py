@@ -11,12 +11,12 @@ Typical usage (from the Linux host):
   export WINEPREFIX=~/.mt5
   xvfb-run --auto-servernum \\
     wine C:/Python312/python.exe Z:/opt/gold/tools/mt5_history_dump.py \\
-      --days 365 --timeframe M1 --out Z:/opt/gold/history_m1.csv
+      --bars 50000 --timeframe M1 --out Z:/opt/gold/history_m1.csv
 
-Or shorter (last N bars):
+Or by days (approximate):
 
   wine C:/Python312/python.exe Z:/opt/gold/tools/mt5_history_dump.py \\
-      --bars 50000 --timeframe M1 --out Z:/opt/gold/history_m1.csv
+      --days 180 --timeframe M1 --out Z:/opt/gold/history_m1.csv
 
 Env overrides (same style as mt5_feed.py):
   MT5_FEED_SYMBOL   default GOLD
@@ -27,7 +27,7 @@ Notes
 - Broker historical data is useful for research speed but is NOT identical
   to the live feed the engine uses (spreads, gaps, exact candle formation).
   Always treat live forward-test results as the final authority.
-- Large requests can take a while; the script prints progress.
+- Prefer --bars over --days; copy_rates_from_pos is more reliable across brokers.
 - Output CSV columns: Timestamp,Open,High,Low,Close,TickVolume,Spread
 """
 from __future__ import annotations
@@ -58,9 +58,16 @@ TF_MAP = {
     "D1": mt5.TIMEFRAME_D1,
 }
 
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+# Rough bars-per-day for estimating --days → --bars
+BARS_PER_DAY = {
+    "M1": 1440,
+    "M5": 288,
+    "M15": 96,
+    "M30": 48,
+    "H1": 24,
+    "H4": 6,
+    "D1": 1,
+}
 
 
 def main() -> None:
@@ -82,13 +89,13 @@ def main() -> None:
         "--days",
         type=int,
         default=None,
-        help="How many calendar days back from now to request",
+        help="Approximate calendar days back (converted to bars). Prefer --bars.",
     )
     parser.add_argument(
         "--bars",
         type=int,
         default=None,
-        help="Alternative: request the last N bars (overrides --days)",
+        help="Request the last N bars (most reliable method)",
     )
     parser.add_argument(
         "--out", "-o",
@@ -103,36 +110,64 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if args.bars is None and args.days is None:
-        args.days = 365  # sensible default
+    # Decide how many bars to request
+    if args.bars is not None:
+        count = args.bars
+    elif args.days is not None:
+        count = args.days * BARS_PER_DAY.get(args.timeframe, 1440)
+        print(f"(Converted --days {args.days} → ~{count} bars for {args.timeframe})")
+    else:
+        count = 30 * BARS_PER_DAY.get(args.timeframe, 1440)  # default ~30 days
+        print(f"No --bars/--days given; defaulting to ~30 days ({count} bars)")
+
+    count = min(count, args.max_bars)
 
     if not mt5.initialize():
         print(f"mt5_history_dump: initialize failed: {mt5.last_error()}")
         print("(Is the MT5 terminal running and logged in under this Wine prefix?)")
         sys.exit(1)
 
+    # Helpful diagnostics
+    term = mt5.terminal_info()
+    if term:
+        print(f"Terminal connected: {term.connected}  |  company: {getattr(term, 'company', '?')}")
+
     if not mt5.symbol_select(args.symbol, True):
         print(f"mt5_history_dump: symbol_select({args.symbol}) failed: {mt5.last_error()}")
-        print("Check the exact symbol name in Market Watch (e.g. GOLD, GOLDm, XAUUSD).")
+        print("Trying to list some symbols that contain 'GOLD' or 'XAU'...")
+        symbols = mt5.symbols_get()
+        if symbols:
+            matches = [s.name for s in symbols if "GOLD" in s.name.upper() or "XAU" in s.name.upper()]
+            print("Candidates:", matches[:20] if matches else "(none found)")
         mt5.shutdown()
         sys.exit(1)
 
-    tf = TF_MAP[args.timeframe]
-    print(f"mt5_history_dump: symbol={args.symbol}  timeframe={args.timeframe}")
+    info = mt5.symbol_info(args.symbol)
+    if info:
+        print(f"Symbol OK: {args.symbol}  digits={info.digits}  point={info.point}  visible={info.visible}")
 
-    rates = None
-    if args.bars is not None:
-        count = min(args.bars, args.max_bars)
-        print(f"Requesting last {count} bars ...")
-        rates = mt5.copy_rates_from_pos(args.symbol, tf, 0, count)
-    else:
-        date_to = utc_now()
-        date_from = date_to - timedelta(days=args.days)
-        print(f"Requesting bars from {date_from.date()} to {date_to.date()} ...")
-        rates = mt5.copy_rates_range(args.symbol, tf, date_from, date_to)
+    tf = TF_MAP[args.timeframe]
+    print(f"mt5_history_dump: symbol={args.symbol}  timeframe={args.timeframe}  requesting {count} bars")
+
+    # Primary method: copy_rates_from_pos (most reliable across brokers)
+    rates = mt5.copy_rates_from_pos(args.symbol, tf, 0, count)
+
+    if rates is None or len(rates) == 0:
+        err = mt5.last_error()
+        print(f"copy_rates_from_pos failed: {err}")
+        print("Falling back to copy_rates_from with naive datetime...")
+
+        # Fallback: naive datetime (many MT5 builds dislike tz-aware)
+        date_from = datetime.utcnow() - timedelta(days=max(args.days or 30, 1))
+        rates = mt5.copy_rates_from(args.symbol, tf, date_from, count)
 
     if rates is None or len(rates) == 0:
         print(f"mt5_history_dump: no data returned: {mt5.last_error()}")
+        print("Possible causes:")
+        print("  - Symbol name mismatch (check Market Watch exact name)")
+        print("  - Broker does not provide that much history for this TF")
+        print("  - Terminal not fully logged in / history not synchronized")
+        print("Try a smaller request first, e.g. --bars 5000")
         mt5.shutdown()
         sys.exit(1)
 
@@ -142,7 +177,6 @@ def main() -> None:
 
     # Write CSV
     out_path = args.out
-    # Ensure directory exists (Wine paths are visible under the prefix)
     out_dir = os.path.dirname(out_path)
     if out_dir and not os.path.exists(out_dir):
         try:
@@ -156,23 +190,24 @@ def main() -> None:
             ["Timestamp", "Open", "High", "Low", "Close", "TickVolume", "Spread"]
         )
         for r in rates:
-            ts = datetime.fromtimestamp(r["time"], tz=timezone.utc).strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
+            ts = datetime.utcfromtimestamp(int(r["time"])).strftime("%Y-%m-%d %H:%M:%S")
+            spread = ""
+            if hasattr(r, "dtype") and "spread" in r.dtype.names:
+                spread = int(r["spread"])
             writer.writerow(
                 [
                     ts,
-                    f"{r['open']:.5f}".rstrip("0").rstrip("."),
-                    f"{r['high']:.5f}".rstrip("0").rstrip("."),
-                    f"{r['low']:.5f}".rstrip("0").rstrip("."),
-                    f"{r['close']:.5f}".rstrip("0").rstrip("."),
+                    f"{float(r['open']):.5f}".rstrip("0").rstrip("."),
+                    f"{float(r['high']):.5f}".rstrip("0").rstrip("."),
+                    f"{float(r['low']):.5f}".rstrip("0").rstrip("."),
+                    f"{float(r['close']):.5f}".rstrip("0").rstrip("."),
                     int(r["tick_volume"]),
-                    int(r["spread"]) if "spread" in r.dtype.names else "",
+                    spread,
                 ]
             )
 
-    first_ts = datetime.fromtimestamp(rates[0]["time"], tz=timezone.utc)
-    last_ts = datetime.fromtimestamp(rates[-1]["time"], tz=timezone.utc)
+    first_ts = datetime.utcfromtimestamp(int(rates[0]["time"]))
+    last_ts = datetime.utcfromtimestamp(int(rates[-1]["time"]))
     print(f"Wrote {len(rates)} bars → {out_path}")
     print(f"Range: {first_ts}  →  {last_ts}")
     mt5.shutdown()
