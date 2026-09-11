@@ -70,6 +70,11 @@ BARS_PER_DAY = {
 }
 
 
+def ts_to_str(epoch: int) -> str:
+    """Convert MT5 epoch to UTC string without deprecation warnings."""
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Dump historical GOLD (or other) bars from MT5 to CSV"
@@ -190,7 +195,7 @@ def main() -> None:
             ["Timestamp", "Open", "High", "Low", "Close", "TickVolume", "Spread"]
         )
         for r in rates:
-            ts = datetime.utcfromtimestamp(int(r["time"])).strftime("%Y-%m-%d %H:%M:%S")
+            ts = ts_to_str(int(r["time"]))
             spread = ""
             if hasattr(r, "dtype") and "spread" in r.dtype.names:
                 spread = int(r["spread"])
@@ -206,8 +211,8 @@ def main() -> None:
                 ]
             )
 
-    first_ts = datetime.utcfromtimestamp(int(rates[0]["time"]))
-    last_ts = datetime.utcfromtimestamp(int(rates[-1]["time"]))
+    first_ts = ts_to_str(int(rates[0]["time"]))
+    last_ts = ts_to_str(int(rates[-1]["time"]))
     print(f"Wrote {len(rates)} bars → {out_path}")
     print(f"Range: {first_ts}  →  {last_ts}")
     mt5.shutdown()
