@@ -3,23 +3,25 @@
 Paste this file at the start of a new session:
 > "I'm working on my Gold trading bot. Here is the handoff: [paste docs/HANDOFF.md]. I want to work on [X]."
 
-## 1. Where things stand (as of 2026-09-11 morning)
+## 1. Where things stand (as of 2026-09-14)
 
 - Repo: `shashidaren/gold-trading-bot`, default branch `main`.
 - **PR #7 MERGED** (2026-09-10 12:33 UTC): BE ratchet + direction-aware London
   blackout + trend-side daily breaker are on `main` and **live since the
   ~12:34 UTC engine restart**.
 - Current ledger (from latest `trades.csv` / `status.json`):
-  - **63 trades total** → 8W / 40L / 15BE
-  - Decisive win rate still ~16.7%
-  - Engine equity ≈ $429.94 (true P&L from $500 ≈ −$94.77; known ledger drift +$24.71)
-  - **New-regime trades (post-BE deploy) ≈ 18** (0W / 3L / 15BE)
+  - **106 trades total** → 9W / 51L / 46BE
+  - Decisive win rate ~15.0%
+  - Engine equity ≈ $388.10 (true P&L from $500 ≈ −$111.90; known ledger drift +$24.71 still present)
+  - **New-regime trades (post-BE deploy, trades #46–#106) ≈ 61**
 - Live bot runs from `/opt/gold` via systemd (`goldbot.service` =
   engine, `mt5feed.service` = price-feed sidecar).
 
-**Current stance:** Keep collecting live data. Do **not** change strategy
-parameters until ≥30 new-regime trades (ideally 100+ before treating as
-income). See §6 and the patience notes at the end.
+**Current stance:** New-regime sample has cleared the ≥30-trade bar (now ~61).
+It is appropriate to run a fresh data-review cycle and evaluate the queued
+strategy candidates (see §6). Still do **not** treat the bot as income until
+positive expectancy is demonstrated on a larger multi-regime sample (ideally
+100+). See the patience notes at the end.
 
 ## 2. Bot in one paragraph
 
@@ -42,7 +44,7 @@ How MT5 works (feed-only, trading stays simulated):
   publishes the latest **closed** M1 GOLD candle to `/opt/gold/mt5_last_candle.json`.
 - Engine reads that file each poll, dedupes by candle timestamp.
 
-**New tool (2026-09-11):** `tools/mt5_history_dump.py`
+**Tool (2026-09-11):** `tools/mt5_history_dump.py`
 - Pulls historical bars (M1/M5/H1/etc.) from the same MT5 connection.
 - Useful later for faster offline filter research / walk-forward tests.
 - Does **not** affect the live engine.
@@ -74,22 +76,21 @@ Exit reason `BE` = scratch (excluded from wins/losses/cooldown/daily tally).
 
 Key documents:
 - `docs/ANALYSIS-2026-09-10-losing-trades.md`
-- `docs/REVIEW-2026-09-10-PM.md`
-- Latest analysis (2026-09-11): losers die fast (median ~4 min), high early
-  MAE (~1.0R), RSI < 45 still the strongest negative separator, only 3 pure
-  SLs in the new-regime window so far.
+- `docs/REVIEW-2026-09-10-PM.md` (latest formal review — 2026-09-10 PM)
+- No newer REVIEW-*.md yet; a fresh review on the current 106-trade / ~61
+  new-regime sample is the next logical step.
 
-Headlines (63 trades):
+Earlier headlines (still directionally relevant):
 - Expectancy still ≈ −0.5R at every TP placement — entries are the problem.
 - Blocked signals continue to outperform taken signals (cooldown especially).
-- RSI < 45 remains candidate #1; BE already converts many weak entries to scratches.
-- New-regime sample still too small for parameter changes.
+- RSI < 45 remains the strongest negative separator / candidate #1; BE already
+  converts many weak entries to scratches.
+- BE-era bleed was lower than pre-BE, but overall edge is still negative.
 
 ## 6. Next steps (in order)
 
-1. **Keep collecting live data** (target ≥30 new-regime trades, ideally 100+
-   before any income discussion).
-   After each data-collection commit:
+1. **Run a fresh data-review cycle** on the current sample (now past the
+   ≥30 new-regime bar). After pulling latest data:
    ```bash
    python3 tools/check_data.py
    python3 tools/phantom_trades.py
@@ -97,9 +98,11 @@ Headlines (63 trades):
    python3 tools/analyze_losers.py
    python3 tools/validate_gates.py
    ```
+   Document findings as a new `docs/REVIEW-2026-09-14.md` (or similar) and
+   update this handoff + `archive/PROJECT_LOG.md`.
 
-2. **Queued strategy changes** (adopt only at n≥30 new-regime unless a clear
-   trigger fires earlier):
+2. **Queued strategy changes** (now eligible for evaluation; adopt only with
+   clear evidence from the new review):
    - (a) **RSI ≥ 45 entry filter**
    - (b) **BE resets the SL-streak** (cooldown de-escalation)
    - (c) **RISE120 entry gate**
@@ -169,11 +172,12 @@ python3 tools/check_data.py          # expect "0 fail"
 
 ---
 
-### Patience / decision framework (added 2026-09-11)
+### Patience / decision framework
 
 | Horizon          | Goal                              | Action                                      |
 |------------------|-----------------------------------|---------------------------------------------|
-| Next 3–6 weeks   | Reach ~30–40 new-regime trades    | Let it run, weekly review only              |
+| Done             | Reach ≥30 new-regime trades       | Cleared (~61 as of 2026-09-14)              |
+| Now              | Fresh review + evaluate queued changes | Run tools suite, write REVIEW, decide candidates |
 | ~2–4 months      | 100+ trades, multiple regimes     | First serious evaluation of edge            |
 | 6–12 months      | Durable positive expectancy?      | Decide if it deserves any real capital      |
 
