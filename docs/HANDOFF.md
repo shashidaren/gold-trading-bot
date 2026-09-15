@@ -12,10 +12,13 @@ Paste this file at the start of a new session:
   (2026-09-10 12:33 UTC) put the BE ratchet + direction-aware London blackout +
   trend-side daily breaker on `main`.
 - Current ledger (from latest `trades.csv` / `status.json`):
-  - **164 trades total** → 14W / 58L / 92BE
+  - **164 trades at review time** → 14W / 58L / 92BE (**168 now on `main`**:
+    15W/58L/95BE → 20.5% decisive, −$135.46 — conclusions unchanged, see the
+    review addendum)
   - Decisive win rate **19.4%** (Wilson 95% CI 12.0-30.0); all-in 8.5%;
     **scratch rate 56%** (77% of new-regime trades)
-  - Engine equity ~$383.78 (true P&L from $500 = **−$140.94** → $359.06;
+  - Engine equity ~$383.78 (true P&L from $500 = **−$140.94** → $359.06; $364.54
+    at 168 trades;
     known ledger drift +$24.72 still present)
   - **New-regime trades (post-BE deploy, #46-#164) = 119** → 6W/21L/92BE,
     22.2% decisive, −$58.43 (−0.123R/trade; pre-ratchet era was −0.649R)
