@@ -43,9 +43,19 @@ ATR_SL_MULT = 2.0
 ATR_TP_MULT = 3.0
 
 # Breakeven stop ratchet (adopted 2026-09-10, docs/ANALYSIS-2026-09-10-losing-trades.md):
-# once a trade is +0.30R in profit, SL moves to entry. Sequence-aware replay of all
+# once a trade is +BE_TRIGGER_R in profit, SL moves to entry. Sequence-aware replay of all
 # 45 sample trades: -82.51 actual -> ~-63 with the ratchet (12-14 losers scratch).
-BE_TRIGGER_R = 0.30
+# RAISED 0.30 -> 0.75 on 2026-09-15 (docs/REVIEW-2026-09-15.md). At +0.30R the trigger
+# was 0.60*ATR ~= $1.2 on a $4300 market - one 1-min bar of noise. 92 of 119 new-regime
+# trades armed it and scratched (median scratch lifetime 1.5 min), which is what pinned
+# the decisive win rate at 22%. Re-walking the SAME 119 entries (replay reproduces the
+# live result exactly at 0.30R: 6W/21L/92BE, -$57.55 vs -$58.43 actual):
+#   +0.30R  22.2% dec  -$0.49/trade (live)   |  +0.75R  44.7% dec  +$0.40/trade
+#   off     41.0% dec  +$0.52/trade          |  +1.00R  38.5% dec  +$0.10/trade
+# 0.75R is the level that keeps most of the protection while leaving the winners alone.
+# Cascade-aware (no overlapping trades + SL cooldown), one regime, ~59 trades - a
+# direction, not a forecast. Re-validate after ~2 more weeks.
+BE_TRIGGER_R = 0.75
 
 REQUIRE_VOLUME_CONFIRM = False
 VOLUME_SPIKE_MULTIPLIER = 0.9

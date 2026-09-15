@@ -165,6 +165,34 @@ def check_trades():
         warn(f"{len(be_dust)} BE rows with non-zero profit "
              f"(e.g. #{be_dust[0]['num']}: {be_dust[0]['profit']:+.2f}) - "
              f"scratches should exit at ~entry")
+    # Rows whose logged Stop_Loss equals the entry price are ratchet-armed
+    # trades. BE scratches are the obvious case, but a trade that armed BE and
+    # then reached TP is logged the same way (engine writes the LIVE stop at
+    # exit time) - analysis tools must key on the geometry, not the reason.
+    def _p(t, k):
+        try:
+            return float(t[k])
+        except (TypeError, ValueError):
+            return None
+    ratcheted = [t for t in trades
+                 if _p(t, "Entry_Price") is not None
+                 and abs(_p(t, "Entry_Price") - _p(t, "Stop_Loss")) < 1e-9]
+    if ratcheted:
+        other = [t for t in ratcheted if t["Exit_Reason"] != "BE"]
+        msg = (f"{len(ratcheted)} rows log the ratcheted stop (SL == entry)"
+               + (f", {len(other)} of them NOT BE - e.g. #{other[0]['num']} "
+                  f"{other[0]['Exit_Reason']}" if other else ""))
+        info(msg + "; R-multiple math must reconstruct 2x/3xATR geometry from "
+             "ATR_At_Entry")
+    # No time stop in the engine: a trade can ride an overnight/weekend gap.
+    holds = [(t, (t["exit_dt"] - t["entry_dt"]).total_seconds() / 60.0)
+             for t in trades if t["entry_dt"] and t["exit_dt"]]
+    long_holds = [(t, m) for t, m in holds if m > 60]
+    if long_holds:
+        t, m = max(long_holds, key=lambda x: x[1])
+        warn(f"{len(long_holds)} trades held > 60 min (longest #{t['num']} "
+             f"{m:.0f} min = {m/60:.1f} h, {t['Entry_Time']} -> {t['Exit_Time']}); "
+             f"there is no time stop, so a trade can sit across a feed/market gap")
     if abs(drift) > 0.02:
         warn("engine ledger disagrees with sum of profits (documented reset gap)")
     return trades
@@ -249,16 +277,21 @@ def check_cross(trades, log_dts):
     ok("trade entries matched to price log" if not any("no price-log row" in w for w in WARNS)
        else "see warnings above")
 
-    # no open trade spans a >5 min price-log gap
+    # no open trade spans a >5 min price-log gap.
+    # Inclusive bounds on purpose: the engine enters on the LAST bar before a
+    # gap (same timestamp), so a strict `<`/`>` missed a trade held across the
+    # whole weekend gap (see #95, 49 h, 09-11 20:57 -> 09-13 22:00).
     spans = 0
     for t in trades:
         if not t.get("entry_dt") or not t.get("exit_dt"):
             continue
         for a, b in zip(log_dts, log_dts[1:]):
-            if (b - a).total_seconds() > 300 and t["entry_dt"] < a and t["exit_dt"] > b:
+            if (b - a).total_seconds() > 300 and t["entry_dt"] <= a and t["exit_dt"] >= b:
                 spans += 1
     if spans:
-        warn(f"{spans} trades were open across a price-log gap (exit prices may be unreliable)")
+        warn(f"{spans} trade(s) were open across a price-log gap - exit prices are "
+             f"unreliable there; check whether the gap is the daily/weekend close "
+             f"(no time stop exists, so a trade can ride it)")
     else:
         ok("no trade open across a price-log gap")
 
