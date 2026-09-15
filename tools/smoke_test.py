@@ -19,7 +19,8 @@ Scenarios:
   H) MT5 sidecar feed file (DATA_SOURCE=MT5) -> engine MUST read the sidecar's
      JSON file, evaluate each closed M1 candle exactly once (no re-log after
      restart), and default to TWELVEDATA
-  I) Breakeven ratchet (BE_TRIGGER_R) -> MUST arm at +0.30R, exit at entry with
+  I) Breakeven ratchet (BE_TRIGGER_R) -> MUST arm at +BE_TRIGGER_R (0.75R since
+     2026-09-15; it must NOT arm below the trigger), exit at entry with
      reason "BE" (scratch: counted separately from SL/TP, survives restart)
   J) Direction-aware risk gates -> London blackout blocks BUY but allows SELL;
      daily-loss breaker degrades to trend-side-only (momentum from price log),
@@ -345,7 +346,8 @@ check("H: empty rates -> None", engine.latest_closed_candle_ts([]) is None)
 shutil.rmtree(tmp_h, ignore_errors=True)
 
 # --- Scenario I ---
-print("\nScenario I: breakeven ratchet -> +0.30R arms, dip back to entry exits at ~0 (reason BE)")
+print(f"\nScenario I: breakeven ratchet -> +{engine.BE_TRIGGER_R:.2f}R arms, "
+      "dip back to entry exits at ~0 (reason BE)")
 tmp_i = tempfile.mkdtemp(prefix="gold_smoke_i_")
 engine.LOG_FILE_PATH = os.path.join(tmp_i, "forward_test_log.csv")
 engine.STATUS_FILE_PATH = os.path.join(tmp_i, "status.json")
@@ -365,16 +367,30 @@ entry_i = eng_i.entry_price
 risk_i = entry_i - eng_i.stop_loss
 check("I: risk sane", risk_i > 0, f"entry={entry_i} sl={eng_i.stop_loss}")
 
-# push price to just past the BE trigger (+0.30R), then collapse back below entry
+# 2026-09-15: trigger raised 0.30R -> 0.75R because +0.30R was one noisy minute of
+# noise and scratched 78% of trades. Guard the NEW semantics too: an excursion that
+# stays below the trigger must leave the stop where it was.
+if engine.BE_TRIGGER_R > 0.4:
+    sl_before_i = eng_i.stop_loss
+    mid_i = entry_i + 0.4 * risk_i
+    run_candles(eng_i, [(entry_i + 0.05, mid_i + 0.05, entry_i + 0.01, mid_i)],
+                datetime(2026, 5, 1, 4, 1, tzinfo=timezone.utc))
+    check(f"I: +0.40R does NOT arm the ratchet (trigger +{engine.BE_TRIGGER_R:.2f}R)",
+          not eng_i.be_armed and eng_i.trade_active and eng_i.stop_loss == sl_before_i,
+          f"armed={eng_i.be_armed} sl={eng_i.stop_loss} sl_before={sl_before_i} "
+          f"active={eng_i.trade_active}")
+
+# push price to just past the BE trigger, then collapse back below entry
 be_level = entry_i + engine.BE_TRIGGER_R * risk_i
 up_i = [(entry_i + 0.05, be_level + 0.07, entry_i + 0.01, be_level + 0.02)]
-run_candles(eng_i, up_i, datetime(2026, 5, 1, 4, 1, tzinfo=timezone.utc))
-check("I: BE ratchet armed at +0.30R", eng_i.be_armed and eng_i.stop_loss == round(entry_i, 2),
+run_candles(eng_i, up_i, datetime(2026, 5, 1, 4, 2, tzinfo=timezone.utc))
+check(f"I: BE ratchet armed at +{engine.BE_TRIGGER_R:.2f}R",
+      eng_i.be_armed and eng_i.stop_loss == round(entry_i, 2),
       f"armed={eng_i.be_armed} sl={eng_i.stop_loss} entry={entry_i}")
 
 bal_before = eng_i.balance
 down_i = [(entry_i - 0.05, entry_i + 0.02, entry_i - 0.5, entry_i - 0.4)]
-run_candles(eng_i, down_i, datetime(2026, 5, 1, 4, 2, tzinfo=timezone.utc))
+run_candles(eng_i, down_i, datetime(2026, 5, 1, 4, 3, tzinfo=timezone.utc))
 check("I: trade closed as scratch (not a loss)",
       not eng_i.trade_active and eng_i.losses == 0 and eng_i.be_exits == 1,
       f"losses={eng_i.losses} be_exits={eng_i.be_exits} wins={eng_i.wins}")

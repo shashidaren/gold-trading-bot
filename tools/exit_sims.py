@@ -33,7 +33,9 @@ def load():
             reason = r["Exit_Reason"]
             atr = float(r["ATR_At_Entry"])
             sl, tp = float(r["Stop_Loss"]), float(r["Take_Profit"])
-            if reason == "BE":
+            # Ratchet-armed rows log SL == entry (BE scratches AND winners that
+            # armed BE before TP printed) - detect geometrically, not by reason.
+            if reason == "BE" or abs(entry - sl) < 1e-9:
                 if side == "BUY":
                     sl, tp = entry - 2 * atr, entry + 3 * atr
                 else:

@@ -9,7 +9,7 @@ changelog.
 
 | Path | What it is |
 |---|---|
-| `engine.py` | Data ingestion, indicators (EMA/RSI/ATR), the Buy/Sell signal funnel, trade execution. Includes `migrate_trades_csv()` — self-healing schema fix (see 09-10 review) — and the breakeven stop ratchet (`BE_TRIGGER_R`, 09-10 losing-trade analysis). |
+| `engine.py` | Data ingestion, indicators (EMA/RSI/ATR), the Buy/Sell signal funnel, trade execution. Includes `migrate_trades_csv()` — self-healing schema fix (see 09-10 review) — and the breakeven stop ratchet (`BE_TRIGGER_R`: 0.30R since the 09-10 losing-trade analysis, **raised to 0.75R on 09-15** — the tight trigger was scratching 77% of trades; see `docs/REVIEW-2026-09-15.md`). |
 | `trade_filter.py` | Risk gatekeeper: direction-aware session blackouts (London blocks BUYs, allows SELLs), SL cooldowns, momentum-gated daily-loss breaker (trend-side-only after limit), ATR bounds. |
 | `dashboard.py` | Web dashboard (funnel telemetry, equity, active trade). |
 | `trades.csv` | **The ledger** — one row per closed trade (16-field schema with `Trade_Type`). |
@@ -24,15 +24,20 @@ changelog.
 
 ```bash
 python3 tools/check_data.py       # 1. integrity gate — run FIRST, trust nothing before it passes
-python3 tools/validate_gates.py   # 2. replay entry gates against all historical trades
-python3 tools/phantom_trades.py   # 3. what did the blocked (skipped) signals actually do?
-python3 tools/pathwalk_sims.py    # 4. sequence-aware exit-rule replay (honest exit test)
-python3 tools/analyze_losers.py   # 5. winner/loser features + entry-filter experiments
-python3 tools/exit_sims.py        # 6. quick MFE exit scan (overstates — confirm via 4)
-python3 tools/smoke_test.py       # 7. engine regression tests (gates, SELL, drift auto-fix)
+python3 tools/win_rate_report.py  # 2. win-rate decomposition (era/side/day, ratchet grid)
+python3 tools/validate_gates.py   # 3. replay entry gates against all historical trades
+python3 tools/phantom_trades.py   # 4. what did the blocked (skipped) signals actually do?
+python3 tools/pathwalk_sims.py    # 5. sequence-aware exit-rule replay (honest exit test)
+python3 tools/analyze_losers.py   # 6. winner/loser features + entry-filter experiments
+python3 tools/exit_sims.py        # 7. quick MFE exit scan (overstates — confirm via 5)
+python3 tools/smoke_test.py       # 8. engine regression tests (gates, SELL, drift auto-fix)
 ```
 
-All tools are read-only except the engine's own self-healing migration.
+All tools are read-only except the engine's own self-healing migration. Every
+tool that re-walks 1-min bars must key BE geometry on the logged *shape*
+(`Stop_Loss == Entry_Price` appears on scratches AND on winners that armed the
+ratchet before TP printed) and must treat a SELL's favourable bar extreme as its
+LOW — both of those were wrong until 2026-09-15.
 
 ## 🚀 Deploying to production
 

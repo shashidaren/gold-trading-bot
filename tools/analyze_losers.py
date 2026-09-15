@@ -22,9 +22,12 @@ def load_trades():
             atr = float(r["ATR_At_Entry"])
             sl = float(r["Stop_Loss"])
             tp = float(r["Take_Profit"])
-            if reason == "BE":
-                # Logged SL is the ratcheted stop (= entry). Reconstruct the
-                # original 2xATR/3xATR geometry for R math.
+            if reason == "BE" or abs(entry - sl) < 1e-9:
+                # Logged SL is the ratcheted stop (= entry). This happens on
+                # BE scratches AND on winners the ratchet armed before the TP
+                # printed (engine logs the live stop at exit time) - so the
+                # test is geometric, not reason-based. Reconstruct the original
+                # 2xATR/3xATR geometry for R math.
                 if side == "BUY":
                     sl, tp = entry - 2 * atr, entry + 3 * atr
                 else:
@@ -134,52 +137,24 @@ if be_re:
           f"| avg MFE {statistics.mean(t['mfe_R'] for t in be_re):.2f}R  "
           f"<- scratches arm (+0.30R) then return to entry\n")
 
-# ---------- 4. Counterfactual take-profit levels ----------
-print("== COUNTERFACTUAL: what if TP were closer? (replay, TP vs SL first) ==")
-def simulate(tp_mult_r, trail_be_at=None):
-    """Set TP at tp_mult_r * risk. Optional: move SL to breakeven once +trail_be_at R reached."""
-    w = l = be = 0
-    pnl = 0.0
-    for t in trades:
-        if "mfe_R" not in t:
-            # no bars -> keep original outcome
-            if t["reason"] == "TP": w += 1; pnl += t["profit"]
-            elif t["reason"] == "BE": be += 1; pnl += t["profit"]
-            else: l += 1; pnl += t["profit"]
-            continue
-        mfe_r = t["mfe_R"]; mae_r = t["mae_R"]
-        risk_money = abs(t["profit"]) if t["reason"] == "SL" else abs(t["entry"]-t["sl"]) * (abs(t["profit"])/abs(t["exit_p"]-t["entry"]) if t["exit_p"]!=t["entry"] else 1)
-        # simpler: use realized loss $ as 1R for losers, avg for winners
-        one_r = abs(t["profit"]) if t["reason"] == "SL" else abs(t["profit"]) / max(t["mfe_R"], 0.01) if t["reason"]=="TP" else abs(t["entry"]-t["sl"])
-        hit_tp = mfe_r >= tp_mult_r
-        hit_sl = mae_r >= 1.0
-        # order: if both within same window assume TP if TP<=1R else SL (conservative)
-        if hit_tp and (not hit_sl or tp_mult_r <= 1.0):
-            w += 1; pnl += tp_mult_r * one_r * 0.97  # minus spread est
-        elif trail_be_at and mfe_r >= trail_be_at:
-            be += 1  # stopped at breakeven
-            l += 1
-        else:
-            l += 1; pnl -= one_r
-    total = w + l
-    return w, l - be, be, total, pnl
-
-for tp_r in [0.5, 0.75, 1.0, 1.25, 1.5]:
-    w, l, be, tot, pnl = simulate(tp_r)
-    print(f"  TP at {tp_r:.2f}R -> Win rate {w/tot*100:5.1f}%  (W{w}/L{l}/BE{be})  est.P/L {pnl:+8.2f}")
-print()
-
-print("== COUNTERFACTUAL: breakeven-stop after +0.5/+0.75R, keep TP at 1.5R ==")
-for be_trig in [0.33, 0.5, 0.66, 0.75]:
-    w, l, be, tot, pnl = simulate(1.5, trail_be_at=be_trig)
-    print(f"  BE at +{be_trig:.2f}R -> Win rate {w/tot*100:5.1f}% (W{w}/SL{l}/BE{be}) est.P/L {pnl:+8.2f}")
+# ---------- 4. Exit geometry: measured elsewhere, on purpose ----------
+# A naive replay here (score each trade by its max favourable excursion inside
+# the *actual* exit window) produced confident nonsense on BE-era data: it
+# reported "TP 1.50R -> 0.6% win rate" against a real 19.4%, because BE
+# scratches died ~2 min after entry and a looser exit can never be judged
+# inside the window the old exit left open. Sequence-aware replay with an
+# explicit walk horizon is the honest tool for that question.
+print("== COUNTERFACTUAL EXITS ==")
+print("  not here - use tools/pathwalk_sims.py (sequence-aware, SL-first,")
+print("  extended-horizon rows) or the 5b/5c grid in tools/win_rate_report.py.")
 print()
 
 # ---------- 5. Feature comparison ----------
 print("== ENTRY FEATURES: winners vs losers vs BE ==")
 def feat(name, fn):
     ws = [fn(t) for t in wins]; ls = [fn(t) for t in losses]; bs = [fn(t) for t in bes]
-    line = f"  {name:28s} W avg {statistics.mean(ws):8.2f}   L avg {statistics.mean(ls):8.2f}"
+    line = f"  {name:28s} W avg {statistics.mean(ws):8.2f}" if ws else f"  {name:28s} W avg      n/a "
+    line += f"   L avg {statistics.mean(ls):8.2f}" if ls else "   L avg      n/a"
     if bs:
         line += f"   BE avg {statistics.mean(bs):8.2f}"
     print(line)
