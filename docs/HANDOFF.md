@@ -3,9 +3,16 @@
 Paste this file at the start of a new session:
 > "I'm working on my Gold trading bot. Here is the handoff: [paste docs/HANDOFF.md]. I want to work on [X]."
 
+Keep it current: every session that changes code, params, or conclusions must
+update §1, §4/§5 and §6 before it ends (see §11 "How to keep this file
+honest"). §11 also carries the **Session & Push Protocol** — push every commit
+immediately and keep the session PR open until the user signs off. Follow it
+from the first commit.
+
 ## 1. Where things stand (as of 2026-09-15)
 
 - Repo: `shashidaren/gold-trading-bot`, default branch `main`.
+  Current work branch: `arena/01a0a361-gold-trading-bot`.
 - **PR #9 MERGED** (2026-09-15): `BE_TRIGGER_R` **0.30 → 0.75**, analysis-tool
   fixes (SELL replay bug, ratcheted-stop handling, `check_data` tripwires), new
   `tools/win_rate_report.py`, and this review cycle's docs. Earlier: PR #7
@@ -249,6 +256,62 @@ data drop, not just after code changes.
 - Refuses to deploy if someone hand-edited code files on the server
 - Smoke-test gate + automatic rollback
 - `.env` is never committed
+
+---
+
+## 11. How to keep this file honest (do this every session)
+
+### Session & Push Protocol (CRITICAL — zero unpushed state)
+
+The sandbox workspace is **ephemeral**: when a session ends, its filesystem is
+destroyed, so **a commit that is not on GitHub does not exist**. These four
+rules apply to every session, from the first commit:
+
+1. **One session = one scope = one PR at the end.** Do all session work on the
+   session branch and keep pushing to it; open at most one PR per session and
+   merge it only when the entire session goal is complete. Merging is the last
+   click, not a mid-session step — and here merge → `origin/main` → the next
+   `tools/autosync.sh` run (≤ 3 h, §10) **deploys to the live box**, a second
+   reason it is final.
+2. **Push after every logical step (zero local-only state).** After each code
+   or doc modification:
+   `git add <files> && git commit -m "..." && git push origin <branch>`
+   Keep GitHub perfectly synchronized with the workspace so nothing is lost if
+   the connection drops or the browser closes. Never plan to cherry-pick or
+   salvage commits from a previous session's local workspace — that workspace
+   is gone; anything not pushed is unrecoverable.
+3. **The PR stays open (draft / in-progress) until the user gives the green
+   light.** If a PR is opened early, open it as a **draft** and push additional
+   commits to the same branch — GitHub updates the PR automatically. Merge only
+   after the agent reports "all tasks complete, `tools/smoke_test.py` prints
+   SMOKE TEST PASSED and `tools/check_data.py` reports 0 fail (§7), ready for
+   merge" **and** the user confirms.
+4. **Hand off via this file + `archive/PROJECT_LOG.md`, not chat.** Before a
+   session ends (and always before a PR merges), §1/§4/§5/§6 and the changelog
+   must reflect the new state, so the next session boots from `main` with full
+   context — no cherry-picking, no orphan commits, no lost work.
+
+**Opening line for a new session (no need to re-explain this workflow):**
+> "Read `docs/HANDOFF.md` and follow the Session & Push Protocol. I want to
+> work on [X]."
+
+### Per-session update ritual
+
+1. Update **§1** (date, trade count, new-regime count, branch/PR state).
+2. Update **§4/§5** if params changed or a review produced new numbers —
+   replace stale figures, don't append.
+3. Move anything you shipped out of **§6** and into `archive/PROJECT_LOG.md`'s
+   changelog; add whatever the session queued.
+4. Write the analysis itself in `docs/REVIEW-YYYY-MM-DD.md`; this file only
+   carries the *conclusion* and a pointer. The current one is
+   `docs/REVIEW-2026-09-15.md` (164 trades).
+5. Never quote a pooled decisive win rate across the 09-15 ratchet change
+   (`BE_TRIGGER_R` 0.30→0.75) without naming the era, and key any BE
+   reconstruction on the geometry (`Stop_Loss == Entry_Price`), never on
+   `Exit_Reason == "BE"` — both traps are detailed in §8 and have already
+   bitten this project.
+6. Commit with a message that names the doc, so `git log --oneline` stays a
+   usable index of decisions — and push immediately (see protocol above).
 
 ---
 
