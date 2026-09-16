@@ -63,6 +63,7 @@ For a BUY signal to trigger, ALL of the following must be true:
 
 ## 📊 Forward Test Observations (Sep 4–15, 2026)
 - **Ledger at 2026-09-15**: 164 trades, 14W/58L/92BE → **19.4% decisive** (8.5% all-in), true P&L −$140.94 ($500 → $359.06). Needs 40% decisive to break even at 1:1.5. New regime since the 09-10 stack: 119 trades, −0.123R/trade (was −0.649R pre-ratchet).
+- **Interim 2026-09-16**: 214 trades; 39 at +0.75R → 7W/14L/18BE, 33.3% dec (CI 17–55), −$0.36/trade. Mechanism confirmed (scratch 75%→46%, BE hold 1.9→9 min, BUY winning again), edge unproven. RSI≥45 case reversed (parked); cooldown leak +$209 (candidate b first in queue, held); ATR≥2.5 still 0% (held). No changes; full re-review ≈ 09-29+.
 - **Win-rate diagnosis (09-15)**: the decisive rate is low mostly because the +0.30R breakeven ratchet harvested 77% of new-regime trades into $0 scratches — the entry stream itself replays near 50/50. Raised the trigger to 0.75R.
 - **Blocked > taken, still**: the risk layer replayed its own rejects at 64% decisive (+$198.20 sequential across 99 deduped signals) while taken trades won 19.4%. Cooldown escalation is the biggest leak (+$163).
 - **Review Findings**: Without daily circuit breakers, bad days (Sept 8 grind-down and Sept 9 afternoon news dump) resulted in 20 Stop Losses across 2 days. The new daily cap and US macro blackout directly protect against these scenarios.

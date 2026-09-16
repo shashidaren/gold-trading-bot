@@ -9,43 +9,42 @@ honest"). §11 also carries the **Session & Push Protocol** — push every commi
 immediately and keep the session PR open until the user signs off. Follow it
 from the first commit.
 
-## 1. Where things stand (as of 2026-09-15)
+## 1. Where things stand (as of 2026-09-16)
 
 - Repo: `shashidaren/gold-trading-bot`, default branch `main`.
-  Current work branch: `arena/01a0a361-gold-trading-bot`.
+  Current work branch: `arena/01a0aa16-gold-trading-bot`.
 - **PR #9 MERGED** (2026-09-15): `BE_TRIGGER_R` **0.30 → 0.75**, analysis-tool
   fixes (SELL replay bug, ratcheted-stop handling, `check_data` tripwires), new
   `tools/win_rate_report.py`, and this review cycle's docs. Earlier: PR #7
   (2026-09-10 12:33 UTC) put the BE ratchet + direction-aware London blackout +
   trend-side daily breaker on `main`.
-- Current ledger (from latest `trades.csv` / `status.json`):
-  - **164 trades at review time** → 14W / 58L / 92BE (**168 now on `main`**:
-    15W/58L/95BE → 20.5% decisive, −$135.46 — conclusions unchanged, see the
-    review addendum)
-  - Decisive win rate **19.4%** (Wilson 95% CI 12.0-30.0); all-in 8.5%;
-    **scratch rate 56%** (77% of new-regime trades)
-  - Engine equity ~$383.78 (true P&L from $500 = **−$140.94** → $359.06; $364.54
-    at 168 trades;
-    known ledger drift +$24.72 still present)
-  - **New-regime trades (post-BE deploy, #46-#164) = 119** → 6W/21L/92BE,
-    22.2% decisive, −$58.43 (−0.123R/trade; pre-ratchet era was −0.649R)
-  - Last drop alone (#107-#164, 09-14 → 09-15): 5W/7L/46BE → **41.7%
-    decisive, −$4.33** - the first slice of this book sitting on the 40%
-    breakeven line
+- Current ledger (from latest `trades.csv` / `status.json`, data collection 56):
+  - **214 trades** → 25W / 73L / 116BE → 25.5% decisive (CI 17.9–35.0),
+    −$138.11 (engine ledger $386.59, known drift +$24.70)
+  - **0.75R era** (entries ≥ 09-15 06:00 UTC — the 06:00 autosync run deployed
+    PR #9, which merged 03:00:23Z, 23 s after the 03:00 run): **39 trades** →
+    7W/14L/18BE, **33.3% decisive (CI 17.2–54.6)**, −$13.91 (−$0.357/trade —
+    above the −$0.40 falsification bar)
+  - 0.30R era (09-10 12:34 → 09-15 06:00, n=130): 10W/22L/98BE, 31.2% dec,
+    −$0.321/trade. Pre-ratchet (n=45): 17.8% dec, −$1.834/trade.
+  - Scratch rate 75.4% → **46.2%** across the ratchet change; median BE hold
+    1.9 → 9.0 min; BUY side winning again (3W/9L/15BE after 0-for-31)
 - Live bot runs from `/opt/gold` via systemd (`goldbot.service` =
   engine, `mt5feed.service` = price-feed sidecar).
 
-**Current stance:** the win-rate story is now understood, and it is **not the
-entries**. `docs/REVIEW-2026-09-15.md` §1: the +0.30R ratchet armed on ~1 minute
-of noise (median scratch lifetime 1.5 min), converted 92 trades into $0 and
-pinned the decisive win rate at 22%; re-walking the *same* 119 entries at
-+0.75R replays to ~45% decisive and +$0.40/trade (the replay is trustworthy
-because its +0.30R row reproduces the live result exactly: 6W/21L/92BE,
-−$57.55 vs −$58.43). **The ratchet level changed this cycle**, so the next
-review must judge P&L/day and bleed-per-trade - and must expect *larger*
-individual losses, because fewer trades get refunded. Still do **not** treat
-the bot as income until positive expectancy survives 100+ new trades across
-multiple regimes. See the patience notes at the end.
+**Current stance:** one day into the +0.75R era (39 trades,
+`docs/REVIEW-2026-09-16.md`): the **mechanism is confirmed** (scratch rate
+75%→46%, median BE hold 1.9→9.0 min, BUY winning again) but the **edge is
+unproven** (33.3% dec, CI 17–55, −$0.36/trade — the CI covers the replay
+prediction, the 40% breakeven line, and the old rate). The "first profitable
+day" on 09-15 (+$9.72) was +$10.79 of pre-deploy 0.30R trades; the 0.75R slice
+was flat (−$1.07, 40.0% dec) and 09-16 bled −$12.84 — the predicted
+fewer-refunds cost, not evidence against the change. **No strategy changes.**
+The RSI ≥ 45 adoption case **reversed** under the loose ratchet (parked; see
+§6) and the cooldown leak grew to +$209 (candidate b now first in queue, still
+held). Still do **not** treat the bot as income until positive expectancy
+survives 100+ new trades across multiple regimes. See the patience notes at
+the end.
 
 ## 2. Bot in one paragraph
 
@@ -133,6 +132,13 @@ Current headlines (2026-09-15, 164 trades / 119 new-regime):
 - ⚠️ Sequence-aware numbers in `docs/REVIEW-2026-09-10-PM.md` §3 used
   `pathwalk_sims.py`, which had its SELL bar extremes inverted (fixed 09-15).
   Anything pathwalk said about SELL trades before this cycle is unreliable.
+- **Interim 2026-09-16** (`docs/REVIEW-2026-09-16.md`, 39 trades at +0.75R):
+  33.3% dec (CI 17–55), −$0.36/trade, falsification bar (−$0.40) not breached.
+  RSI ≥ 45 gap **reversed** (low-RSI bucket now the best — parked, was
+  confounded with the ratchet); cooldown-blocked phantoms +$209 sequential
+  (candidate b strengthened, still queued); ATR ≥ 2.5 still 0% decisive (held,
+  n=4 in new era); entry-time era boundary is 09-15 06:00 UTC (PR #9 merged
+  03:00:23Z, deployed by the 06:00 autosync run).
 
 ## 6. Next steps (in order)
 
@@ -304,7 +310,8 @@ rules apply to every session, from the first commit:
    changelog; add whatever the session queued.
 4. Write the analysis itself in `docs/REVIEW-YYYY-MM-DD.md`; this file only
    carries the *conclusion* and a pointer. The current one is
-   `docs/REVIEW-2026-09-15.md` (164 trades).
+   `docs/REVIEW-2026-09-16.md` (interim, 214 trades / 39 at +0.75R); the last
+   full review is `docs/REVIEW-2026-09-15.md` (164 trades).
 5. Never quote a pooled decisive win rate across the 09-15 ratchet change
    (`BE_TRIGGER_R` 0.30→0.75) without naming the era, and key any BE
    reconstruction on the geometry (`Stop_Loss == Entry_Price`), never on
