@@ -343,3 +343,9 @@ Timestamp,Reason,Price,ATR
 2026-09-17 10:19:04,SL Cooldown: 54 min remaining (2 consecutive SLs -> 60m cooldown),4309.16,1.59
 2026-09-17 10:23:05,SL Cooldown: 50 min remaining (2 consecutive SLs -> 60m cooldown),4308.77,1.64
 2026-09-17 11:34:04,SL Cooldown: 55 min remaining (3 consecutive SLs -> 60m cooldown),4326.66,1.94
+2026-09-17 13:17:06,SL Cooldown: 27 min remaining,4370.77,3.58
+2026-09-17 13:27:07,Blackout: NY Open & US High-Impact Macro Releases,4367.50,2.96
+2026-09-17 13:30:03,Blackout: NY Open & US High-Impact Macro Releases,4366.76,2.47
+2026-09-17 13:34:04,Blackout: NY Open & US High-Impact Macro Releases,4367.06,2.99
+2026-09-17 14:25:06,Blackout: NY Open & US High-Impact Macro Releases,4369.52,2.79
+2026-09-17 14:26:01,Blackout: NY Open & US High-Impact Macro Releases,4370.32,2.70
