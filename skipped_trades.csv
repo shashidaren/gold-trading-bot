@@ -357,3 +357,5 @@ Timestamp,Reason,Price,ATR
 2026-09-17 19:05:00,SL Cooldown: 1 min remaining (3 consecutive SLs -> 60m cooldown),4354.08,1.35
 2026-09-17 19:59:06,SL Cooldown: 25 min remaining,4347.08,1.66
 2026-09-17 20:01:07,SL Cooldown: 23 min remaining,4345.91,1.64
+2026-09-17 23:09:05,"Daily Loss Limit Reached (10/10 SLs today) - Trend-Side Only: SELL blocked, momentum is BUY",4343.76,1.81
+2026-09-17 23:16:06,"Daily Loss Limit Reached (10/10 SLs today) - Trend-Side Only: SELL blocked, momentum is BUY",4344.54,1.37
