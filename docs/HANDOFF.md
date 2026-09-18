@@ -9,44 +9,45 @@ honest"). §11 also carries the **Session & Push Protocol** — push every commi
 immediately and keep the session PR open until the user signs off. Follow it
 from the first commit.
 
-## 1. Where things stand (as of 2026-09-17)
+## 1. Where things stand (as of 2026-09-18)
 
 - Repo: `shashidaren/gold-trading-bot`, default branch `main`.
-  Current work branch: `arena/01a0afd7-gold-trading-bot` (FOMC review, docs only).
+  Current work branch: `arena/01a0b36d-gold-trading-bot` (09-18 review, docs only).
 - **PR #9 MERGED** (2026-09-15): `BE_TRIGGER_R` **0.30 → 0.75**, analysis-tool
   fixes (SELL replay bug, ratcheted-stop handling, `check_data` tripwires), new
   `tools/win_rate_report.py`, and this review cycle's docs. Earlier: PR #7
   (2026-09-10 12:33 UTC) put the BE ratchet + direction-aware London blackout +
   trend-side daily breaker on `main`.
-- Current ledger (from latest `trades.csv` / `status.json`, data collection 66):
-  - **233 trades** → 29W / 84L / 120BE → 25.7% decisive (CI 18.1–35.0),
-    −$156.50 (engine ledger $368.20, known drift +$24.70)
+- Current ledger (from latest `trades.csv` / `status.json`, data collection 74):
+  - **250 trades** → 34W / 91L / 125BE → 27.2% decisive (CI 20.2–35.6),
+    −$157.43 (engine ledger $367.27, known drift +$24.70)
   - **0.75R era** (entries ≥ 09-15 06:00 UTC — the 06:00 autosync run deployed
-    PR #9, which merged 03:00:23Z, 23 s after the 03:00 run): **58 trades** →
-    11W/25L/22BE, **30.6% decisive (CI 18.0–46.9)**, −$32.30 (**−$0.557/trade —
-    below the −$0.40 falsification bar**; bar formally trips at n ≥ 60)
+    PR #9, which merged 03:00:23Z, 23 s after the 03:00 run): **75 trades** →
+    16W/32L/27BE, **33.3% decisive (CI 21.7–47.5)**, −$33.23
+    (**−$0.443/trade — below the −$0.40 falsification bar**)
+  - **Falsification bar FORMALLY TRIPPED 09-17 16:17 UTC** (−$0.595/trade at
+    n=60; still −$0.443 at n=75) → pre-registered fallback **active**:
+    ~4 h max-hold time stop first (measured in isolation), ratchet-off second,
+    never back to 0.30R.
   - 0.30R era (09-10 12:34 → 09-15 06:00, n=130): 10W/22L/98BE, 31.2% dec,
     −$0.321/trade. Pre-ratchet (n=45): 17.8% dec, −$1.834/trade.
-  - Scratch rate 75.4% → **37.9%** across the ratchet change; median BE hold
-    1.9 → 8.5 min; BUY side 7W/16L/19BE at 0.75R.
+  - Scratch rate 75.4% → **36.0%** across the ratchet change; median BE hold
+    1.9 → 9.0 min; 09-18 partial day = first positive era day (+$5.50, n=12).
 - Live bot runs from `/opt/gold` via systemd (`goldbot.service` =
   engine, `mt5feed.service` = price-feed sidecar).
 
-**Current stance:** 58 trades into the +0.75R era
-(`docs/REVIEW-2026-09-17.md`): the **mechanism is still confirmed** (scratch
-rate 38%, median BE hold 8.5 min) but the **edge is not there** — 30.6% dec
-and **−$0.557/trade** after the FOMC day (09-16: +25bp hike to 3.75–4.00% at
-18:00 UTC) and a genuine 09-16 grind-down bled −$22.92. The FOMC cascade
-(−$118, +2.7% in 70 min) hit **no open trade**, covered by defense-in-depth
-(escalated cooldown 17:28–18:28 → MAX_ATR wall 18:02–20:01) — good, but
-09-16 was already a bleed day pre-release, so the bar breach is not a
-news fluke. **No strategy changes.** RSI ≥ 45 is now ~dropped; the
-BE-resets-streak candidate is down-graded (FOMC day showed escalation
-covering the one hour it mattered most); the **~4h max-hold time stop is
-promoted to the front of the queue**. If 0.75R P&L/trade is still ≤ −$0.40 at
-n ≥ 60 the pre-registered fallback begins — max-hold first, ratchet-off second
-(never back to 0.30R). Still do **not** treat the bot as income. See the
-patience notes at the end.
+**Current stance:** 75 trades into the +0.75R era
+(`docs/REVIEW-2026-09-18.md`): the **mechanism is still confirmed** (scratch
+rate 36%, median BE hold 9.0 min) but the **edge is not there** — 33.3%
+decisive vs the 40% breakeven, **−$0.443/trade**. The pre-registered bar has
+**tripped**, so the next code session ships the **~4 h max-hold time stop**
+(measured in isolation; era re-baselines at deploy), and the auto-trade
+timeline is now formal: edge confirmation ~8 weeks (n≈1,300, CI ±$0.20),
+multi-regime 3–4 months, micro live pilot Q1 2027, auto-trade decision
+**6–12 months (Mar–Sep 2027)** — binding constraints are edge + regime
+coverage + unmodelled costs (forward-test P&L is price delta only), not
+trade count (~24–25/day). See `docs/REVIEW-2026-09-18.md` §5 and the
+patience notes at the end. Still do **not** treat the bot as income.
 
 ## 2. Bot in one paragraph
 
@@ -152,7 +153,8 @@ Current headlines (2026-09-15, 164 trades / 119 new-regime):
 
 ## 6. Next steps (in order)
 
-1. **Let the new ratchet level accumulate data, then re-review** (~2 weeks).
+1. **Ship the ~4 h max-hold time stop (next code session), then re-review**
+   (max-hold re-baseline + ~2 weeks in-isolation data, ≈ 09-29 or later).
    After pulling the latest data:
    ```bash
    python3 tools/check_data.py          # expect "0 fail"
@@ -165,7 +167,7 @@ Current headlines (2026-09-15, 164 trades / 119 new-regime):
    looser ratchet refunds fewer losers, so individual losses get bigger). Write
    `docs/REVIEW-2026-09-2X.md`, update this file + `archive/PROJECT_LOG.md`.
 
-2. **Queued strategy changes** — status after the 09-17 (FOMC) review:
+2. **Queued strategy changes** — status after the 09-18 review:
    - (a) **RSI ≥ 45 entry filter** — **~DROPPED** (reversal confirmed: skip
      bucket 36.0% dec / −$18.79 vs 27.9% kept; the 09-15 signal was an
      artifact of the old ratchet). Reopen only on a clear reversal at the
@@ -179,17 +181,21 @@ Current headlines (2026-09-15, 164 trades / 119 new-regime):
    - (d) **MAX_ATR 4.50 → 2.50** — still eligible (0.75R-era ATR≥2.5 bucket
      1W/4L/4BE, −$12.35, −$1.37/trade) but held one more cycle (n=9 too small;
      and it was not the FOMC-day balm it briefly looked like in-window).
-   - Still queued: **~4h max-hold time stop** (now **first in queue** — caps
-     the two >60-min holds, expresses "close before scheduled macro events"
-     without a news feed); **~5-min post-scratch pause** (27/58 0.75R entries
-     still come <10 min after the previous exit); **BUY-side momentum gate**
-     (BUY at 0.75R is 7W/16L/19BE = 30.4% dec — no longer ~0%, tripwire not
-     met); a **scheduled-news gate** is now a *named* candidate post-FOMC but
-     this event passed without one.
-   - Falsification for the ratchet change (still the pre-registered plan): if
-     0.75R-era P&L/trade is ≤ −$0.40 once n ≥ 60, begin the fallback with the
-     **~4h max-hold stop** measured in isolation, then ratchet-off if needed
-     (replay +$0.52/trade, 41% decisive) — **never** back to 0.30R.
+   - **~4 h max-hold time stop — ACTIVE (pre-registered fallback step 1).**
+     The falsification bar tripped 09-17 16:17 UTC, so this is no longer
+     queued: implement in the next code session, re-baseline the era at
+     deploy (autosync ≤ 3 h), measure in isolation for ~2 weeks (caps the
+     two >60-min holds, expresses "close before scheduled macro events"
+     without a news feed).
+   - Still queued: **~5-min post-scratch pause** (27/58 0.75R entries came
+     <10 min after the previous exit); **BUY-side momentum gate** (BUY at
+     0.75R was 7W/16L/19BE = 30.4% dec — no longer ~0%, tripwire not met);
+     a **scheduled-news gate** is a *named* candidate post-FOMC but this
+     event passed without one.
+   - Falsification for the ratchet change: **TRIPPED** (09-17 16:17 UTC,
+     −$0.595/trade at n=60; −$0.443 at n=75) — fallback in progress with the
+     **~4h max-hold stop** in isolation, then ratchet-off if needed (replay
+     +$0.52/trade, 41% decisive) — **never** back to 0.30R.
 
 3. Historical research (optional, later): use `tools/mt5_history_dump.py`
    once you want to stress-test candidate filters on multi-year data. A
@@ -328,8 +334,9 @@ rules apply to every session, from the first commit:
    changelog; add whatever the session queued.
 4. Write the analysis itself in `docs/REVIEW-YYYY-MM-DD.md`; this file only
    carries the *conclusion* and a pointer. The current one is
-   `docs/REVIEW-2026-09-17.md` (FOMC + 233 trades / 58 at +0.75R); the last
-   full review is `docs/REVIEW-2026-09-15.md` (164 trades).
+   `docs/REVIEW-2026-09-18.md` (250 trades / 75 at +0.75R — falsification bar
+   tripped, fallback active); the last full review is
+   `docs/REVIEW-2026-09-15.md` (164 trades).
 5. Never quote a pooled decisive win rate across the 09-15 ratchet change
    (`BE_TRIGGER_R` 0.30→0.75) without naming the era, and key any BE
    reconstruction on the geometry (`Stop_Loss == Entry_Price`), never on
