@@ -7,8 +7,10 @@ Read-only. Run after every data drop, next to the other analysis tools:
     python3 tools/win_rate_report.py            # from the repo root
 
 Sections
-  1. Baseline: W/L/BE, decisive win rate with a Wilson 95% CI, expectancy in $
+  1. Baseline: W/L/BE/TIME, decisive win rate with a Wilson 95% CI, expectancy in $
      and in R, plus the breakeven WR implied by the live TP/SL geometry.
+     TIME = max-hold stop exits (live 2026-09-21): own neutral bucket like BE
+     (excluded from decisive, booked in P&L/trade). Lines show /nTIME only when > 0.
   2. Era split around a deploy point (default: BE ratchet, 2026-09-10 12:34
      UTC) so regime changes never get averaged into "the" win rate.
   3. Side, day and hour breakdowns (BUY and SELL are different strategies).
@@ -96,16 +98,18 @@ def walk_window(t, end):
 def stats(ts, label, width=34):
     w = sum(1 for t in ts if t["reason"] == "TP")
     l = sum(1 for t in ts if t["reason"] == "SL")
-    b = len(ts) - w - l
+    b = sum(1 for t in ts if t["reason"] == "BE")
+    tm = sum(1 for t in ts if t["reason"] == "TIME")
     pnl = sum(t["profit"] for t in ts)
     dec = w + l
     rate = w / dec * 100 if dec else float("nan")
     lo, hi = wilson(w, dec)
     rate_str = f"{rate:5.1f}% dec" if dec else "  no decisive"
     ci = f"[{lo:4.1f},{hi:4.1f}]" if dec else ""
-    print(f"  {label:{width}s} n={len(ts):3d}  {w:2d}W/{l:2d}L/{b:2d}BE  "
+    res = f"{w:2d}W/{l:2d}L/{b:2d}BE" + (f"/{tm}TIME" if tm else "")
+    print(f"  {label:{width}s} n={len(ts):3d}  {res}  "
           f"{rate_str} {ci}  P/L {pnl:+8.2f}  /trade {pnl/len(ts) if ts else 0:+.3f}")
-    return w, l, b, pnl
+    return w, l, b, tm, pnl
 
 
 def wilson(w, n, z=1.96):
@@ -145,11 +149,12 @@ print(f"Win-rate report — {len(TRADES_L)} trades, {len(BARS)} bars "
 
 # ---------------------------------------------------------------- 1. baseline
 print("== 1. BASELINE ==")
-w, l, b, pnl = stats(TRADES_L, "all trades")
+w, l, b, tm, pnl = stats(TRADES_L, "all trades")
 dec = w + l
 one_r = statistics.mean(abs(t["entry"] - t["sl"]) for t in TRADES_L)
 print(f"  all-in win rate {w/len(TRADES_L)*100:.1f}% ({w}/{len(TRADES_L)}) | "
-      f"scratch rate {b/len(TRADES_L)*100:.1f}% ({b}/{len(TRADES_L)})")
+      f"scratch rate {b/len(TRADES_L)*100:.1f}% ({b}/{len(TRADES_L)})" +
+      (f" | TIME exits {tm} ({sum(t['profit'] for t in TRADES_L if t['reason'] == 'TIME'):+.2f})" if tm else ""))
 print(f"  net P/L {pnl:+.2f}  =  {pnl/len(TRADES_L)/one_r:+.3f}R per trade "
       f"(avg 1R ${one_r:.2f})")
 gross_w = sum(t["profit"] for t in TRADES_L if t["reason"] == "TP")
@@ -193,7 +198,7 @@ print()
 
 # -------------------------------------------------------------- 4. durations
 print("== 4. HOW LONG EACH OUTCOME TAKES (min) ==")
-for reason in ("TP", "SL", "BE"):
+for reason in ("TP", "SL", "BE", "TIME"):
     d = sorted((t["xt"] - t["et"]).total_seconds() / 60 for t in TRADES_L if t["reason"] == reason)
     if not d:
         continue
@@ -255,7 +260,10 @@ def walk_with_ratchet(t, trig, cap_min=WALK_CAP_MIN, tp_R=ATR_TP_MULT / ATR_SL_M
             return "W", tp_R
     if t["reason"] == "TP":
         return "W", tp_R
-    if t["reason"] == "BE":
+    if t["reason"] in ("BE", "TIME"):
+        # TIME fell back here = the entry survived the cap without touching
+        # either level. Neutral like BE; its P&L stays in trades.csv, not in
+        # the sim (cascade-ignorant grid - read direction, not magnitude).
         return "BE", 0.0
     return "L", -1.0
 
@@ -331,6 +339,8 @@ def cascade_replay(sample, trig, cooldown_min=30, escalated_min=60):
                 out, mins = "W", k + 1
                 break
         if out is None:                                        # horizon ended flat
+            # BE and TIME both fall to neutral (a TIME trade survived 240 min
+            # without a touch - inventing a TP/SL for it would be fiction).
             out = {"TP": "W", "SL": "L"}.get(t["reason"], "BE")
         money = abs(t["entry"] - t["sl"]) * 0.985
         pnl += {"W": tp_R * money, "L": -money, "BE": 0.0}[out]
@@ -364,10 +374,11 @@ print("== 6. QUEUED ENTRY FILTERS (keep vs skip) ==")
 
 def bucket(ts):
     w = sum(1 for t in ts if t["reason"] == "TP")
+    l = sum(1 for t in ts if t["reason"] == "SL")
     b = sum(1 for t in ts if t["reason"] == "BE")
-    l = len(ts) - w - b
+    tm = sum(1 for t in ts if t["reason"] == "TIME")
     d = w + l
-    return len(ts), w, l, b, (w / d * 100 if d else float("nan")), sum(t["profit"] for t in ts)
+    return len(ts), w, l, b, tm, (w / d * 100 if d else float("nan")), sum(t["profit"] for t in ts)
 
 
 def experiment(name, keep_fn, sample, note):
@@ -378,8 +389,10 @@ def experiment(name, keep_fn, sample, note):
     k = bucket(kept)
     s = bucket(skip)
     print(f"  {name}")
-    print(f"      keep   n={k[0]:3d}  {k[1]}W/{k[2]}L/{k[3]}BE  {k[4]:5.1f}% dec  {k[5]:+8.2f}")
-    print(f"      skip   n={s[0]:3d}  {s[1]}W/{s[2]}L/{s[3]}BE  {s[4]:5.1f}% dec  {s[5]:+8.2f}"
+    kr = f"{k[1]}W/{k[2]}L/{k[3]}BE" + (f"/{k[4]}TIME" if k[4] else "")
+    sr = f"{s[1]}W/{s[2]}L/{s[3]}BE" + (f"/{s[4]}TIME" if s[4] else "")
+    print(f"      keep   n={k[0]:3d}  {kr}  {k[5]:5.1f}% dec  {k[6]:+8.2f}")
+    print(f"      skip   n={s[0]:3d}  {sr}  {s[5]:5.1f}% dec  {s[6]:+8.2f}"
           f"   ({note})")
 
 
@@ -394,5 +407,5 @@ for label, sample in (("NEW REGIME", NEW), ("ALL DATA", TRADES_L)):
                lambda t: t["rsi"] >= 45 and t["atr"] < 2.5, sample, "the pair, together")
     print()
 
-print("Legend: 'dec' = decisive win rate (BE scratches excluded from both sides). "
-      "Wilson CI covers sampling noise only - it is not a forecast.")
+print("Legend: 'dec' = decisive win rate (BE scratches and TIME exits excluded from "
+      "both sides). Wilson CI covers sampling noise only - it is not a forecast.")

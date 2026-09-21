@@ -126,7 +126,9 @@ def walk(t, tp_R, be_trigger=None, partial_R=None):
     # neither hit within window: fall back to actual outcome
     if t["reason"] == "TP":
         return ("W", (half_banked or 0) / 2 + tp_R * (0.5 if half_banked else 1.0) if tp_R <= 1.5 else 1.5 * 0.97, True)
-    if t["reason"] == "BE":
+    if t["reason"] in ("BE", "TIME"):
+        # TIME = the entry survived ~240 min without a touch: neutral like BE
+        # (its P&L stays in trades.csv; inventing a full -1R loss would lie).
         return ("BE", 0.0, True)
     return ("L", -1.0, True)
 
@@ -154,8 +156,8 @@ def run(name, horizon_min=None, **kw):
             nobars += 1
             pnl += t["profit"]
             if t["reason"] == "TP": W += 1
-            elif t["reason"] == "BE": BE += 1
-            else: L += 1
+            elif t["reason"] == "SL": L += 1
+            else: BE += 1  # BE and TIME are both neutral
             continue
         out, r_mult, fell_back = walk(cand, **kw)
         timeout += bool(fell_back)
@@ -194,6 +196,10 @@ run("BE +0.25R, TP 1.0R", tp_R=1.0, be_trigger=0.25)
 run("BE +0.25R, TP 0.75R", tp_R=0.75, be_trigger=0.25)
 
 w = sum(1 for t in T if t["reason"] == "TP")
+l = sum(1 for t in T if t["reason"] == "SL")
 b = sum(1 for t in T if t["reason"] == "BE")
-print(f"\nActual baseline: {w}W/{n - w - b}L/{b}BE = {w / (n - b) * 100:.1f}% decisive, "
+tm = sum(1 for t in T if t["reason"] == "TIME")
+dec = w + l
+print(f"\nActual baseline: {w}W/{l}L/{b}BE" + (f"/{tm}TIME" if tm else "") +
+      f" = {w / dec * 100 if dec else 0:.1f}% decisive, "
       f"P/L {sum(t['profit'] for t in T):+.2f}")

@@ -8,7 +8,7 @@ from it (see docs/REVIEW-2026-09-09.md and REVIEW-2026-09-10.md).
 
 Checks:
   trades.csv        header/schema (16-field, Trade_Type column), row widths,
-                    Trade_Type/Exit_Reason domains (TP/SL/BE), numbering,
+                    Trade_Type/Exit_Reason domains (TP/SL/BE/TIME), numbering,
                     time order, Balance_After ledger continuity,
                     true P&L from $500
   forward_test_log  header, timestamp ordering, gaps > 5 min,
@@ -115,13 +115,13 @@ def check_trades():
         nums.append(d["num"])
         if d["Trade_Type"] not in ("BUY", "SELL"):
             bad_side += 1
-        if d["Exit_Reason"] not in ("TP", "SL", "BE"):
+        if d["Exit_Reason"] not in ("TP", "SL", "BE", "TIME"):
             bad_reason += 1
         if not d["entry_dt"] or not d["exit_dt"] or d["entry_dt"] >= d["exit_dt"]:
             bad_time += 1
         trades.append(d)
     if bad_reason:
-        fail(f"{bad_reason} rows with unparsable numbers or Exit_Reason not in TP/SL/BE")
+        fail(f"{bad_reason} rows with unparsable numbers or Exit_Reason not in TP/SL/BE/TIME")
     else:
         ok("Exit_Reason domain + numeric fields all parse")
     if bad_side:
@@ -151,12 +151,18 @@ def check_trades():
     wins = sum(1 for t in trades if t["Exit_Reason"] == "TP")
     losses = sum(1 for t in trades if t["Exit_Reason"] == "SL")
     bes = sum(1 for t in trades if t["Exit_Reason"] == "BE")
+    times = sum(1 for t in trades if t["Exit_Reason"] == "TIME")
     dec = wins + losses
     dec_wr = f"{wins / dec * 100:.1f}% decisive" if dec else "n/a"
     drift = trades[-1]["bal"] - (500 + true_pnl) if trades else 0
-    print(f"  [info] {wins}W/{losses}L/{bes}BE over {len(trades)} trades ({dec_wr}) | "
+    print(f"  [info] {wins}W/{losses}L/{bes}BE/{times}TIME over {len(trades)} trades ({dec_wr}) | "
           f"true P&L from $500: {true_pnl:+.2f} -> ${500 + true_pnl:.2f} | "
           f"engine ledger: ${trades[-1]['bal']:.2f} (drift {drift:+.2f})")
+    if times:
+        tp_ = sum(t["profit"] for t in trades if t["Exit_Reason"] == "TIME")
+        tw = sum(1 for t in trades if t["Exit_Reason"] == "TIME" and t["profit"] > 0)
+        info(f"{times} TIME exits: {tw}+/ {times - tw}-/flat, P&L {tp_:+.2f} "
+             f"(neutral bucket: excluded from decisive, booked in P&L/trade)")
     # BE scratches must exit at ~entry: a non-zero BE profit means the
     # ratcheted stop was mis-logged (or the exit slipped a full level).
     be_dust = [t for t in trades
@@ -165,6 +171,16 @@ def check_trades():
         warn(f"{len(be_dust)} BE rows with non-zero profit "
              f"(e.g. #{be_dust[0]['num']}: {be_dust[0]['profit']:+.2f}) - "
              f"scratches should exit at ~entry")
+    # TIME exits must hold ~MAX_HOLD_MINUTES: an early TIME exit means the
+    # engine's clock math is wrong (or entry_time got mangled on restore).
+    TIME_STOP_MINUTES = 240  # must match engine.MAX_HOLD_MINUTES
+    time_early = [t for t in trades
+                  if t["Exit_Reason"] == "TIME" and t["entry_dt"] and t["exit_dt"]
+                  and (t["exit_dt"] - t["entry_dt"]).total_seconds() / 60.0
+                  < TIME_STOP_MINUTES - 1]
+    if time_early:
+        warn(f"{len(time_early)} TIME rows held < {TIME_STOP_MINUTES} min "
+             f"(e.g. #{time_early[0]['num']}) - the time stop fired early")
     # Rows whose logged Stop_Loss equals the entry price are ratchet-armed
     # trades. BE scratches are the obvious case, but a trade that armed BE and
     # then reached TP is logged the same way (engine writes the LIVE stop at
@@ -192,7 +208,7 @@ def check_trades():
         t, m = max(long_holds, key=lambda x: x[1])
         warn(f"{len(long_holds)} trades held > 60 min (longest #{t['num']} "
              f"{m:.0f} min = {m/60:.1f} h, {t['Entry_Time']} -> {t['Exit_Time']}); "
-             f"there is no time stop, so a trade can sit across a feed/market gap")
+             f"(240-min TIME stop live since 2026-09-21; survivors are pre-deploy rows)")
     if abs(drift) > 0.02:
         warn("engine ledger disagrees with sum of profits (documented reset gap)")
     return trades
@@ -291,7 +307,8 @@ def check_cross(trades, log_dts):
     if spans:
         warn(f"{spans} trade(s) were open across a price-log gap - exit prices are "
              f"unreliable there; check whether the gap is the daily/weekend close "
-             f"(no time stop exists, so a trade can ride it)")
+             f"(the TIME stop only fires on the first candle/tick back, so gap rides "
+             f"still log long holds)")
     else:
         ok("no trade open across a price-log gap")
 
@@ -311,6 +328,9 @@ def check_cross(trades, log_dts):
             b = sum(1 for t in trades if t["Exit_Reason"] == "BE")
             if st.get("be_exits") not in (None, b):
                 mism.append(f"be_exits {st.get('be_exits')} != {b}")
+            tm = sum(1 for t in trades if t["Exit_Reason"] == "TIME")
+            if st.get("time_exits") not in (None, tm):
+                mism.append(f"time_exits {st.get('time_exits')} != {tm}")
             if st.get("equity") not in (None, trades[-1]["bal"]):
                 mism.append(f"equity {st.get('equity')} != ledger {trades[-1]['bal']}")
         if mism:
