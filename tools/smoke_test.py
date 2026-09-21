@@ -25,6 +25,10 @@ Scenarios:
   J) Direction-aware risk gates -> London blackout blocks BUY but allows SELL;
      daily-loss breaker degrades to trend-side-only (momentum from price log),
      legacy no-side calls keep the old hard halt
+  K) Max-hold time stop (MAX_HOLD_MINUTES, 2026-09-21) -> MUST close at market
+     with reason "TIME" once older than the window (tick path + MT5 candle
+     path, P&L-signed, own time_exits counter, survives restart); price exits
+     take priority over TIME; a fresh trade must stay open
 
 Usage: python3 tools/smoke_test.py
 """
@@ -450,6 +454,112 @@ check("J: legacy no-side call keeps hard halt",
 trade_filter.PRICE_LOG = "/opt/gold/forward_test_log.csv"
 shutil.rmtree(tmp_j, ignore_errors=True)
 
+
+
+# --- Scenario K ---
+print(f"\nScenario K: max-hold time stop -> TIME exit after {engine.MAX_HOLD_MINUTES} min")
+tmp_k = tempfile.mkdtemp(prefix="gold_smoke_k_")
+engine.LOG_FILE_PATH = os.path.join(tmp_k, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_k, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_k, "trades.csv")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_k, "skipped_trades.csv")
+trade_filter.is_in_blackout = lambda now=None, side=None: (False, "")
+
+eng_k = engine.GoldEngine()
+run_candles(eng_k, candles_uptrend(240), datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc))
+run_candles(eng_k, [rejection_dip_buy(eng_k)], datetime(2026, 6, 1, 4, 0, tzinfo=timezone.utc))
+check("K: BUY trade triggered", eng_k.trade_active and eng_k.trade_type == "BUY")
+
+entry_k = eng_k.entry_price
+risk_k = entry_k - eng_k.stop_loss
+drift_px = entry_k + 0.1 * risk_k  # mid-range: arms nothing, touches nothing
+
+# fresh trade must NOT time-stop
+eng_k.check_position(drift_px)
+check("K: fresh trade stays open (no TIME, no arm)",
+      eng_k.trade_active and eng_k.time_exits == 0 and not eng_k.be_armed,
+      f"active={eng_k.trade_active} time_exits={eng_k.time_exits} armed={eng_k.be_armed}")
+
+# expired trade closes at market with reason TIME (tick path)
+past_k = (datetime.now(timezone.utc) - timedelta(minutes=engine.MAX_HOLD_MINUTES + 1))
+past_k = past_k.strftime("%Y-%m-%d %H:%M:%S")
+eng_k.entry_time = past_k
+bal_k = eng_k.balance
+eng_k.check_position(drift_px)
+check("K: expired trade TIME-exits on tick path (neutral bucket)",
+      not eng_k.trade_active and eng_k.time_exits == 1
+      and eng_k.wins == 0 and eng_k.losses == 0 and eng_k.be_exits == 0,
+      f"wins={eng_k.wins} losses={eng_k.losses} be={eng_k.be_exits} time={eng_k.time_exits}")
+check("K: TIME books signed P&L (+0.1R here)",
+      abs(eng_k.balance - (bal_k + 0.1 * risk_k)) < 0.01,
+      f"balance={eng_k.balance:.2f} expected~{bal_k + 0.1 * risk_k:.2f}")
+
+# price exits take priority over TIME
+run_candles(eng_k, [rejection_dip_buy(eng_k)], datetime(2026, 6, 1, 5, 0, tzinfo=timezone.utc))
+check("K: second BUY triggered (TIME exit caused no cooldown)", eng_k.trade_active)
+eng_k.entry_time = past_k  # expired, but price gets there first
+eng_k.check_position(eng_k.take_profit + 0.05)
+check("K: simultaneous TP beats TIME", not eng_k.trade_active and eng_k.wins == 1
+      and eng_k.time_exits == 1, f"wins={eng_k.wins} time={eng_k.time_exits}")
+
+# MT5 candle path: inside-range candle on an expired trade -> TIME at close
+run_candles(eng_k, [rejection_dip_buy(eng_k)], datetime(2026, 6, 1, 6, 0, tzinfo=timezone.utc))
+check("K: third BUY triggered", eng_k.trade_active)
+eng_k.entry_time = past_k
+rk3 = eng_k.entry_price - eng_k.stop_loss
+c3 = eng_k.entry_price + 0.1 * rk3
+eng_k.resolve_open_trade_on_candle(o=c3 - 0.05, h=c3 + 0.05, l=c3 - 0.05, c=c3)
+check("K: candle path TIME-exits at close",
+      not eng_k.trade_active and eng_k.time_exits == 2,
+      f"time_exits={eng_k.time_exits}")
+
+# SELL sign check via direct state (profit = entry - price)
+eng_k.trade_active = True
+eng_k.trade_type = "SELL"
+eng_k.current_trade_num = eng_k.next_trade_num
+eng_k.next_trade_num += 1
+eng_k.entry_price = 4400.0
+eng_k.stop_loss = 4404.0
+eng_k.take_profit = 4394.0
+eng_k.be_armed = False
+eng_k.entry_time = past_k
+bal_s = eng_k.balance
+eng_k.check_position(4398.0)
+check("K: SELL TIME books entry-minus-price (+$2.00)",
+      not eng_k.trade_active and eng_k.time_exits == 3
+      and abs(eng_k.balance - (bal_s + 2.0)) < 0.01,
+      f"balance={eng_k.balance:.2f} time={eng_k.time_exits}")
+
+# BE-armed but timed-out: reason stays TIME (the stop never triggered)
+eng_k.trade_active = True
+eng_k.trade_type = "BUY"
+eng_k.current_trade_num = eng_k.next_trade_num
+eng_k.next_trade_num += 1
+eng_k.entry_price = 4400.0
+eng_k.stop_loss = 4400.0
+eng_k.take_profit = 4405.0
+eng_k.be_armed = True
+eng_k.entry_time = past_k
+eng_k.check_position(4400.5)  # above the ratcheted stop, below TP: no price level touched
+with open(engine.TRADES_LOG_PATH, newline="") as f:
+    rows_k = list(csv.DictReader(f))
+check("K: armed-but-expired exits as TIME (not BE)",
+      rows_k[-1]["Exit_Reason"] == "TIME" and abs(float(rows_k[-1]["Profit"]) - 0.5) < 0.01
+      and eng_k.time_exits == 4 and eng_k.be_exits == 0,
+      f"reason={rows_k[-1]['Exit_Reason']} profit={rows_k[-1]['Profit']} time={eng_k.time_exits}")
+
+# restart restores TIME-aware stats + status.json carries the new counter
+eng_k2 = engine.GoldEngine()
+with open(engine.STATUS_FILE_PATH) as f:
+    st_k = json.load(f)
+check("K: stats restore counts TIME separately",
+      eng_k2.time_exits == 4 and eng_k2.wins == 1 and eng_k2.losses == 0 and eng_k2.be_exits == 0,
+      f"{eng_k2.wins}W/{eng_k2.losses}L/{eng_k2.be_exits}BE/{eng_k2.time_exits}TIME")
+check("K: status.json total includes TIME exits",
+      st_k.get("time_exits") == 4 and st_k.get("total_trades") == 5,
+      f"time_exits={st_k.get('time_exits')} total={st_k.get('total_trades')}")
+shutil.rmtree(tmp_k, ignore_errors=True)
 
 print()
 if FAILURES:
