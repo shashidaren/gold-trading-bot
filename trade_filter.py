@@ -96,7 +96,12 @@ def get_daily_sl_count(trades: list, now: datetime = None) -> int:
 
 
 def get_consecutive_sl_count(trades: list) -> int:
-    """Counts uninterrupted trailing Stop Loss trades."""
+    """Counts uninterrupted trailing Stop Loss trades.
+
+    BE scratches and TIME exits (max-hold stop, 2026-09-21) are ignored: they
+    neither count toward nor break the streak. A TIME exit books realized P&L
+    but is not a stop-out, so it deliberately leaves cooldown escalation alone
+    (same treatment as BE; revisit at the max-hold re-review)."""
     if not trades:
         return 0
     count = 0
