@@ -12,10 +12,13 @@ from the first commit.
 ## 1. Where things stand (as of 2026-09-21)
 
 - Repo: `shashidaren/gold-trading-bot`, default branch `main`.
-  Current work branch: `arena/01a0c2c4-gold-trading-bot` (win-rate drop check +
-  dashboard Win-Rate tile clarity — display-only, no engine/strategy/param
-  change; `docs/ANALYSIS-2026-09-21-win-rate-drop-check.md`; PR open).
-- **PR #15 MERGED** (2026-09-21 04:50:49Z): max-hold time stop
+  Current work branch: `arena/01a0c52d-gold-trading-bot` (revert-or-maintain
+  before/after comparison on data collection 92 — **verdict MAINTAIN** —
+  docs-only, no engine/strategy/param change;
+  `docs/ANALYSIS-2026-09-21-revert-or-maintain.md`; PR open).
+- **PR #16, #17 MERGED** (2026-09-21 07:05 / 07:22 UTC): win-rate drop check
+  (NO drop) + dashboard Win-Rate tile clarity (display-only) + the §2b era
+  table / no-reset decision. **PR #15 MERGED** (2026-09-21 04:50:49Z): max-hold time stop
   (`MAX_HOLD_MINUTES = 240`, reason TIME) — **deploy confirmed live** by the
   ~06:00 autosync run (proof: the `status.json` written by the engine at
   06:59:06 carries the new `time_exits` key, which exists only in the PR #15
@@ -25,42 +28,51 @@ from the first commit.
   `tools/win_rate_report.py`. Earlier still: PR #7 (2026-09-10 12:33 UTC) put
   the BE ratchet + direction-aware London blackout + trend-side daily breaker
   on `main`.
-- Current ledger (latest `trades.csv` / `status.json`, data collection 86):
-  - **271 closed trades, 0 active** → 38W / 101L / 132BE / 0TIME → **27.3%
-    decisive (CI 20.6–35.3)**, −$169.40 (engine ledger $355.31, known drift
-    +$24.71)
+- Current ledger (latest `trades.csv` / `status.json`, data collection 92):
+  - **281 closed trades, 0 active** → 40W / 107L / 134BE / 0TIME → **27.2%
+    decisive (CI 20.7–34.9)**, −$186.88 (engine ledger $337.82, known drift
+    +$24.70, unchanged since 09-15)
   - **0.75R era** (entries ≥ 09-15 06:00 UTC — the 06:00 autosync run deployed
-    PR #9, which merged 03:00:23Z, 23 s after the 03:00 run): **96 trades** →
-    20W/42L/34BE, **32.3% decisive (CI 22.0–44.6)**, −$45.20
-    (**−$0.471/trade — still below the −$0.40 falsification bar**). The
-    **max-hold era itself holds 1 trade** (#270 SELL 06:31 → SL 06:41, −$4.59).
-    Era books partitioned + **no-reset decision (binding: the max-hold deploy
-    resets nothing — no counter zeroing, bar stays on the whole 0.75R book)**:
-    `docs/ANALYSIS-2026-09-21-win-rate-drop-check.md` §2b.
+    PR #9, which merged 03:00:23Z, 23 s after the 03:00 run): **106 trades** →
+    22W/48L/36BE, **31.4% decisive (CI 21.8–43.0)**, −$62.68
+    (**−$0.591/trade — still below the −$0.40 falsification bar**, worsened
+    from −$0.471 by the 09-21 trend-day bleed). The **max-hold era itself
+    holds 11 trades** (#270 06:31 → #280 17:45): 2W/7L/2BE, −$22.07 — **still
+    0 TIME exits (longest hold 24.9 min ≪ 240-min cap; the stop has never
+    fired)**. Era books partitioned + **no-reset decision (binding: the
+    max-hold deploy resets nothing — no counter zeroing, bar stays on the
+    whole 0.75R book)**:
+    `docs/ANALYSIS-2026-09-21-win-rate-drop-check.md` §2b; fresh partition on
+    281 trades in `docs/ANALYSIS-2026-09-21-revert-or-maintain.md` §2.
   - **Falsification bar FORMALLY TRIPPED 09-17 16:17 UTC** (−$0.595/trade at
-    n=60; still −$0.471 at n=96) → pre-registered fallback step 1 **SHIPPED and
+    n=60; −$0.591 at n=106) → pre-registered fallback step 1 **SHIPPED and
     LIVE 09-21**: ~4 h max-hold time stop, 0 fires; ratchet-off second, never
     back to 0.30R.
   - 0.30R era (09-10 12:34 → 09-15 06:00, n=130): 10W/22L/98BE, 31.2% dec,
     −$0.321/trade. Pre-ratchet (n=45): 17.8% dec, −$1.834/trade.
   - Scratch rate 75.4% → **35.4%** across the ratchet change; era median BE
     hold 11.5 min; 09-18 full day = first positive era day (+$3.38, n=22);
-    09-19 Sat dark (market closed), 09-20/21 thin on reopen. **The last 5
-    closed trades are 0W/4L/1BE — sampled noise (P(0 of 4) = 20% at a 33% base
-    rate), not a regime change; see the 09-21 win-rate check doc.**
+    09-19 Sat dark (market closed). **09-21 was a −51-pt gold trend day:**
+    the max-hold era's first 11 trades went 2W/7L/2BE (−$22.07) — **the
+    revert-or-maintain check says MAINTAIN** (P(≤2 wins in 9 decisive) ≈ 41%
+    at the era base rate; the change exonerated by never having fired; the
+    pre-registered fallback protocol is mid-flight) — see
+    `docs/ANALYSIS-2026-09-21-revert-or-maintain.md`.
 - Live bot runs from `/opt/gold` via systemd (`goldbot.service` =
   engine, `mt5feed.service` = price-feed sidecar).
 
-**Current stance:** 96 trades into the +0.75R era
-(`docs/REVIEW-2026-09-21.md` + `docs/ANALYSIS-2026-09-21-win-rate-drop-check.md`):
-the **mechanism is still confirmed** (scratch rate 35.4%, median BE hold
-11.5 min) but the **edge is not there** — 32.3%
-decisive vs the 40% breakeven, **−$0.471/trade**. The pre-registered bar has
+**Current stance:** 106 trades into the +0.75R era
+(`docs/REVIEW-2026-09-21.md` + `docs/ANALYSIS-2026-09-21-win-rate-drop-check.md`
++ `docs/ANALYSIS-2026-09-21-revert-or-maintain.md`):
+the **mechanism is still confirmed** (scratch rate ~34%, median BE hold
+11.5 min) but the **edge is not there** — 31.4%
+decisive vs the 40% breakeven, **−$0.591/trade**. The pre-registered bar has
 **tripped**, so the previous session shipped the **~4 h max-hold time stop**
 (`MAX_HOLD_MINUTES = 240`, reason TIME — neutral bucket like BE, price exits
 take priority, wall-clock, engine-side only); era re-baselines at deploy
-(merge → autosync ≤ 3 h). Isolation starts at deploy; next re-review ≈
-deploy + 2 weeks. Auto-trade timeline stays formal: edge confirmation
+(merge → autosync ≤ 3 h). Isolation started at deploy (max-hold era n=11 as
+of 09-21 18:00, 0 TIME fires); **the 09-21 revert-or-maintain check says
+MAINTAIN**; next re-review ≈ deploy + 2 weeks / n ≈ 200. Auto-trade timeline stays formal: edge confirmation
 ~8 weeks (n≈1,300, CI ±$0.20), multi-regime 3–4 months, micro live pilot
 Q1 2027, auto-trade decision **6–12 months (Mar–Sep 2027)** — binding
 constraints are edge + regime coverage + unmodelled costs (forward-test P&L
@@ -144,7 +156,12 @@ for the ratchet).
 ## 5. Evidence base (don’t re-derive)
 
 Key documents:
-- `docs/ANALYSIS-2026-09-21-win-rate-drop-check.md` (latest — "did the win rate
+- `docs/ANALYSIS-2026-09-21-revert-or-maintain.md` (latest — whole book before
+  vs after the recent parameter changes on 281 trades → **MAINTAIN, revert
+  nothing**: new-regime stack −5.7× bleed, 0.30R→0.75R replay −$116 → +$29
+  (never back), max-hold exonerated by 0 fires at longest hold 24.9 min;
+  today's −$22 trend-day bleed is noise within the pre-registered fallback)
+- `docs/ANALYSIS-2026-09-21-win-rate-drop-check.md` ("did the win rate
   just drop?" → **no**: pooled 27.3% at n=271, era 32.3% at n=96, 0 TIME exits,
   ratchet verified firing at ≥0.76R; the recent 0W/4L run is sampled noise +
   the known cooldown leak. Also relabels the dashboard Win-Rate tile
@@ -200,8 +217,10 @@ Current headlines (2026-09-15, 164 trades / 119 new-regime):
 1. **Max-hold time stop SHIPPED 09-21 — LIVE, in isolation; re-review next**
    (max-hold re-baseline + ~2 weeks in-isolation data, ≈ deploy + 14 d).
    Deploy confirmed (PR #15 merged 04:50:49Z → ~06:00 autosync restart; the
-   engine's 06:59:06 `status.json` carries `time_exits`), so the max-hold era is
-   only at **n = 1** as of 09-21 07:00. Still pin the exact boundary timestamp
+   engine's 06:59:06 `status.json` carries `time_exits`); the max-hold era is
+   at **n = 11, 0 TIME fires, −$22.07** as of 09-21 18:00 (revert-or-maintain
+   check: MAINTAIN — `docs/ANALYSIS-2026-09-21-revert-or-maintain.md`). Still
+   pin the exact boundary timestamp
    from `/var/log/gold_autosync.log` or the Telegram deploy digest
    (the engine logs no version, so it cannot be recovered from the CSVs alone).
    After pulling the latest data:
@@ -384,8 +403,10 @@ rules apply to every session, from the first commit:
 4. Write the analysis itself in `docs/REVIEW-YYYY-MM-DD.md` (or
    `docs/ANALYSIS-*` for an ad-hoc check); this file only carries the
    *conclusion* and a pointer. The latest is
-   `docs/ANALYSIS-2026-09-21-win-rate-drop-check.md` (271 trades / 96 at
-   +0.75R — win rate stable, max-hold live with 0 fires; §2b era table +
+   `docs/ANALYSIS-2026-09-21-revert-or-maintain.md` (281 trades / 106 at
+   +0.75R — whole book before vs after the parameter changes → MAINTAIN);
+   before that `docs/ANALYSIS-2026-09-21-win-rate-drop-check.md` (271 trades /
+   96 at +0.75R — win rate stable, max-hold live with 0 fires; §2b era table +
    no-reset decision at the max-hold boundary); the last formal review is
    `docs/REVIEW-2026-09-21.md` (265 trades / 90 at +0.75R; §3 carries the
    era-terminology pointer); the last full review is `docs/REVIEW-2026-09-15.md`
