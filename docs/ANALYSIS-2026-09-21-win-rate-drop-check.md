@@ -60,6 +60,67 @@ today" comparison is against a dark or near-empty day.
   −$4.59). Since the merge (04:50:49Z) it contains **2 closed trades, both
   losers** (#269, #270 = −$7.15). That is the entire post-change sample.
 
+## 2b. Era table — the books behind every number (and the no-reset decision)
+
+§1's windows overlap; this table partitions the whole ledger into
+non-overlapping books, so every number on the dashboard or in a review maps
+to exactly one row. Computed on the 2026-09-21 07:08 UTC snapshot (data
+collection 86; 271 closed trades — the drop added bars, no new trades, so
+every §1 figure is unchanged).
+
+| Book | Boundary (entry time, UTC) | n | Result | Decisive WR (Wilson 95%) | P&L | $/trade |
+|---|---|---|---|---|---|---|
+| **All trades** — era-blind, what the Win-Rate tile shows | — | 271 | 38W/101L/132BE | 27.3% [20.6, 35.3] | −$169.40 | −$0.625 |
+| Pre-ratchet (no BE ratchet) | < 09-10 12:34 | 45 | 8W/37L/0BE | 17.8% [9.3, 31.3] | −$82.51 | −$1.834 |
+| 0.30R era (`BE_TRIGGER_R = 0.30`) | 09-10 12:34 → 09-15 06:00 | 130 | 10W/22L/98BE | 31.2% [18.0, 48.6] | −$41.69 | −$0.321 |
+| **0.75R ratchet book (master — the falsification bar's era)** | ≥ 09-15 06:00 | 96 | 20W/42L/34BE | 32.3% [22.0, 44.6] | −$45.20 | −$0.471 |
+| — of which pre-deploy ("0.75R-only"; stopped receiving trades at the restart) | 09-15 06:00 → 09-21 ~06:00 | 95 | 20W/41L/34BE | 32.8% [22.3, 45.3] | −$40.61 | −$0.427 |
+| — of which **max-hold era (current)** | ≥ 09-21 ~06:00 | 1 | 0W/1L/0BE | 0.0% [0.0, 79.3] — n=1, no read | −$4.59 | −$4.590 |
+
+The rows partition the ledger: 45 + 130 + 95 + 1 = 271, and the P&Ls sum to
+−$169.40. The master 0.75R row is the "0.75R era" the reviews and the
+pre-registered bar use — it is the *ratchet book*, not the pre-deploy
+sub-period: at this snapshot it holds 96 trades (32.3% decisive,
+−$0.471/trade; the bar, formally tripped 09-17 16:17 UTC, remains
+breached). §1's "+0.75R era (n=96)" row is this same master row.
+
+**Boundary precision.** The 0.75R boundary is exact (the 09-15 06:00
+autosync run deployed PR #9, merged 03:00:23Z). The max-hold boundary is
+the ~09-21 06:00 autosync run that picked up PR #15 (merged 04:50:49Z):
+the last pre-deploy entry is #269 (05:18:05) and the first post-restart
+trade is #270 (06:31:03). Pin the exact restart timestamp from
+`/var/log/gold_autosync.log` / the Telegram digest at the re-review
+(`docs/REVIEW-2026-09-21.md` §3); until then "~06:00" is the boundary, and
+the split point (#269 vs #270) is immaterial at these counts.
+
+### No-reset decision (binding for future sessions)
+
+The max-hold deploy did not — and will not — reset anything. Concretely:
+
+1. **No counter reset.** The 0.75R ratchet book keeps accumulating from
+   09-15 06:00 UTC. Its n, W/L/BE/TIME and P&L are not zeroed at the
+   max-hold boundary, and the pre-registered falsification bar (era
+   P&L/trade ≤ −$0.40 at n ≥ 60) stays judged on the *whole* book:
+   formally tripped 09-17 16:17 UTC, still −$0.471 at n=96. A reset would
+   have manufactured a fresh, un-pre-registered pass/fail window and
+   orphaned the trip record.
+2. **"Closes at deploy" means the sub-period stopped receiving trades —
+   not that its stats were re-zeroed.** The "0.75R-only" row above is
+   historical (95 trades, closed at the restart); it is reported, not
+   reset.
+3. **The max-hold era is a sub-period of the same ratchet book** (the
+   ratchet is still 0.75R), defined as entries ≥ the deploy restart for
+   the fallback step-1 isolation read — judged at deploy + ~2 weeks /
+   n ≈ 200 on P&L/day and bleed/trade, not on WR alone.
+4. **No engine-state reset.** The autosync deploy restarts the engine and
+   stats restore from `trades.csv` (total_trades, balance, streaks — the
+   brief 0.0% tile right after a restart is the known restore artifact,
+   §8); Trade_Num is not renumbered and the ledger is never zeroed.
+
+For future sessions: quote any win rate with its book named (handoff §11
+rule) — the tile is the "All trades" row, the era number in reviews is the
+master 0.75R row, and the isolation read is the max-hold row.
+
 ## 3. The recent cluster, explained (it is not the change)
 
 - Current **consecutive-SL run = 4**, daily SLs 5/10 in `status.json` → the

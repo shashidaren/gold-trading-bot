@@ -25,7 +25,7 @@ from the first commit.
   `tools/win_rate_report.py`. Earlier still: PR #7 (2026-09-10 12:33 UTC) put
   the BE ratchet + direction-aware London blackout + trend-side daily breaker
   on `main`.
-- Current ledger (latest `trades.csv` / `status.json`, data collection 85):
+- Current ledger (latest `trades.csv` / `status.json`, data collection 86):
   - **271 closed trades, 0 active** → 38W / 101L / 132BE / 0TIME → **27.3%
     decisive (CI 20.6–35.3)**, −$169.40 (engine ledger $355.31, known drift
     +$24.71)
@@ -34,6 +34,9 @@ from the first commit.
     20W/42L/34BE, **32.3% decisive (CI 22.0–44.6)**, −$45.20
     (**−$0.471/trade — still below the −$0.40 falsification bar**). The
     **max-hold era itself holds 1 trade** (#270 SELL 06:31 → SL 06:41, −$4.59).
+    Era books partitioned + **no-reset decision (binding: the max-hold deploy
+    resets nothing — no counter zeroing, bar stays on the whole 0.75R book)**:
+    `docs/ANALYSIS-2026-09-21-win-rate-drop-check.md` §2b.
   - **Falsification bar FORMALLY TRIPPED 09-17 16:17 UTC** (−$0.595/trade at
     n=60; still −$0.471 at n=96) → pre-registered fallback step 1 **SHIPPED and
     LIVE 09-21**: ~4 h max-hold time stop, 0 fires; ratchet-off second, never
@@ -146,7 +149,13 @@ Key documents:
   ratchet verified firing at ≥0.76R; the recent 0W/4L run is sampled noise +
   the known cooldown leak. Also relabels the dashboard Win-Rate tile
   "**(decisive)** — all eras · excl. BE/TIME · all-in 14.0%", because the bare
-  27.3% tile is era-blind and reads like a collapse; the era rate is 32.3%)
+  27.3% tile is era-blind and reads like a collapse; the era rate is 32.3%.
+  **§2b: the era table** — 271 trades partitioned into 4 non-overlapping books
+  (all 27.3%/−$0.625, pre-ratchet n=45 17.8%/−$1.834, 0.30R era n=130
+  31.2%/−$0.321, master 0.75R book n=96 32.3%/−$0.471, of which max-hold era
+  n=1) — **plus the no-reset decision (binding):** the max-hold deploy resets
+  nothing; "closes at deploy" = the sub-period stops receiving trades; the
+  falsification bar stays judged on the whole 0.75R book)
 - `docs/REVIEW-2026-09-21.md` (max-hold time stop deployment record
   + 90-trade 0.75R close-out)
 - `docs/REVIEW-2026-09-18.md` (falsification bar formally tripped; fallback
@@ -376,9 +385,11 @@ rules apply to every session, from the first commit:
    `docs/ANALYSIS-*` for an ad-hoc check); this file only carries the
    *conclusion* and a pointer. The latest is
    `docs/ANALYSIS-2026-09-21-win-rate-drop-check.md` (271 trades / 96 at
-   +0.75R — win rate stable, max-hold live with 0 fires); the last formal
-   review is `docs/REVIEW-2026-09-21.md` (265 trades / 90 at +0.75R); the last
-   full review is `docs/REVIEW-2026-09-15.md` (164 trades).
+   +0.75R — win rate stable, max-hold live with 0 fires; §2b era table +
+   no-reset decision at the max-hold boundary); the last formal review is
+   `docs/REVIEW-2026-09-21.md` (265 trades / 90 at +0.75R; §3 carries the
+   era-terminology pointer); the last full review is `docs/REVIEW-2026-09-15.md`
+   (164 trades).
 5. Never quote a pooled decisive win rate across the 09-15 ratchet change
    (`BE_TRIGGER_R` 0.30→0.75) without naming the era, and key any BE
    reconstruction on the geometry (`Stop_Loss == Entry_Price`), never on
