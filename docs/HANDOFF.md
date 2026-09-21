@@ -12,9 +12,9 @@ from the first commit.
 ## 1. Where things stand (as of 2026-09-21)
 
 - Repo: `shashidaren/gold-trading-bot`, default branch `main`.
-  Current work branch: `arena/01a0c2c4-gold-trading-bot` (docs-only win-rate
-  drop check — `docs/ANALYSIS-2026-09-21-win-rate-drop-check.md`; PR open,
-  nothing to deploy).
+  Current work branch: `arena/01a0c2c4-gold-trading-bot` (win-rate drop check +
+  dashboard Win-Rate tile clarity — display-only, no engine/strategy/param
+  change; `docs/ANALYSIS-2026-09-21-win-rate-drop-check.md`; PR open).
 - **PR #15 MERGED** (2026-09-21 04:50:49Z): max-hold time stop
   (`MAX_HOLD_MINUTES = 240`, reason TIME) — **deploy confirmed live** by the
   ~06:00 autosync run (proof: the `status.json` written by the engine at
@@ -144,7 +144,9 @@ Key documents:
 - `docs/ANALYSIS-2026-09-21-win-rate-drop-check.md` (latest — "did the win rate
   just drop?" → **no**: pooled 27.3% at n=271, era 32.3% at n=96, 0 TIME exits,
   ratchet verified firing at ≥0.76R; the recent 0W/4L run is sampled noise +
-  the known cooldown leak)
+  the known cooldown leak. Also relabels the dashboard Win-Rate tile
+  "**(decisive)** — all eras · excl. BE/TIME · all-in 14.0%", because the bare
+  27.3% tile is era-blind and reads like a collapse; the era rate is 32.3%)
 - `docs/REVIEW-2026-09-21.md` (max-hold time stop deployment record
   + 90-trade 0.75R close-out)
 - `docs/REVIEW-2026-09-18.md` (falsification bar formally tripped; fallback

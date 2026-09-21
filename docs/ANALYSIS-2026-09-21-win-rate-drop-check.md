@@ -100,8 +100,25 @@ Reconstructed from `forward_test_log.csv` (no reliance on `Exit_Reason`):
   sample. Judge it at **deploy + ~2 weeks / n ≈ 200 max-hold-era trades** on
   P&L/day and bleed/trade (plus TIME count + P&L split, >60-min holds ≈ 0) —
   **not** on win rate alone and not on a 5-trade window.
-- No code, param, or exit change is warranted by this data. Nothing was changed
-  by this analysis.
+- **Engine/strategy/params untouched by this analysis.** The only code touched
+  is the dashboard tile below (display-only; the dashboard is a separate
+  service, `engine.py` and `trade_filter.py` are byte-identical, so the
+  max-hold isolation window is not disturbed).
+
+## 7. Cosmetic follow-up from this check (dashboard tile)
+
+The tile the user was reading (`status.win_rate`) was the **era-blind pooled**
+decisive rate with no context — the exact trap. Now labelled:
+
+> **Win Rate (decisive)** — 27.3% — *all eras · excl. BE/TIME · all-in 14.0%*
+
+Display-only change in `dashboard.py` (label + a computed all-in line); no new
+data source, no engine change, guards against `total_trades = 0`. Verified by
+rendering the app: HTTP 200 and correct values with (a) the live 271-trade
+`status.json`, (b) a partial/old-schema `status.json`, (c) no files at all.
+An **era-aware** tile would need the engine to track era stats (a config
+decision about what defines an era) — deliberately *not* done here; noted as a
+future option, not a queued change.
 
 ## 6. Data hygiene (suite run on this snapshot)
 
@@ -113,7 +130,7 @@ Reconstructed from `forward_test_log.csv` (no reliance on `Exit_Reason`):
   (no TIME rows exist yet — the first real one is expected ≥ 4 h after the
   deploy restart).
 
-## 7. If a *different* number was on screen
+## 8. If a *different* number was on screen
 
 Two display facts that can look like a "collapsed" win rate without anything
 having happened (both are by design, both documented in §8 of the handoff):

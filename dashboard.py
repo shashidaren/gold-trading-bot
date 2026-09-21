@@ -71,8 +71,12 @@ HTML_TEMPLATE = """
                 <p class="text-2xl font-bold text-violet-300">{{ status.time_exits or 0 }}</p>
             </div>
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                <p class="text-xs text-slate-400">Win Rate</p>
+                <p class="text-xs text-slate-400">Win Rate <span class="text-slate-500">(decisive)</span></p>
                 <p class="text-2xl font-bold text-blue-400">{{ status.win_rate }}%</p>
+                <p class="text-[11px] text-slate-500 leading-tight mt-1">
+                    all eras · excl. BE/TIME · all-in
+                    {{ "%.1f"|format(100 * (status.wins or 0) / (status.total_trades or 1)) }}%
+                </p>
             </div>
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
                 <p class="text-xs text-slate-400">Next Trade #</p>
