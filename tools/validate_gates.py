@@ -176,26 +176,33 @@ def main():
     names = ["SLOPE30", "ABV50s", "NOH8", "RISE120", "ABOVE50", "PROX0.5", "PROX1.0", "OLD0.2%"]
     print(f"{'trade':<13} {'res':<4} {'pnl':>6}  " + "  ".join(f"{n:>8}" for n in names))
     for t, g in report:
-        mark = "WIN" if t["reason"] == "TP" else ("BE" if t["reason"] == "BE" else "loss")
+        mark = ("WIN" if t["reason"] == "TP" else
+                "BE" if t["reason"] == "BE" else
+                "TIME" if t["reason"] == "TIME" else "loss")
         cells = "  ".join(f"{'PASS' if g[n] else 'BLOCK':>8}" for n in names)
         print(f"#{t['num']:>3} {t['side']:<4}{t['dt'].strftime('%m-%d %H:%M'):<10} {mark:<4} {t['pnl']:>+6.2f}  {cells}")
 
     def summ(name, fn):
         kept = [(t, g) for t, g in report if fn(t, g)]
         w = sum(1 for t, g in kept if t["reason"] == "TP")
+        l = sum(1 for t, g in kept if t["reason"] == "SL")
         b = sum(1 for t, g in kept if t["reason"] == "BE")
-        l = len(kept) - w - b
+        tm = sum(1 for t, g in kept if t["reason"] == "TIME")
         pnl = sum(t["pnl"] for t, g in kept)
         dec = w + l
         wr = w / dec * 100 if dec else 0
         k8 = [(t, g) for t, g in kept if t["dt"] >= datetime(2026, 9, 8)]
         w8 = sum(1 for t, g in k8 if t["reason"] == "TP")
+        l8 = sum(1 for t, g in k8 if t["reason"] == "SL")
         b8 = sum(1 for t, g in k8 if t["reason"] == "BE")
+        tm8 = sum(1 for t, g in k8 if t["reason"] == "TIME")
         p8 = sum(t["pnl"] for t, g in k8)
-        print(f"  {name:<28} all: {len(kept):>2} kept {w}W/{l}L/{b}BE ({wr:3.0f}% dec) {pnl:+8.2f}   "
-              f"9/8+: {len(k8)} kept {w8}W/{len(k8)-w8-b8}L/{b8}BE {p8:+7.2f}")
+        kr = f"{w}W/{l}L/{b}BE" + (f"/{tm}TIME" if tm else "")
+        k8r = f"{w8}W/{l8}L/{b8}BE" + (f"/{tm8}TIME" if tm8 else "")
+        print(f"  {name:<28} all: {len(kept):>2} kept {kr} ({wr:3.0f}% dec) {pnl:+8.2f}   "
+              f"9/8+: {len(k8)} kept {k8r} {p8:+7.2f}")
 
-    print("\n=== SINGLE GATES (WR over decisive trades; BE = neutral scratch) ===")
+    print("\n=== SINGLE GATES (WR over decisive trades; BE/TIME = neutral) ===")
     for n in names:
         summ(n, lambda t, g, n=n: g[n])
 

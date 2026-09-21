@@ -49,7 +49,7 @@ HTML_TEMPLATE = """
         </header>
 
         <!-- Main Stats -->
-        <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4 mb-6">
+        <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-4 mb-6">
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
                 <p class="text-xs text-slate-400">Closed Trades</p>
                 <p class="text-2xl font-bold text-amber-400">{{ status.total_trades }}</p>
@@ -65,6 +65,10 @@ HTML_TEMPLATE = """
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
                 <p class="text-xs text-slate-400">BE Scratches</p>
                 <p class="text-2xl font-bold text-slate-300">{{ status.be_exits or 0 }}</p>
+            </div>
+            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                <p class="text-xs text-slate-400">Time Stops</p>
+                <p class="text-2xl font-bold text-violet-300">{{ status.time_exits or 0 }}</p>
             </div>
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
                 <p class="text-xs text-slate-400">Win Rate</p>
@@ -259,6 +263,7 @@ def index():
         "next_trade_num": None,
         "wins": 0,
         "losses": 0,
+        "time_exits": 0,
         "win_rate": 0.0,
         "trade_active": False,
         "trade_type": None,

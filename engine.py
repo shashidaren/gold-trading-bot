@@ -57,6 +57,22 @@ ATR_TP_MULT = 3.0
 # direction, not a forecast. Re-validate after ~2 more weeks.
 BE_TRIGGER_R = 0.75
 
+# Max-hold time stop (deployed 2026-09-21, docs/REVIEW-2026-09-21.md): pre-registered
+# fallback step 1 after the 0.75R falsification bar tripped 2026-09-17 (-$0.595/trade
+# at n=60; docs/REVIEW-2026-09-18.md). Any open trade older than MAX_HOLD_MINUTES is
+# closed at market, whatever the P&L. It caps the >60-min holds (#95: 49.1 h weekend
+# gap, #187: 65 min) and operationalises "close before the next scheduled macro
+# event" with no news feed.
+# Exit reason "TIME": own counter (time_exits), P&L-signed, EXCLUDED from decisive
+# win-rate math like BE (TP/SL stay a pure signal read; era P&L/trade still books
+# every dollar). Ignored by the SL streak / daily breaker (trade_filter.py), like BE.
+# Checked AFTER price exits (a simultaneous TP/SL wins), on both the tick path
+# (check_position) and the MT5 candle path (resolve_open_trade_on_candle, at close).
+# Wall-clock: across a market closure the trade exits on the first candle/tick back.
+# LIVE-mode note: like the BE ratchet this is engine-side only (run_live never calls
+# check_position); a broker-side time stop is future work for any live pilot.
+MAX_HOLD_MINUTES = 240
+
 REQUIRE_VOLUME_CONFIRM = False
 VOLUME_SPIKE_MULTIPLIER = 0.9
 REQUIRE_TREND_CONFIRM = True
@@ -293,6 +309,7 @@ class GoldEngine:
         self.wins = 0
         self.losses = 0
         self.be_exits = 0
+        self.time_exits = 0
         self.balance = 500.00
 
         if not os.path.isfile(TRADES_LOG_PATH):
@@ -333,6 +350,8 @@ class GoldEngine:
                         self.losses += 1
                     elif reason == "BE":
                         self.be_exits += 1
+                    elif reason == "TIME":
+                        self.time_exits += 1
 
                     try:
                         bal = float(row.get("Balance_After", 0) or 0)
@@ -354,6 +373,7 @@ class GoldEngine:
             self.wins = 0
             self.losses = 0
             self.be_exits = 0
+            self.time_exits = 0
             self.balance = 500.00
 
     def restore_open_trade_from_status(self):
@@ -493,8 +513,8 @@ class GoldEngine:
         self.prev_close = close
 
     def save_status(self):
-        closed = self.wins + self.losses + self.be_exits
-        # win_rate is over decisive trades only; BE scratches are neutral
+        closed = self.wins + self.losses + self.be_exits + self.time_exits
+        # win_rate is over decisive trades only; BE scratches and TIME exits are neutral
         decisive = self.wins + self.losses
         win_rate = (self.wins / decisive * 100) if decisive > 0 else 0.0
         active_trade = self.trade_active
@@ -510,6 +530,7 @@ class GoldEngine:
             "wins": self.wins,
             "losses": self.losses,
             "be_exits": self.be_exits,
+            "time_exits": self.time_exits,
             "win_rate": round(win_rate, 1),
             "trade_active": active_trade,
             "trade_type": self.trade_type if active_trade else None,
@@ -691,6 +712,47 @@ class GoldEngine:
         if gain >= BE_TRIGGER_R * risk - 1e-9:  # epsilon: exact-boundary float dust
             self._arm_breakeven()
 
+    def _minutes_in_trade(self, now: datetime = None):
+        """Wall-clock minutes since entry, or None if unknown/unparseable."""
+        if not self.trade_active or not self.entry_time:
+            return None
+        try:
+            entry_dt = datetime.strptime(self.entry_time, "%Y-%m-%d %H:%M:%S")
+            entry_dt = entry_dt.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return None
+        if now is None:
+            now = datetime.now(timezone.utc)
+        return (now - entry_dt).total_seconds() / 60.0
+
+    def _maybe_time_stop(self, price: float, now: datetime = None) -> bool:
+        """Max-hold time stop: close at market once the trade is older than
+        MAX_HOLD_MINUTES. Returns True if it exited. Deliberately neutral:
+        reason TIME is P&L-signed (balance books it) but excluded from
+        decisive win-rate math and from the SL streak / daily breaker, like BE.
+        Callers check price exits FIRST, so a simultaneous TP/SL wins."""
+        if not self.trade_active:
+            return False
+        held = self._minutes_in_trade(now=now)
+        if held is None or held < MAX_HOLD_MINUTES:
+            return False
+        if self.trade_type == "BUY":
+            profit = price - self.entry_price
+        else:
+            profit = self.entry_price - price
+        self.balance += profit
+        self.time_exits += 1
+        self.trade_active = False
+        self.be_armed = False
+        self.log_trade(exit_price=price, exit_reason="TIME", profit=profit)
+        self.send_telegram(
+            f"\u23f1 TIME STOP ({self.trade_type} #{self.current_trade_num})\n"
+            f"Held {held:.0f} min (>{MAX_HOLD_MINUTES}) | Exit: `${price:.2f}` ({profit:+.2f})\n"
+            f"Equity: `${self.balance:.2f}`"
+        )
+        self.save_status()
+        return True
+
     def resolve_open_trade_on_candle(self, o: float, h: float, l: float, c: float):
         """Forward-test exit resolution for candle-driven data sources
         (MT5 sidecar): there are no tick events, so an open simulated
@@ -711,6 +773,10 @@ class GoldEngine:
                 self.check_position(self.stop_loss)
             elif l <= self.take_profit:
                 self.check_position(self.take_profit)
+        # Price exits above take priority; the time stop only binds when the
+        # candle touched neither level. Exit at the close (first price we see).
+        if self.trade_active:
+            self._maybe_time_stop(c)
 
     def evaluate_candle(self, o, h, l, c, tick_count):
         candle_range = h - l
@@ -1094,6 +1160,11 @@ class GoldEngine:
                     f"Equity: `${self.balance:.2f}`"
                 )
                 self.save_status()
+
+        # Max-hold time stop (tick path): price exits above take priority; if
+        # the trade is still open and older than MAX_HOLD_MINUTES, close here.
+        if self.trade_active:
+            self._maybe_time_stop(price)
 
     def aggregate_tick(self, price: float):
         minute_now = int(datetime.now(timezone.utc).timestamp() // 60)

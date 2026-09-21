@@ -73,13 +73,16 @@ print(f"Loaded {len(trades)} trades, {len(bars)} 1-min bars "
 wins  = [t for t in trades if t["reason"] == "TP"]
 losses = [t for t in trades if t["reason"] == "SL"]
 bes   = [t for t in trades if t["reason"] == "BE"]
+times = [t for t in trades if t["reason"] == "TIME"]
 gross_w = sum(t["profit"] for t in wins)
 gross_l = sum(t["profit"] for t in losses)
+gross_t = sum(t["profit"] for t in times)
 dec = wins + losses
-print(f"== BASELINE ==  Trades: {len(trades)}  W: {len(wins)}  L: {len(losses)}  BE: {len(bes)}")
+print(f"== BASELINE ==  Trades: {len(trades)}  W: {len(wins)}  L: {len(losses)}  "
+      f"BE: {len(bes)}  TIME: {len(times)}")
 print(f"Win rate: {len(wins)/len(dec)*100:.1f}% decisive ({len(wins)}/{len(dec)}), "
-      f"{len(wins)/len(trades)*100:.1f}% all-in   Net P/L: {gross_w+gross_l:+.2f} "
-      f"(+{gross_w:.2f} / {gross_l:.2f})")
+      f"{len(wins)/len(trades)*100:.1f}% all-in   Net P/L: {gross_w+gross_l+gross_t:+.2f} "
+      f"(+{gross_w:.2f} / {gross_l:.2f} / TIME {gross_t:+.2f})")
 avg_rr = statistics.mean((t['tp']-t['entry'])/(t['entry']-t['sl']) if t['type']=='BUY'
                          else (t['entry']-t['tp'])/(t['sl']-t['entry']) for t in trades)
 avg_risk = statistics.mean(abs(t['entry']-t['sl']) for t in trades)
@@ -125,6 +128,7 @@ print()
 # Winners' MAE = how much heat winners take
 win_re = [t for t in wins if "mfe_R" in t]
 be_re = [t for t in bes if "mfe_R" in t]
+tm_re = [t for t in times if "mfe_R" in t]
 if win_re:
     print(f"  Winners: avg MAE {statistics.mean(t['mae_R'] for t in win_re):.2f}R "
           f"| avg MFE {statistics.mean(t['mfe_R'] for t in win_re):.2f}R")
@@ -136,6 +140,10 @@ if be_re:
     print(f"  BE     : avg MAE {statistics.mean(t['mae_R'] for t in be_re):.2f}R "
           f"| avg MFE {statistics.mean(t['mfe_R'] for t in be_re):.2f}R  "
           f"<- scratches arm (+0.30R) then return to entry\n")
+if tm_re:
+    print(f"  TIME   : avg MAE {statistics.mean(t['mae_R'] for t in tm_re):.2f}R "
+          f"| avg MFE {statistics.mean(t['mfe_R'] for t in tm_re):.2f}R  "
+          f"<- held the full stop window without a touch\n")
 
 # ---------- 4. Exit geometry: measured elsewhere, on purpose ----------
 # A naive replay here (score each trade by its max favourable excursion inside
@@ -150,13 +158,16 @@ print("  extended-horizon rows) or the 5b/5c grid in tools/win_rate_report.py.")
 print()
 
 # ---------- 5. Feature comparison ----------
-print("== ENTRY FEATURES: winners vs losers vs BE ==")
+print("== ENTRY FEATURES: winners vs losers vs BE vs TIME ==")
 def feat(name, fn):
     ws = [fn(t) for t in wins]; ls = [fn(t) for t in losses]; bs = [fn(t) for t in bes]
+    ts_ = [fn(t) for t in times]
     line = f"  {name:28s} W avg {statistics.mean(ws):8.2f}" if ws else f"  {name:28s} W avg      n/a "
     line += f"   L avg {statistics.mean(ls):8.2f}" if ls else "   L avg      n/a"
     if bs:
         line += f"   BE avg {statistics.mean(bs):8.2f}"
+    if ts_:
+        line += f"   TIME avg {statistics.mean(ts_):8.2f}"
     print(line)
 feat("RSI at entry", lambda t: t["rsi"])
 feat("ATR at entry", lambda t: t["atr"])
@@ -170,18 +181,20 @@ print()
 # ---------- 6. Time-of-day analysis ----------
 print("== TIME OF DAY (UTC) ==")
 from collections import defaultdict
-by_hour = defaultdict(lambda: [0, 0, 0])  # W, L, BE
+by_hour = defaultdict(lambda: [0, 0, 0, 0])  # W, L, BE, TIME
 for t in trades:
     h = t["entry_t"].hour
     if t["reason"] == "TP": by_hour[h][0] += 1
+    elif t["reason"] == "SL": by_hour[h][1] += 1
     elif t["reason"] == "BE": by_hour[h][2] += 1
-    else: by_hour[h][1] += 1
+    else: by_hour[h][3] += 1
 for h in sorted(by_hour):
-    w_, l_, b_ = by_hour[h]
-    bar = "#" * w_ + "-" * l_ + "=" * b_
+    w_, l_, b_, tm_ = by_hour[h]
+    bar = "#" * w_ + "-" * l_ + "=" * b_ + "T" * tm_
     dec_h = w_ + l_
     wr = f"{w_/dec_h*100:.0f}% dec" if dec_h else "no decisive"
-    print(f"  {h:02d}:00  W{w_} L{l_} BE{b_}  {bar}  ({wr})")
+    extra = f" TIME{tm_}" if tm_ else ""
+    print(f"  {h:02d}:00  W{w_} L{l_} BE{b_}{extra}  {bar}  ({wr})")
 print()
 
 # ---------- 7. ATR buckets ----------
@@ -191,10 +204,12 @@ for lo, hi in buckets:
     ts = [t for t in trades if lo <= t["atr"] < hi]
     if not ts: continue
     w_ = sum(1 for t in ts if t["reason"] == "TP")
+    l_ = sum(1 for t in ts if t["reason"] == "SL")
     b_ = sum(1 for t in ts if t["reason"] == "BE")
-    l_ = len(ts) - w_ - b_
+    tm_ = sum(1 for t in ts if t["reason"] == "TIME")
     wr = f"{w_/(w_+l_)*100:.0f}% dec" if (w_ + l_) else "no decisive"
-    print(f"  ATR {lo:.1f}-{hi if hi<90 else 'up'}: {len(ts)} trades, W{w_}/L{l_}/BE{b_} ({wr})")
+    extra = f"/{tm_}TIME" if tm_ else ""
+    print(f"  ATR {lo:.1f}-{hi if hi<90 else 'up'}: {len(ts)} trades, W{w_}/L{l_}/BE{b_}{extra} ({wr})")
 print()
 
 # ---------- 8. RSI buckets ----------
@@ -203,24 +218,28 @@ for lo, hi in [(30, 45), (45, 55), (55, 62), (62, 70)]:
     ts = [t for t in trades if lo <= t["rsi"] < hi]
     if not ts: continue
     w_ = sum(1 for t in ts if t["reason"] == "TP")
+    l_ = sum(1 for t in ts if t["reason"] == "SL")
     b_ = sum(1 for t in ts if t["reason"] == "BE")
-    l_ = len(ts) - w_ - b_
+    tm_ = sum(1 for t in ts if t["reason"] == "TIME")
     wr = f"{w_/(w_+l_)*100:.0f}% dec" if (w_ + l_) else "no decisive"
-    print(f"  RSI {lo}-{hi}: {len(ts)} trades, W{w_}/L{l_}/BE{b_} ({wr})")
+    extra = f"/{tm_}TIME" if tm_ else ""
+    print(f"  RSI {lo}-{hi}: {len(ts)} trades, W{w_}/L{l_}/BE{b_}{extra} ({wr})")
 print()
 
 # ---------- 9. Consecutive loss clusters & day analysis ----------
 print("== BY DAY ==")
-by_day = defaultdict(lambda: [0, 0, 0, 0.0])  # W, L, BE, pnl
+by_day = defaultdict(lambda: [0, 0, 0, 0, 0.0])  # W, L, BE, TIME, pnl
 for t in trades:
     d = t["entry_t"].date()
     if t["reason"] == "TP": by_day[d][0] += 1
+    elif t["reason"] == "SL": by_day[d][1] += 1
     elif t["reason"] == "BE": by_day[d][2] += 1
-    else: by_day[d][1] += 1
-    by_day[d][3] += t["profit"]
+    else: by_day[d][3] += 1
+    by_day[d][4] += t["profit"]
 for d in sorted(by_day):
-    w_, l_, b_, p = by_day[d]
-    print(f"  {d}: W{w_} L{l_} BE{b_}  P/L {p:+.2f}")
+    w_, l_, b_, tm_, p = by_day[d]
+    extra = f" TIME{tm_}" if tm_ else ""
+    print(f"  {d}: W{w_} L{l_} BE{b_}{extra}  P/L {p:+.2f}")
 print()
 
 # ---------- 10. Filter ideas: what if we skipped trades with feature X ----------
@@ -231,11 +250,12 @@ def experiment(name, keep_fn):
     if not kept or not skipped: return
     def stats(ts):
         w = sum(1 for t in ts if t["reason"] == "TP")
-        b = sum(1 for t in ts if t["reason"] == "BE")
-        l = len(ts) - w - b
+        l = sum(1 for t in ts if t["reason"] == "SL")
+        tm = sum(1 for t in ts if t["reason"] == "TIME")
         dec = w + l
         wr = w / dec * 100 if dec else 0
-        return f"{len(ts):2d} ({wr:4.0f}%W dec, {sum(t['profit'] for t in ts):+7.2f})"
+        extra = f", {tm}TIME" if tm else ""
+        return f"{len(ts):2d} ({wr:4.0f}%W dec, {sum(t['profit'] for t in ts):+7.2f}{extra})"
     print(f"  {name:46s} keep {stats(kept)} | skipped {stats(skipped)}")
 
 experiment("RSI <= 60 (skip momentum-chasing)", lambda t: t["rsi"] <= 60)
