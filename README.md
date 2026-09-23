@@ -2,6 +2,7 @@
 
 Forward-testing engine for a gold (XAU/USD) price-action strategy. All trades
 are simulated (paper) until the strategy proves an edge. See
+`docs/HANDOFF.md` for the current session handoff (start here), and
 `archive/PROJECT_LOG.md` for the full architecture, strategy rules, and
 changelog.
 
@@ -9,6 +10,7 @@ changelog.
 
 | Path | What it is |
 |---|---|
+| `docs/HANDOFF.md` | **Start here for any new session** — current state, definitions, next steps, ops. |
 | `engine.py` | Data ingestion, indicators (EMA/RSI/ATR), the Buy/Sell signal funnel, trade execution. Includes `migrate_trades_csv()` — self-healing schema fix (see 09-10 review) — and the breakeven stop ratchet (`BE_TRIGGER_R`: 0.30R since the 09-10 losing-trade analysis, **raised to 0.75R on 09-15** — the tight trigger was scratching 77% of trades; see `docs/REVIEW-2026-09-15.md`). |
 | `trade_filter.py` | Risk gatekeeper: direction-aware session blackouts (London blocks BUYs, allows SELLs), SL cooldowns, momentum-gated daily-loss breaker (trend-side-only after limit), ATR bounds. |
 | `dashboard.py` | Web dashboard (funnel telemetry, equity, active trade). |
@@ -16,7 +18,7 @@ changelog.
 | `forward_test_log.csv` | 1-minute candle log with all indicator values per bar. |
 | `skipped_trades.csv` | Every full signal the risk layer blocked, with reason. |
 | `status.json` | Live engine state (equity, funnel counters, daily losses). |
-| `archive/PROJECT_LOG.md` | **Start here** — living changelog, current strategy rules, parameters, to-do list. |
+| `archive/PROJECT_LOG.md` | Living changelog, architecture notes, longer history. |
 | `docs/REVIEW-*.md` | Per-cycle data reviews (REVIEW-2026-09-09, REVIEW-2026-09-10, ...). |
 | `archive/` | Historical backups, old engine versions, pre-fix data copies. |
 
@@ -42,8 +44,11 @@ LOW — both of those were wrong until 2026-09-15.
 ## 🚀 Deploying to production
 
 Production files live at `/opt/gold/` (paths hardcoded in `engine.py` /
-`trade_filter.py`). Deploy = `git pull` on the server + restart the engine.
-On restart the engine auto-migrates `trades.csv` if needed (keeps a
+`trade_filter.py`). Normal deploy is **unattended**: merge to `main` → next
+`tools/autosync.sh` cron cycle (every 3h) pulls, smoke-tests on code changes,
+and restarts the engine only if `engine.py` / `trade_filter.py` changed.
+See `docs/HANDOFF.md` §10. Manual path: `git pull` on the server + restart the
+engine. On restart the engine auto-migrates `trades.csv` if needed (keeps a
 `.bak-pre-migration` backup) and resyncs `status.json`.
 
 ## 📡 Forward-test data source
@@ -68,11 +73,10 @@ alerts on Telegram (10-min silence threshold, muted during the daily break).
 
 ## 🆕 Starting a new session / handing off to a new agent
 
-Read, in this order:
-1. `archive/PROJECT_LOG.md` — changelog + current strategy state
-2. the latest `docs/REVIEW-*.md` — most recent data findings and open hypotheses
-3. `git log --oneline` — what changed recently
+1. **`docs/HANDOFF.md` first** — current ledger, definitions, next steps, ops.
+2. Latest `docs/REVIEW-*.md` / `docs/ANALYSIS-*.md` if the handoff points at them.
+3. `git log --oneline` — what changed recently.
+4. `python3 tools/check_data.py` before drawing conclusions from the CSVs.
 
-Then run `python3 tools/check_data.py` before drawing any conclusion from the
-CSVs. Document each review cycle as a new `docs/REVIEW-YYYY-MM-DD.md` and add a
-changelog line to `archive/PROJECT_LOG.md`.
+Document each review cycle as a new `docs/REVIEW-YYYY-MM-DD.md`, update
+`docs/HANDOFF.md` §1/§4–§6, and add a changelog line to `archive/PROJECT_LOG.md`.
