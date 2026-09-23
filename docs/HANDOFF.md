@@ -9,6 +9,59 @@ honest"). §11 also carries the **Session & Push Protocol** — push every commi
 immediately and keep the session PR open until the user signs off. Follow it
 from the first commit.
 
+### Start here (30 seconds)
+
+1. Read **§1** (stance + numbers) and **Definitions** below it.
+2. Run integrity + era report:
+   ```bash
+   python3 tools/check_data.py          # expect "0 fail"
+   python3 tools/win_rate_report.py
+   ```
+3. **Next formal work:** max-hold re-review (~2026-10-05 or n≈200 max-hold-era trades).
+4. Never change `BE_TRIGGER_R` / `MAX_HOLD_MINUTES` / ATR bounds / blackouts without a
+   pre-registered bar + REVIEW/ANALYSIS doc.
+
+### Command cheat sheet
+
+| Goal | Command |
+|------|---------|
+| Integrity first | `python3 tools/check_data.py` |
+| Era / WR / ratchet grid | `python3 tools/win_rate_report.py` |
+| Blocked-signal phantoms | `python3 tools/phantom_trades.py` |
+| Gate replay | `python3 tools/validate_gates.py` |
+| Loser features | `python3 tools/analyze_losers.py` |
+| Engine regression | `python3 tools/smoke_test.py` |
+| Force autosync now | `sudo /opt/gold/tools/autosync.sh` |
+| Live state | `cat /opt/gold/status.json` |
+| Engine service | `systemctl status goldbot` (or unit that runs `engine.py` under `/opt/gold`) |
+| Autosync log | `tail -80 /var/log/gold_autosync.log` |
+
+### Do not
+
+- Pool **decisive WR** across the 09-15 ratchet change without naming the era.
+- Key BE reconstruction only on `Exit_Reason == "BE"` — use **geometry**
+  (`Stop_Loss == Entry_Price`) + `ATR_At_Entry`.
+- Hand-edit code on `/opt/gold` (autosync will refuse deploy).
+- Ship param/strategy changes without a pre-registered bar + REVIEW/ANALYSIS doc.
+- Treat the bot as income, or go LIVE without broker-side BE + a costs model.
+
+### Env (names only — never commit values)
+
+`/opt/gold/.env`:
+- `DATA_SOURCE` = `MT5` (live) or `TWELVEDATA`
+- `TWELVE_DATA_API_KEY`
+- `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`
+- `MT5_FEED_FILE` (optional; default `/opt/gold/mt5_last_candle.json`)
+
+### Era timeline (UTC)
+
+| When | What |
+|------|------|
+| 2026-09-10 ~12:34 | BE ratchet 0.30R + London BUY-only + trend-side daily breaker (PR #7) |
+| 2026-09-15 ~06:00 | `BE_TRIGGER_R` → **0.75** (PR #9 deploy) |
+| 2026-09-17 | Falsification bar tripped (−$0.40/trade at n≥60) |
+| 2026-09-21 ~06:00 | `MAX_HOLD_MINUTES=240` live (PR #15); **no era counter reset** |
+
 ## 1. Where things stand (as of 2026-09-23)
 
 - Repo: `shashidaren/gold-trading-bot`, default branch `main` (no open session PR;
@@ -317,6 +370,9 @@ data drop, not just after code changes.
 
 ## 10. Autosync & deploy rhythm (single reference)
 
+Canonical ops doc for deploy (the script header mentions `docs/AUTOSYNC.md`;
+**this section is that doc** — no separate file required).
+
 **Cron (on the box):**
 ```cron
 0 */3 * * * /opt/gold/tools/autosync.sh >> /var/log/gold_autosync.log 2>&1
@@ -347,6 +403,17 @@ data drop, not just after code changes.
 - Refuses to deploy if someone hand-edited code files on the server
 - Smoke-test gate + automatic rollback
 - `.env` is never committed
+
+### First response to common alerts
+
+| Symptom (Telegram / log) | First move |
+|--------------------------|------------|
+| `check_data` fail | Read `/tmp/autosync_check.log`; **do not** change strategy until integrity is clean |
+| deploy **ROLLED BACK** | Inspect `/tmp/autosync_smoke.log`; fix on a branch — never edit code on the server |
+| `status.json` STALE / ENGINE NOT ACTIVE | `systemctl status` + `journalctl -u <unit> -n 50`; check feed vs engine |
+| mid rebase/merge | Autosync paused; fix git state manually on the box |
+| no new candles / silent feed | `mt5feed` service, Wine prefix `~/.mt5`, mtime of `mt5_last_candle.json` |
+| push FAILED | Data is still in a local commit; next run retries — check credentials if persistent |
 
 ---
 
