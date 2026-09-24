@@ -667,3 +667,15 @@ Timestamp,Reason,Price,ATR
 2026-09-24 16:46:06,SL Cooldown: 6 min remaining (4 consecutive SLs -> 60m cooldown),4274.17,3.42
 2026-09-24 17:54:02,SL Cooldown: 26 min remaining (5 consecutive SLs -> 60m cooldown),4260.17,1.67
 2026-09-24 17:56:07,SL Cooldown: 23 min remaining (5 consecutive SLs -> 60m cooldown),4260.92,1.63
+2026-09-24 18:06:03,SL Cooldown: 14 min remaining (5 consecutive SLs -> 60m cooldown),4258.10,2.32
+2026-09-24 18:09:04,SL Cooldown: 11 min remaining (5 consecutive SLs -> 60m cooldown),4261.42,2.60
+2026-09-24 18:10:05,SL Cooldown: 9 min remaining (5 consecutive SLs -> 60m cooldown),4262.31,2.60
+2026-09-24 19:18:08,SL Cooldown: 44 min remaining (6 consecutive SLs -> 60m cooldown),4270.38,1.33
+2026-09-24 19:20:09,SL Cooldown: 42 min remaining (6 consecutive SLs -> 60m cooldown),4270.82,1.36
+2026-09-24 19:33:05,"Daily Loss Limit Reached (10/10 SLs today) - Trend-Side Only: BUY blocked, momentum is SELL",4271.76,1.55
+2026-09-24 19:35:01,SL Cooldown: 28 min remaining (6 consecutive SLs -> 60m cooldown),4272.64,1.47
+2026-09-24 19:38:02,SL Cooldown: 25 min remaining (6 consecutive SLs -> 60m cooldown),4272.17,1.33
+2026-09-24 19:54:03,"Daily Loss Limit Reached (10/10 SLs today) - Trend-Side Only: BUY blocked, momentum is SELL",4273.98,1.29
+2026-09-24 19:57:04,SL Cooldown: 6 min remaining (6 consecutive SLs -> 60m cooldown),4274.39,1.29
+2026-09-24 20:12:07,SL Cooldown: 58 min remaining (7 consecutive SLs -> 60m cooldown),4272.31,1.18
+2026-09-24 20:34:08,SL Cooldown: 36 min remaining (7 consecutive SLs -> 60m cooldown),4266.94,1.11
