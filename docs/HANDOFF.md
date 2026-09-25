@@ -62,7 +62,7 @@ from the first commit.
 | 2026-09-17 | Falsification bar tripped (−$0.40/trade at n≥60) |
 | 2026-09-21 ~06:00 | `MAX_HOLD_MINUTES=240` live (PR #15); **no era counter reset** |
 
-## 1. Where things stand (as of 2026-09-23)
+## 1. Where things stand (as of 2026-09-25)
 
 - Repo: `shashidaren/gold-trading-bot`, default branch `main` (no open session PR;
   prior arena work branches exist but are historical).
@@ -72,22 +72,23 @@ from the first commit.
   dashboard Win-Rate tile clarity + §2b era table / no-reset decision.
   Earlier: **PR #9** (2026-09-15) `BE_TRIGGER_R` 0.30 → 0.75; **PR #7** (2026-09-10)
   BE ratchet + direction-aware London blackout + trend-side daily breaker.
-- Current ledger (`status.json` last_update **2026-09-23 00:00:01**, data on main):
-  - **307 closed trades, 0 active** → 45W / 123L / 139BE / 0TIME → **26.8%
-    decisive**, equity **$304.56** (true P&L from $500 ≈ −$195; engine-summed
-    profits ≈ −$220 — known ledger drift ~+$25, unchanged order of magnitude
+- Current ledger (`status.json` last_update **2026-09-24 23:59:07**, data on main):
+  - **352 closed trades, 0 active** → 52W / 147L / 153BE / 0TIME → **26.1%
+    decisive**, equity **$255.80** (true P&L from $500 ≈ −$244; engine-summed
+    profits ≈ −$261 — known ledger drift ~+$17, unchanged order of magnitude
     since 09-15)
-  - **0.75R era** (entries ≥ 09-15 06:00 UTC): **~132 trades** → 27W/64L/41BE,
-    **~29.7% decisive**, ≈ −$0.73/trade (**still below the −$0.40 falsification
-    bar**). **Max-hold era** (entries ≥ ~09-21 06:00): **~37 trades** →
-    7W/23L/7BE, **~23.3% decisive**, ≈ −$1.50/trade — **still 0 TIME fires**.
+  - **0.75R era** (entries ≥ 09-15 06:00 UTC): **~175 trades** → 34W/86L/55BE,
+    **~28.3% decisive**, ≈ −$0.78/trade (**still below the −$0.40 falsification
+    bar**). **Max-hold era** (entries ≥ ~09-21 06:00): **~80 trades** →
+    14W/45L/21BE, **~23.7% decisive**, ≈ −$1.20/trade — **still 0 TIME fires**.
   - **Falsification bar FORMALLY TRIPPED 09-17** → fallback step 1 (max-hold)
     **SHIPPED and LIVE 09-21**; step 2 (ratchet-off) still queued behind the
     pre-registered re-review (deploy + ~2 weeks / n ≈ 200 max-hold-era).
   - 0.30R era (09-10 12:34 → 09-15 06:00, n=130): 10W/22L/98BE, 31.2% dec,
     −$0.321/trade. Pre-ratchet (n=45): 17.8% dec, −$1.834/trade.
 - Live bot runs from `/opt/gold` via systemd (`goldbot.service` =
-  engine, `mt5feed.service` = price-feed sidecar). Autosync every 3 h (§10).
+  engine, `mt5feed.service` = price-feed sidecar). Daily Grok HANDOFF job +
+  autosync every 3 h (§10).
 
 **Current stance:** Edge is **not confirmed**. Mechanism (scratch rate, BE
 behaviour) is still consistent with the 0.75R design, but P&L/trade remains
@@ -197,7 +198,7 @@ into the balance and era P&L/trade, but **excluded from decisive WR math and
 ignored by the SL streak / daily breaker**. Engine-side only (LIVE caveat as
 for the ratchet).
 
-## 5. Evidence base (don’t re-derive)
+## 5. Evidence base (don't re-derive)
 
 Key documents:
 - `docs/ANALYSIS-2026-09-21-revert-or-maintain.md` (latest — whole book before
@@ -262,8 +263,8 @@ Current headlines (2026-09-15, 164 trades / 119 new-regime):
    (max-hold re-baseline + ~2 weeks in-isolation data, ≈ deploy + 14 d).
    Deploy confirmed (PR #15 merged 04:50:49Z → ~06:00 autosync restart; the
    engine's 06:59:06 `status.json` carries `time_exits`); the max-hold era is
-   at **n ≈ 37, 0 TIME fires** as of 09-23 (still within the pre-registered
-   isolation window — do not act on the short-run −$1.50/trade until the
+   at **n ≈ 80, 0 TIME fires** as of 09-25 (still within the pre-registered
+   isolation window — do not act on the short-run −$1.20/trade until the
    scheduled re-review). Still pin the exact boundary timestamp
    from `/var/log/gold_autosync.log` or the Telegram deploy digest
    (the engine logs no version, so it cannot be recovered from the CSVs alone).
@@ -336,137 +337,45 @@ data drop, not just after code changes.
 
 - `trades.csv` has historical Trade_Num resets — dedupe by timestamp.
 - **Ratcheted rows** log the *live* stop, so `Stop_Loss == Entry_Price` on 98
-  rows: all 92 BE scratches **plus 6 TP winners** (#95, #120, #123, #133, #156,
-  #157 — they armed, held, and still printed TP). Key any reconstruction on the
-  GEOMETRY (`entry == sl`), never on `Exit_Reason == "BE"`, or you divide by
-  zero. Reconstruct the 2×/3×ATR levels from `ATR_At_Entry` for R math.
-- Counterfactual exits need a walk with an explicit horizon: a BE scratch died
-  ~1.5 min after entry, so re-scoring it inside its own exit window can never
-  reach a looser TP and silently returns "actual" (this is what made
-  `pathwalk_sims.py` look self-validating and `analyze_losers.py` §4 print
-  nonsense). Use `pathwalk_sims.py` (`horizon_min` rows) or
-  `win_rate_report.py` §5b/§5c.
-- Direction matters in every replay: a SELL's *favourable* bar extreme is its
-  LOW and its *adverse* extreme is its HIGH. `hi_r = d*(h-e)/risk` is only the
-  favourable side for BUYs (fixed 09-15 via max/min excursion form).
-- Clock skew between `forward_test_log.csv` and `trades.csv` (use ±2 min windows).
-- Gold price series = broker demo feed (~4.3-4.4k), not spot.
-- No time stop existed before 09-21: a trade opened just before a market close
-  rode the gap (#95: Fri 20:57 → Sun 22:01, 49.1 h). `check_data.py` warns on
-  >60-min holds and on trades spanning any price-log gap (inclusive bounds).
-  Max-hold now caps wall-clock age at 240 min (engine-side).
+  rows: all 92 BE scratches **plus 6 TP winners** (#95, #120, #123, #133, #156, #164).
+  Reconstruct original SL/TP from `ATR_At_Entry` (SL = entry ∓ 2·ATR, TP = entry ± 3·ATR).
+- `status.json` `win_rate` is decisive (TP/(TP+SL)); dashboard tile now labels it.
+- Balance vs sum(Profit) drift is known (~$10–25); order of magnitude is the authority.
+- Entry times are UTC; local session labels (London/NY) use UTC windows in code.
 
-## 9. File map (short)
+## 9. Architecture quick map
 
-`engine.py` · `trade_filter.py` · `trades.csv` · `forward_test_log.csv` ·
-`skipped_trades.csv` · `status.json` · `tools/` (analysis incl.
-**`win_rate_report.py`** (new 09-15), `check_data.py`, `phantom_trades.py`,
-`pathwalk_sims.py`, `analyze_losers.py`, `validate_gates.py`, `exit_sims.py`,
-`smoke_test.py` + feeds `mt5_feed.py` / **`mt5_history_dump.py`** +
-`autosync.sh`) · `docs/REVIEW-*.md` · `docs/HANDOFF.md` · `dashboard.py` ·
-`deploy/mt5feed.service`
-
----
-
-## 10. Autosync & deploy rhythm (single reference)
-
-Canonical ops doc for deploy (the script header mentions `docs/AUTOSYNC.md`;
-**this section is that doc** — no separate file required).
-
-**Cron (on the box):**
-```cron
-0 */3 * * * /opt/gold/tools/autosync.sh >> /var/log/gold_autosync.log 2>&1
+```
+engine.py          signals + BE ratchet + max-hold TIME + state machine
+trade_filter.py    portfolio gates (cooldown, daily breaker, blackouts, ATR)
+dashboard.py       Flask status page (read-only)
+tools/             analysis / integrity / report scripts (not on the hot path)
+/opt/gold/         live deploy root (autosync from main; never hand-edit)
 ```
 
-**What autosync does every 3 hours:**
-1. Commits any new live data (`trades.csv`, `forward_test_log.csv`,
-   `skipped_trades.csv`, `status.json`) and pushes to `origin/main`.
-2. If `origin/main` has moved (new code/docs from a session):
-   - Stops the engine **only if** `engine.py` or `trade_filter.py` changed
-   - Merges (data files = server wins, everything else = remote wins)
-   - Runs `tools/smoke_test.py` — automatic rollback on failure
-   - Restarts the engine (and dashboard if needed)
-   - Verifies `status.json` is fresh
-3. Runs `tools/check_data.py`
-4. Sends a short Telegram digest
+## 10. Deploy & ops
 
-**Working agreement:**
-- Code, tools, and docs changes are pushed to `main` from sessions.
-- The box picks them up automatically on the next autosync cycle (≤ 3 h).
-- No need for manual `git pull` or engine restarts in normal operation.
-- Only intervene when Telegram reports a problem (rollback, check_data fail,
-  engine not active, etc.).
+- **Source of truth for live code:** `main` on GitHub.
+- Autosync: every 3 h from `/opt/gold` (`tools/autosync.sh`); refuses if local
+  dirty. Force: `sudo /opt/gold/tools/autosync.sh`.
+- Daily Grok job refreshes `docs/HANDOFF.md` §1 from `status.json` + `trades.csv`.
+- Services: `goldbot.service` (engine), `mt5feed.service` (Wine MT5 sidecar).
+- Logs: `journalctl -u goldbot -f`; autosync log `/var/log/gold_autosync.log`.
 
-**Safety guarantees already in the script:**
-- `flock` prevents overlapping runs
-- Data is committed *before* any merge (rollback never loses trades)
-- Refuses to deploy if someone hand-edited code files on the server
-- Smoke-test gate + automatic rollback
-- `.env` is never committed
+## 11. How to keep this file honest
 
-### First response to common alerts
+**Session & Push Protocol**
+1. Push every commit immediately (do not batch).
+2. Keep a session PR open until the user signs off.
+3. Before ending: update §1 numbers, §4/§5 if params/evidence moved, §6 next steps.
+4. Never leave conclusions in chat only — land them in this file or a dated REVIEW.
 
-| Symptom (Telegram / log) | First move |
-|--------------------------|------------|
-| `check_data` fail | Read `/tmp/autosync_check.log`; **do not** change strategy until integrity is clean |
-| deploy **ROLLED BACK** | Inspect `/tmp/autosync_smoke.log`; fix on a branch — never edit code on the server |
-| `status.json` STALE / ENGINE NOT ACTIVE | `systemctl status` + `journalctl -u <unit> -n 50`; check feed vs engine |
-| mid rebase/merge | Autosync paused; fix git state manually on the box |
-| no new candles / silent feed | `mt5feed` service, Wine prefix `~/.mt5`, mtime of `mt5_last_candle.json` |
-| push FAILED | Data is still in a local commit; next run retries — check credentials if persistent |
+**Auto-trade timeline (unchanged)**
 
----
-
-## 11. How to keep this file honest (do this every session)
-
-### Session & Push Protocol (CRITICAL — zero unpushed state)
-
-The sandbox workspace is **ephemeral**: when a session ends, its filesystem is
-destroyed, so **a commit that is not on GitHub does not exist**. These four
-rules apply to every session, from the first commit:
-
-1. **One session = one scope = one PR at the end.** Do all session work on the
-   session branch and keep pushing to it; open at most one PR per session and
-   merge it only when the entire session goal is complete. Merging is the last
-   click, not a mid-session step — and here merge → `origin/main` → the next
-   `tools/autosync.sh` cycle deploys.
-2. **Push every commit immediately.** Never leave commits only local.
-3. **Update this HANDOFF before the session ends** (§1, §4/§5, §6 as needed).
-4. **Do not hand-edit code on the server.** Let autosync own deploy.
-
-### Per-session update ritual
-
-1. Update **§1** (date, trade count, new-regime count, branch/PR state).
-2. Update **§4/§5** if params changed or a review produced new numbers —
-   replace stale figures, don't append.
-3. Move anything you shipped out of **§6** and into `archive/PROJECT_LOG.md`'s
-   changelog; add whatever the session queued.
-4. Write the analysis itself in `docs/REVIEW-YYYY-MM-DD.md` (or
-   `docs/ANALYSIS-*` for an ad-hoc check); this file only carries the
-   *conclusion* and a pointer. The latest is
-   `docs/ANALYSIS-2026-09-21-revert-or-maintain.md` (281 trades at time of write; book now 307 total / ~132 at +0.75R — MAINTAIN still binding until max-hold re-review);
-   before that `docs/ANALYSIS-2026-09-21-win-rate-drop-check.md` (271 trades /
-   96 at +0.75R — win rate stable, max-hold live with 0 fires; §2b era table +
-   no-reset decision at the max-hold boundary); the last formal review is
-   `docs/REVIEW-2026-09-21.md` (265 trades / 90 at +0.75R; §3 carries the
-   era-terminology pointer); the last full review is `docs/REVIEW-2026-09-15.md`
-   (164 trades).
-5. Never quote a pooled decisive win rate across the 09-15 ratchet change
-   (`BE_TRIGGER_R` 0.30→0.75) without naming the era, and key any BE
-   reconstruction on the geometry (`Stop_Loss == Entry_Price`), never on
-   `Exit_Reason == "BE"` — both traps are detailed in §8 and have already
-   bitten this project.
-6. Commit with a message that names the doc, so `git log --oneline` stays a
-   usable index of decisions — and push immediately (see protocol above).
-
----
-
-### Patience / decision framework
-
-| Horizon          | Goal                              | Action                                      |
-|------------------|-----------------------------------|---------------------------------------------|
-| Done             | Reach ≥30 new-regime trades       | Cleared (119 as of 2026-09-15)               |
-| Done             | Fresh review + decide queued changes | `docs/REVIEW-2026-09-15.md`; ratchet raised 0.30→0.75, (a) approved-next, (c) dropped |
+| Horizon          | Gate                              | Action |
+|------------------|-----------------------------------|--------|
+| Now              | Edge not confirmed                | Isolation: max-hold only |
+| ~2 weeks (10-05) | Max-hold re-review                | Judge TIME + P&L; queue (a) approved-next, (c) dropped |
 | ~2–4 weeks       | Judge the new ratchet level       | Re-run suite; P&L/day + bleed/trade, not WR alone |
 | ~2–4 months      | 100+ trades, multiple regimes     | First serious evaluation of edge            |
 | 6–12 months      | Durable positive expectancy?      | Decide if it deserves any real capital      |
