@@ -16,8 +16,10 @@ from the first commit.
    ```bash
    python3 tools/check_data.py          # expect "0 fail"
    python3 tools/win_rate_report.py
+   python3 tools/momentum_regime.py     # regime/side + the 09-28 hypothesis & its bar
    ```
-3. **Next formal work:** max-hold re-review (~2026-10-05 or n≈200 max-hold-era trades).
+3. **Next formal work:** max-hold re-review (~2026-10-05 or n≈200 max-hold-era trades);
+   score the registered `H-side-awareness` hypothesis there (ANALYSIS-2026-09-28 §5).
 4. Never change `BE_TRIGGER_R` / `MAX_HOLD_MINUTES` / ATR bounds / blackouts without a
    pre-registered bar + REVIEW/ANALYSIS doc.
 
@@ -27,6 +29,7 @@ from the first commit.
 |------|---------|
 | Integrity first | `python3 tools/check_data.py` |
 | Era / WR / ratchet grid | `python3 tools/win_rate_report.py` |
+| Falling-gold / side regime check | `python3 tools/momentum_regime.py` |
 | Blocked-signal phantoms | `python3 tools/phantom_trades.py` |
 | Gate replay | `python3 tools/validate_gates.py` |
 | Loser features | `python3 tools/analyze_losers.py` |
@@ -44,6 +47,8 @@ from the first commit.
 - Hand-edit code on `/opt/gold` (autosync will refuse deploy).
 - Ship param/strategy changes without a pre-registered bar + REVIEW/ANALYSIS doc.
 - Treat the bot as income, or go LIVE without broker-side BE + a costs model.
+- Read falling-vs-rising (or "gold is down") stats pooled across sides — split
+  by BUY/SELL first (they are ~collinear with direction, §2).
 
 ### Env (names only — never commit values)
 
@@ -62,30 +67,46 @@ from the first commit.
 | 2026-09-17 | Falsification bar tripped (−$0.40/trade at n≥60) |
 | 2026-09-21 ~06:00 | `MAX_HOLD_MINUTES=240` live (PR #15); **no era counter reset** |
 
-## 1. Where things stand (as of 2026-09-25)
+## 1. Where things stand (as of 2026-09-28)
 
-- Repo: `shashidaren/gold-trading-bot`, default branch `main` (no open session PR;
-  prior arena work branches exist but are historical).
+- Repo: `shashidaren/gold-trading-bot`, default branch `main` (session PR from
+  the 09-28 analysis cycle open on the arena branch; prior arena branches are
+  historical).
 - **PR #15 MERGED** (2026-09-21 04:50:49Z): max-hold time stop
   (`MAX_HOLD_MINUTES = 240`, reason TIME) — **deploy confirmed live**; **0 TIME
   exits still**. **PR #16/#17 MERGED** same day: win-rate drop check (NO drop) +
   dashboard Win-Rate tile clarity + §2b era table / no-reset decision.
   Earlier: **PR #9** (2026-09-15) `BE_TRIGGER_R` 0.30 → 0.75; **PR #7** (2026-09-10)
   BE ratchet + direction-aware London blackout + trend-side daily breaker.
-- Current ledger (`status.json` last_update **2026-09-24 23:59:07**, data on main):
-  - **352 closed trades, 0 active** → 52W / 147L / 153BE / 0TIME → **26.1%
-    decisive**, equity **$255.80** (true P&L from $500 ≈ −$244; engine-summed
-    profits ≈ −$261 — known ledger drift ~+$17, unchanged order of magnitude
-    since 09-15)
-  - **0.75R era** (entries ≥ 09-15 06:00 UTC): **~175 trades** → 34W/86L/55BE,
-    **~28.3% decisive**, ≈ −$0.78/trade (**still below the −$0.40 falsification
-    bar**). **Max-hold era** (entries ≥ ~09-21 06:00): **~80 trades** →
-    14W/45L/21BE, **~23.7% decisive**, ≈ −$1.20/trade — **still 0 TIME fires**.
+  **No code/param change in the 09-28 cycle** — analysis + tooling only
+  (`tools/momentum_regime.py`, `docs/ANALYSIS-2026-09-28-falling-gold-win-rate.md`).
+- Current ledger (`status.json` last_update **2026-09-28 05:59:07**, data on main):
+  - **380 closed trades, 1 active (#382)** → 61W / 157L / 162BE / 0TIME →
+    **28.0% decisive** [22.4–34.3], true P&L from $500 **−$238.19 → $261.81**
+    (engine ledger $278.78; known drift +$16.97, unchanged order of magnitude).
+  - **0.75R era** (entries ≥ 09-15 06:00 UTC): **n=205** → 43W/98L/64BE,
+    **30.5% decisive** [23.5–38.5], ≈ **−$0.556/trade** (**still below the
+    −$0.40 falsification bar** — moved from −$0.78 to −$0.56 on the 09-27/09-28
+    slide). **Max-hold era** (entries ≥ 09-21 06:00): **n=110** → 23W/57L/30BE,
+    **28.8% decisive** [20.0–39.5], ≈ −$0.667/trade — **still 0 TIME fires**.
   - **Falsification bar FORMALLY TRIPPED 09-17** → fallback step 1 (max-hold)
     **SHIPPED and LIVE 09-21**; step 2 (ratchet-off) still queued behind the
     pre-registered re-review (deploy + ~2 weeks / n ≈ 200 max-hold-era).
   - 0.30R era (09-10 12:34 → 09-15 06:00, n=130): 10W/22L/98BE, 31.2% dec,
     −$0.321/trade. Pre-ratchet (n=45): 17.8% dec, −$1.834/trade.
+- **09-28 observation cycle ("WR improves when gold falls"): answered in
+  `docs/ANALYSIS-2026-09-28-falling-gold-win-rate.md` — real pattern, wrong
+  cause.** Falling-tape entries are 30.7% decisive vs 25.0% (60-min lookback,
+  p=0.37), but (i) day-level it is null (down days 27.9% vs up days 28.1%),
+  (ii) 94% of falling-tape entries ARE SELLs / 96% of rising-tape are BUYs
+  (trend-gate coupling), so it is largely the **side** effect (SELL 34.0% vs
+  BUY 22.3%, p=0.070; max-hold era 36.5% vs 14.3%, p=0.041 — but p→0.16 without
+  09-28), and (iii) the whole falling-vs-rising gap is **3 trading days old**
+  (09-24→09-28; 09-14→09-18 was a dead heat) and **inverts in the one up-leg**
+  (09-17/09-18: BUY 45.0% vs SELL 12.5%). The recent bleed was the BUY side:
+  max-hold era BUY −$84.07 (14.3% dec) vs SELL +$10.69 (36.5%). Registered as a
+  falsifiable hypothesis with a **pre-registered bar** (ANALYSIS §5) — **not
+  adopted**, nothing changes during the max-hold isolation window.
 - Live bot runs from `/opt/gold` via systemd (`goldbot.service` =
   engine, `mt5feed.service` = price-feed sidecar). Daily Grok HANDOFF job +
   autosync every 3 h (§10).
@@ -93,9 +114,13 @@ from the first commit.
 **Current stance:** Edge is **not confirmed**. Mechanism (scratch rate, BE
 behaviour) is still consistent with the 0.75R design, but P&L/trade remains
 negative and the max-hold stop has never fired (longest holds still ≪ 240 min
-in the recent sample). **Next formal re-review** of the max-hold isolation
-window ≈ deploy + 2 weeks from 09-21 (target ~2026-10-05) or n≈200 max-hold-era
-trades. Do **not** treat the bot as income. Auto-trade timeline unchanged:
+in the recent sample). The 09-28 "falling gold" observation is a
+**regime/side artifact, not a new edge** — the bot is weakly trend-following and
+looks good whenever its SELL half is the side that is firing (gold has fallen
+−6.7% over the book window, with exactly one up-leg). **Next formal re-review**
+of the max-hold isolation window ≈ deploy + 2 weeks from 09-21 (target
+~2026-10-05) or n≈200 max-hold-era trades — the registered §5 hypothesis is
+scored there. Do **not** treat the bot as income. Auto-trade timeline unchanged:
 edge confirmation ~8 weeks, multi-regime 3–4 months, micro live pilot Q1 2027,
 decision **6–12 months (Mar–Sep 2027)**.
 
@@ -121,6 +146,10 @@ from 09-10 to 09-15 — see §4). `engine.py` = signals +
 execution/state; `trade_filter.py` = portfolio risk gates; `dashboard.py` =
 Flask status page. Trading is FORWARD-TEST simulated (no real orders);
 `TRADING_MODE=LIVE` path exists but the BE stop (below) is engine-side only there.
+Because the trend gate keys side on EMA50 vs EMA200, **direction and side are
+nearly collinear in the data** (94% of falling-60m entries are SELLs, 96% of
+rising-60m are BUYs) — never read a "momentum" claim without splitting by side
+(ANALYSIS-2026-09-28).
 
 ## 3. Data feed: Twelve Data → MT5 sidecar (configured 2026-09-10)
 
@@ -201,7 +230,14 @@ for the ratchet).
 ## 5. Evidence base (don't re-derive)
 
 Key documents:
-- `docs/ANALYSIS-2026-09-21-revert-or-maintain.md` (latest — whole book before
+- `docs/ANALYSIS-2026-09-28-falling-gold-win-rate.md` (latest — "WR improves
+  when gold falls?" → **wrong cause, no adoption**: real 30.7% vs 25.0% pooled
+  gap but day-level null (27.9% vs 28.1%), side-coupled (94/96%), within-BUY
+  refuted (13 falling-tape BUYs = worst bucket, 15.4%), whole gap 3 days old and
+  inverted in the 09-17/09-18 up-leg (BUY 45.0% vs SELL 12.5%). Registered
+  `H-side-awareness` + pre-registered bar — scored at the 10-05 re-review.
+  Tool: `tools/momentum_regime.py`)
+- `docs/ANALYSIS-2026-09-21-revert-or-maintain.md` (whole book before
   vs after the recent parameter changes on 281 trades → **MAINTAIN, revert
   nothing**: new-regime stack −5.7× bleed, 0.30R→0.75R replay −$116 → +$29
   (never back), max-hold exonerated by 0 fires at longest hold 24.9 min;
@@ -256,6 +292,16 @@ Current headlines (2026-09-15, 164 trades / 119 new-regime):
   stop promoted to front of queue. Next check: if P&L/trade ≤ −$0.40 at
   n ≥ 60 → max-hold first, ratchet-off second. Era boundary unchanged:
   09-15 06:00 UTC (PR #9 merged 03:00:23Z, deployed by the 06:00 run).
+- **2026-09-28 (380 trades) — "gold falls → WR improves?"** (see the
+  ANALYSIS-2026-09-28 doc): the pooled falling-tape gap is real but small and
+  insignificant (30.7% vs 25.0%, p=0.37; 240-min p=0.072) and structurally
+  confounded with side. Day-level null; within-BUY refuted (falling-tape BUYs
+  15.4% vs 23.2% — the worst bucket); the whole gap is 3 trading days old and
+  inverts in the 09-17/09-18 up-leg (BUY 45.0% / SELL 12.5%). What survives: the
+  recent bleed is the BUY side (max-hold era BUY 14.3% dec / −$84.07 vs SELL
+  36.5% / +$10.69), consistent across eras but only nominal (pooled p=0.070,
+  p→0.16 without 09-28) and possibly just the −6.7% slide we happen to be in.
+  Registered hypothesis + bar; **no gate adopted**.
 
 ## 6. Next steps (in order)
 
@@ -280,6 +326,16 @@ Current headlines (2026-09-15, 164 trades / 119 new-regime):
    looser ratchet refunds fewer losers, so individual losses get bigger). Write
    `docs/REVIEW-2026-09-2X.md` or `docs/REVIEW-2026-10-XX.md`, update this file +
    `archive/PROJECT_LOG.md`.
+   **Also score at this re-review:** the registered `H-side-awareness`
+   hypothesis (falling-gold/win-rate question, 09-28) — aligned entries beat
+   counter-trend entries *within each side*, across gold regimes. Its bar is
+   printed by `tools/momentum_regime.py` §8 and in
+   `docs/ANALYSIS-2026-09-28-falling-gold-win-rate.md` §5: (a) ≥25 decisive
+   outcomes in the counter-trend bucket; (b) ≥5 pp gap, same direction, **within
+   BUY and within SELL separately**; (c) must also hold in a rising-gold
+   sub-period (≥1 day, gold +≥0.5%); (d) P&L/trade no worse than −$0.10; (e) doc
+   + isolation before adoption. Current scoreboard: **all three of (a)(b)(c)
+   fail** — drop it unless the data moves.
 
 2. **Queued strategy changes** — status after the 09-18 review:
    - (a) **RSI ≥ 45 entry filter** — **~DROPPED** (reversal confirmed: skip
@@ -302,9 +358,16 @@ Current headlines (2026-09-15, 164 trades / 119 new-regime):
      P&L/trade ≤ −$0.40 at n ≥ 200 max-hold-era trades → ratchet-off
      experiment. Confirm or amend at the re-review.
    - Still queued: **~5-min post-scratch pause** (27/58 0.75R entries came
-     <10 min after the previous exit); **BUY-side momentum gate** (BUY at
-     0.75R was no longer ~0%); a **scheduled-news gate** is a *named*
+     <10 min after the previous exit); a **scheduled-news gate** is a *named*
      candidate post-FOMC but that event passed without one.
+   - (e) **BUY-side momentum gate / `H-side-awareness`** — **REGISTERED
+     2026-09-28 (not adopted)**: the BUY side is the bleeding side in the
+     current era (max-hold: 4W/24L, 14.3% dec, −$84.07 vs SELL +$10.69) and
+     counter-trend BUYs are the worst bucket (13 trades, 15.4% dec, −$2.12/t).
+     But the effect is 3 days old, insignificant pooled (p=0.070), and inverts
+     in the one up-leg — so it must clear the 5-part bar in ANALYSIS-2026-09-28
+     §5 at the 10-05 re-review before any code change. Do **not** pre-empt it
+     with an ad-hoc BUY blocker.
    - Falsification for the ratchet change: **TRIPPED** (09-17 16:17 UTC,
      −$0.595/trade at n=60) — fallback in progress with the
      **~4h max-hold stop** in isolation, then ratchet-off if needed (replay
@@ -326,6 +389,7 @@ python3 -m py_compile engine.py trade_filter.py
 python3 tools/check_data.py          # expect "0 fail"
 python3 -m py_compile tools/*.py     # analysis tools must at least import
 python3 tools/win_rate_report.py     # must run end-to-end on current data
+python3 tools/momentum_regime.py     # same, plus prints the registered bar
 ```
 
 Note: `tools/` scripts are NOT covered by smoke_test.py and several of them
@@ -342,6 +406,13 @@ data drop, not just after code changes.
 - `status.json` `win_rate` is decisive (TP/(TP+SL)); dashboard tile now labels it.
 - Balance vs sum(Profit) drift is known (~$10–25); order of magnitude is the authority.
 - Entry times are UTC; local session labels (London/NY) use UTC windows in code.
+- **Momentum at entry must be measured strictly before the entry bar** (the
+  price log lags `trades.csv` by ~1 min — `tools/momentum_regime.py` uses
+  `entry − 1 min` for "now" and the same offset for the window start). Never
+  include the entry minute's close in a pre-entry feature.
+- **Never read a momentum/regime claim without a side split**: the trend gate
+  makes falling tape ≈ SELL and rising tape ≈ BUY (94%/96% in the book), so
+  pooled momentum numbers are side numbers in disguise (2026-09-28).
 
 ## 9. Architecture quick map
 
