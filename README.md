@@ -33,6 +33,7 @@ python3 tools/pathwalk_sims.py    # 5. sequence-aware exit-rule replay (honest e
 python3 tools/analyze_losers.py   # 6. winner/loser features + entry-filter experiments
 python3 tools/exit_sims.py        # 7. quick MFE exit scan (overstates — confirm via 5)
 python3 tools/smoke_test.py       # 8. engine regression tests (gates, SELL, drift auto-fix)
+python3 tools/momentum_regime.py  # 9. falling-gold / side regime + the 09-28 registered bar
 ```
 
 All tools are read-only except the engine's own self-healing migration. Every
@@ -74,9 +75,15 @@ alerts on Telegram (10-min silence threshold, muted during the daily break).
 ## 🆕 Starting a new session / handing off to a new agent
 
 1. **`docs/HANDOFF.md` first** — current ledger, definitions, next steps, ops.
-2. Latest `docs/REVIEW-*.md` / `docs/ANALYSIS-*.md` if the handoff points at them.
+2. Latest `docs/REVIEW-*.md` / `docs/ANALYSIS-*.md` if the handoff points at them
+   (most recent: `docs/ANALYSIS-2026-09-28-falling-gold-win-rate.md` — the
+   "does the bot do better when gold falls?" question, its refutations, and the
+   registered `H-side-awareness` bar).
 3. `git log --oneline` — what changed recently.
 4. `python3 tools/check_data.py` before drawing conclusions from the CSVs.
+5. Answer "does X look like Y?" questions with a dated `docs/ANALYSIS-*.md` (CIs,
+   era split, side split) + a registered bar in the handoff — never with an
+   ad-hoc parameter change, especially mid-isolation.
 
 Document each review cycle as a new `docs/REVIEW-YYYY-MM-DD.md`, update
 `docs/HANDOFF.md` §1/§4–§6, and add a changelog line to `archive/PROJECT_LOG.md`.
