@@ -67,7 +67,7 @@ from the first commit.
 | 2026-09-17 | Falsification bar tripped (−$0.40/trade at n≥60) |
 | 2026-09-21 ~06:00 | `MAX_HOLD_MINUTES=240` live (PR #15); **no era counter reset** |
 
-## 1. Where things stand (as of 2026-09-28)
+## 1. Where things stand (as of 2026-09-29)
 
 - Repo: `shashidaren/gold-trading-bot`, default branch `main` (session PR from
   the 09-28 analysis cycle open on the arena branch; prior arena branches are
@@ -80,15 +80,16 @@ from the first commit.
   BE ratchet + direction-aware London blackout + trend-side daily breaker.
   **No code/param change in the 09-28 cycle** — analysis + tooling only
   (`tools/momentum_regime.py`, `docs/ANALYSIS-2026-09-28-falling-gold-win-rate.md`).
-- Current ledger (`status.json` last_update **2026-09-28 05:59:07**, data on main):
-  - **380 closed trades, 1 active (#382)** → 61W / 157L / 162BE / 0TIME →
-    **28.0% decisive** [22.4–34.3], true P&L from $500 **−$238.19 → $261.81**
-    (engine ledger $278.78; known drift +$16.97, unchanged order of magnitude).
-  - **0.75R era** (entries ≥ 09-15 06:00 UTC): **n=205** → 43W/98L/64BE,
-    **30.5% decisive** [23.5–38.5], ≈ **−$0.556/trade** (**still below the
-    −$0.40 falsification bar** — moved from −$0.78 to −$0.56 on the 09-27/09-28
-    slide). **Max-hold era** (entries ≥ 09-21 06:00): **n=110** → 23W/57L/30BE,
-    **28.8% decisive** [20.0–39.5], ≈ −$0.667/trade — **still 0 TIME fires**.
+- Current ledger (`status.json` last_update **2026-09-29 08:29:19**, data on
+  main — **frozen there by the 09-29 feed outage, §1a**):
+  - **402 closed trades, 0 active** → 64W / 166L / 172BE / 0TIME →
+    **27.8% decisive** [22.4–33.9], true P&L from $500 **−$254.99 → $245.01**
+    (engine ledger $261.98; known drift +$16.97, unchanged order of magnitude).
+  - **0.75R era** (entries ≥ 09-15 06:00 UTC): **n=227** → 46W/107L/74BE,
+    **30.1% decisive** [23.4–37.7], ≈ **−$0.576/trade** (**still below the
+    −$0.40 falsification bar**). **Max-hold era** (entries ≥ 09-21 06:00):
+    **n=132** → 26W/66L/40BE, **28.3% decisive** [20.1–38.2], ≈ −$0.683/trade —
+    **still 0 TIME fires**.
   - **Falsification bar FORMALLY TRIPPED 09-17** → fallback step 1 (max-hold)
     **SHIPPED and LIVE 09-21**; step 2 (ratchet-off) still queued behind the
     pre-registered re-review (deploy + ~2 weeks / n ≈ 200 max-hold-era).
@@ -108,8 +109,43 @@ from the first commit.
   falsifiable hypothesis with a **pre-registered bar** (ANALYSIS §5) — **not
   adopted**, nothing changes during the max-hold isolation window.
 - Live bot runs from `/opt/gold` via systemd (`goldbot.service` =
-  engine, `mt5feed.service` = price-feed sidecar). Daily Grok HANDOFF job +
-  autosync every 3 h (§10).
+  engine, `mt5feed.service` = sidecar, `mt5.service` = Wine MT5 terminal).
+  Daily Grok HANDOFF job + autosync every 3 h (§10).
+
+### 1a. 🛑 2026-09-29 feed outage — 6 h of silent starvation (read before trusting a "STALE" badge)
+
+- **What happened:** the host rebooted at **08:29:15 UTC** (journal
+  `-- Boot c22469d0… --`). `goldbot`, `mt5feed` and `mt5` all restarted at
+  08:29:18, but **`mt5.service` never came back — stuck in
+  `deactivating (stop-sigterm)`**, so the terminal published no more bars.
+  `mt5_last_candle.json` froze at `ts=1790681280` (11:28 server / 08:28 UTC,
+  mtime 08:29) and `status.json` froze at 08:29:19 → dashboard **STALE** from
+  ~08:34 (the only detector that worked).
+- **Why it was invisible:** the engine stayed `active (running)` and looped on
+  the *deduped* candle, whose `continue` jumped over the stale-feed guard, and
+  `feed_stale_seconds()` reads `_last_price_mono` — never set after a restart —
+  so it reported `0.0` ("fresh") the whole time. No journal line, no Telegram
+  alert; the 09:00/12:00/15:00 autosync digests said `data: no new data` and
+  `check_data.py` was 0 fail.
+- **Precursor (undocumented):** a second stall **09-28 17:50:05 → 09-29
+  03:33:37** (9.7 h, ~283 open-market minutes) with the same signature — so the
+  failure hit twice in 24 h, and the ~09-28 "slide" discussion never noticed it.
+- **Impact:** ~6 h of London/NY missing (engine does **not** backfill) + ~283
+  open minutes on 09-28. **No trade was open across either gap** (#397 exit
+  09-28 17:40:02, #403 exit 09-29 07:51:03, `trade_active: false`) → no phantom
+  P&L. Ledger frozen at the numbers above; **strategy/params untouched, the
+  max-hold isolation window is undisturbed**.
+- **Fix shipped (detection only, `docs/REVIEW-2026-09-29-feed-outage.md`):**
+  engine feed-health check (`feed_publisher_age_seconds()` = sidecar heartbeat,
+  missing/corrupt file, price-event stall — evaluated **before** the dedup,
+  journal print every 5 min, Telegram on the 30-min cooldown, one recovery
+  line); smoke **Scenario L**; autosync digest now carries
+  `📈 candles: ok|STALE N open min`.
+- **Ops follow-ups (server-side, not in the repo):** harden `mt5.service`
+  (`Restart=always`, `RestartSec=10`, `TimeoutStopSec=30`,
+  `KillMode=control-group`, `systemctl enable`), use the recovery runbook in
+  §7 of the review, and treat the Wine MT5 terminal as the least reliable
+  component (the 08:29 reboot cause is still unexplained).
 
 **Current stance:** Edge is **not confirmed**. Mechanism (scratch rate, BE
 behaviour) is still consistent with the 0.75R design, but P&L/trade remains
@@ -230,7 +266,10 @@ for the ratchet).
 ## 5. Evidence base (don't re-derive)
 
 Key documents:
-- `docs/ANALYSIS-2026-09-28-falling-gold-win-rate.md` (latest — "WR improves
+- `docs/REVIEW-2026-09-29-feed-outage.md` (latest — 6-h silent starvation after
+  the 08:29 reboot: evidence chain, the guard bug that hid it, the undocumented
+  09-28 precursor, detection fix + ops runbook)
+- `docs/ANALYSIS-2026-09-28-falling-gold-win-rate.md` ("WR improves
   when gold falls?" → **wrong cause, no adoption**: real 30.7% vs 25.0% pooled
   gap but day-level null (27.9% vs 28.1%), side-coupled (94/96%), within-BUY
   refuted (13 falling-tape BUYs = worst bucket, 15.4%), whole gap 3 days old and
@@ -305,6 +344,18 @@ Current headlines (2026-09-15, 164 trades / 119 new-regime):
 
 ## 6. Next steps (in order)
 
+0. **Ops (do first after the 09-29 outage): bring the MT5 terminal back and
+   harden it.** `mt5.service` was stuck in `deactivating` for 6 h and only the
+   reboot stopped it; runbook + drop-in in `docs/REVIEW-2026-09-29-feed-outage.md`
+   §7 (`Restart=always`, `TimeoutStopSec=30`, `KillMode=control-group`,
+   `systemctl enable mt5.service`). Then confirm the feed is live again
+   (`mt5_last_candle.json` mtime + `updated_at` advancing, `status.json`
+   rewriting, `📈 candles: ok` in the autosync digest) and expect the new
+   engine alert to stay silent. Two stalls in 24 h (09-28 17:50→03:33 and
+   09-29 08:29→recovery) make this the top operational risk — the 09-29 check
+   was pushed to `main` for the 09-30 autosync cycle, so verify it deployed
+   (`journalctl -u goldbot | grep "feed problem"` should be empty on a healthy
+   feed).
 1. **Max-hold time stop SHIPPED 09-21 — LIVE, in isolation; re-review next**
    (max-hold re-baseline + ~2 weeks in-isolation data, ≈ deploy + 14 d).
    Deploy confirmed (PR #15 merged 04:50:49Z → ~06:00 autosync restart; the
@@ -410,6 +461,12 @@ data drop, not just after code changes.
   price log lags `trades.csv` by ~1 min — `tools/momentum_regime.py` uses
   `entry − 1 min` for "now" and the same offset for the window start). Never
   include the entry minute's close in a pre-entry feature.
+- **A frozen `mt5_last_candle.json` is not a quiet market.** The sidecar
+  rewrites the file every 5 s even when the market is closed, so a stale mtime
+  means the *publisher* died (terminal logged out/stuck) — the only reliable
+  signal, because with a frozen file no candle is ever accepted and
+  `feed_stale_seconds()` stays `0.0` (2026-09-29). The engine now checks the
+  heartbeat before the dedup; see `mt5_feed_problem()`.
 - **Never read a momentum/regime claim without a side split**: the trend gate
   makes falling tape ≈ SELL and rising tape ≈ BUY (94%/96% in the book), so
   pooled momentum numbers are side numbers in disguise (2026-09-28).
@@ -430,6 +487,10 @@ tools/             analysis / integrity / report scripts (not on the hot path)
 - Autosync: every 3 h from `/opt/gold` (`tools/autosync.sh`); refuses if local
   dirty. Force: `sudo /opt/gold/tools/autosync.sh`.
 - Daily Grok job refreshes `docs/HANDOFF.md` §1 from `status.json` + `trades.csv`.
+- Autosync digest now carries `📈 candles: ok (N open min) | STALE N open min`
+  (phase 4b, added 2026-09-29): open-market minutes since the last logged candle,
+  weekend/daily break excluded, shouts at > 90. A green digest with `no new
+  data` no longer means "all fine" on its own.
 - Services: `goldbot.service` (engine), `mt5feed.service` (Wine MT5 sidecar).
 - Logs: `journalctl -u goldbot -f`; autosync log `/var/log/gold_autosync.log`.
 

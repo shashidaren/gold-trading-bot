@@ -29,6 +29,11 @@ Scenarios:
      with reason "TIME" once older than the window (tick path + MT5 candle
      path, P&L-signed, own time_exits counter, survives restart); price exits
      take priority over TIME; a fresh trade must stay open
+  L) MT5 feed health (2026-09-29 frozen-file stall) -> MUST report a missing
+     file, a stale sidecar heartbeat (frozen mt5_last_candle.json, even when no
+     candle was ever accepted after a restart), and an unparseable payload;
+     MUST stay quiet on a closed market with a live heartbeat; recovery fires
+     once, on a newly accepted candle
 
 Usage: python3 tools/smoke_test.py
 """
@@ -560,6 +565,109 @@ check("K: status.json total includes TIME exits",
       st_k.get("time_exits") == 4 and st_k.get("total_trades") == 5,
       f"time_exits={st_k.get('time_exits')} total={st_k.get('total_trades')}")
 shutil.rmtree(tmp_k, ignore_errors=True)
+
+
+# --- Scenario L ---
+print("\nScenario L: MT5 feed health (2026-09-29 frozen-file stall)")
+tmp_l = tempfile.mkdtemp(prefix="gold_smoke_l_")
+engine.LOG_FILE_PATH = os.path.join(tmp_l, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_l, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_l, "trades.csv")
+engine.MT5_FEED_FILE = os.path.join(tmp_l, "mt5_last_candle.json")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_l, "skipped_trades.csv")
+
+eng_l = engine.GoldEngine()
+
+# 1) file missing -> reported, and never silently looped over
+check("L: missing feed file reported", (eng_l.mt5_feed_problem() or "").startswith("feed file"),
+      eng_l.mt5_feed_problem() or "None")
+
+# sidecar publishes normally
+CANDLE = {"ts": 1790681280, "open": 4141.39, "high": 4141.53, "low": 4140.06,
+          "close": 4140.61, "tick_volume": 17, "updated_at": "2026-09-29 08:29:19"}
+
+
+def publish(payload, mtime_age=0.0):
+    with open(engine.MT5_FEED_FILE, "w") as f:
+        json.dump(payload, f)
+    t = time.time() - mtime_age
+    os.utime(engine.MT5_FEED_FILE, (t, t))
+
+
+publish(CANDLE)
+check("L: fresh feed -> no problem", eng_l.mt5_feed_problem() is None,
+      f"publisher_age={eng_l.feed_publisher_age_seconds():.1f}s")
+
+# 2) the incident: file frozen (sidecar/terminal dead). No candle is ever
+#    accepted, so _last_price_mono is still None after the 08:29 restart and the
+#    old price-event guard was structurally blind - the heartbeat must catch it.
+eng_l._last_price_mono = None
+publish(CANDLE, mtime_age=engine.MT5_FEED_PUBLISHER_STALE_SECONDS + 600)
+problem_l = eng_l.mt5_feed_problem()
+check("L: frozen file detected with NO price event (post-restart case)",
+      problem_l is not None and "stopped publishing" in problem_l, problem_l or "None")
+check("L: price-event clock stays 0.0 here (why the old guard was blind)",
+      eng_l.feed_stale_seconds() == 0.0)
+
+# 3) a closed market is NOT a problem: the sidecar keeps republishing its last
+#    closed bar (heartbeat fresh), so the heartbeat check stays quiet and the
+#    price-event check is suppressed during quiet hours.
+publish(CANDLE)  # heartbeat fresh again
+eng_l._last_price_mono = time.monotonic() - (engine.STALE_FEED_SECONDS + 3600)
+real_quiet = engine.is_market_quiet
+engine.is_market_quiet = lambda now=None: True            # e.g. Saturday
+check("L: quiet market with fresh heartbeat -> no problem",
+      eng_l.mt5_feed_problem() is None, eng_l.mt5_feed_problem() or "None")
+engine.is_market_quiet = real_quiet
+
+# 4) publisher alive (market hours) but candles stalled -> still a problem
+check("L: stalled candles with live publisher detected",
+      "stalled" in (eng_l.mt5_feed_problem() or ""), eng_l.mt5_feed_problem() or "None")
+
+# 5) corrupt payload with a live publisher -> a problem (not a silent loop)
+with open(engine.MT5_FEED_FILE, "w") as f:
+    f.write("corrupted")
+eng_l.read_mt5_feed()  # the loop always reads before it checks
+check("L: corrupt feed file reported",
+      "cannot parse" in (eng_l.mt5_feed_problem() or ""), eng_l.mt5_feed_problem() or "None")
+
+# 6) alert policy: rate-limited Telegram, journal print cooldown, recovery line
+print("   (expect one 'MT5 feed problem' line and one 'recovered' line below)")
+eng_l2 = engine.GoldEngine()
+eng_l2.send_telegram = lambda text: setattr(eng_l2, "_sent", text)  # capture, don't send
+eng_l2._sent = None
+publish(CANDLE, mtime_age=engine.MT5_FEED_PUBLISHER_STALE_SECONDS + 600)
+p0 = eng_l2.mt5_feed_problem()
+first_l = eng_l2.report_mt5_feed_problem(p0)
+second_l = eng_l2.report_mt5_feed_problem(p0)
+check("L: alert fires once then rate-limited (30-min cooldown)",
+      first_l is True and second_l is False, f"first={first_l} second={second_l}")
+check("L: alert carries the MT5 wording, not the Twelve Data one",
+      eng_l2._sent is not None and "MT5 feed dead" in eng_l2._sent, (eng_l2._sent or "None")[:60])
+check("L: journal print is cooldown-limited too",
+      eng_l2._last_feed_problem_log_mono is not None)
+
+# ...but a recovery is only ever declared on a NEWLY accepted candle: the
+# dedup (same ts) returns None, so the loop `continue`s before that call.
+publish(CANDLE)
+check("L: frozen file never reaches the recovery call (dedup gates it)",
+      eng_l2.mt5_next_candle(eng_l2.read_mt5_feed(), CANDLE["ts"]) is None
+      and eng_l2._mt5_feed_problem_active is True)
+check("L: recovery line fires exactly once",
+      eng_l2.report_mt5_feed_recovered(CANDLE["ts"] + 60) is True
+      and eng_l2.report_mt5_feed_recovered(CANDLE["ts"] + 120) is False
+      and eng_l2._mt5_feed_problem_active is False)
+eng_l2._mt5_feed_problem_active = True  # leave it consistent for the next check
+
+# 7) recovery actually resumes the forward test (new candle accepted once)
+publish({"ts": CANDLE["ts"] + 60, "open": 4140.61, "high": 4142.0, "low": 4140.0,
+         "close": 4141.5, "tick_volume": 22, "updated_at": "2026-09-29 14:40:00"})
+c_l = eng_l2.mt5_next_candle(eng_l2.read_mt5_feed(), CANDLE["ts"])
+check("L: new candle accepted after recovery (exactly once)",
+      c_l is not None and c_l[0] == CANDLE["ts"] + 60
+      and eng_l2.mt5_next_candle(eng_l2.read_mt5_feed(), CANDLE["ts"] + 60) is None)
+shutil.rmtree(tmp_l, ignore_errors=True)
 
 print()
 if FAILURES:
