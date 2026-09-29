@@ -237,6 +237,61 @@ except Exception as e:
 PYEOF
 )
 
+# --- phase 4b: data-freshness backstop -----------------------------------------
+# 2026-09-29: a host reboot left the MT5 terminal stuck, the feed file froze at
+# 08:29 UTC and the engine starved *silently* for 6 h - the 09:00 and 12:00
+# autosync runs reported "no new data" and looked green. This backstop counts
+# the minutes the market was OPEN since the last logged candle (weekend/daily
+# break excluded, mirroring engine.is_market_quiet) and shouts in the digest
+# when that exceeds STALE_OPEN_MIN.
+FRESH_MSG=$(python3 - <<'PYEOF' 2>/dev/null
+import csv
+from datetime import datetime, timedelta, timezone
+
+STALE_OPEN_MIN = 90  # open-market minutes with no new candle
+
+
+def _quiet(t):
+    # Mirrors engine.is_market_quiet(): weekend, or the broker daily break.
+    return t.weekday() >= 5 or t.hour >= 21 or t.hour < 2
+
+
+def open_minutes(ts, now):
+    total, step, t = 0, timedelta(minutes=5), ts
+    while t < now:
+        if not _quiet(t):
+            total += 5
+        t += step
+    return total
+
+
+try:
+    last = None
+    with open("forward_test_log.csv") as f:
+        for row in csv.reader(f):
+            if row and row[0] and row[0] != "Timestamp":
+                last = row
+    ts = datetime.strptime(last[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+except Exception as e:  # never break the sync over a health check
+    print("unreadable (%s)" % e)
+    raise SystemExit
+
+now = datetime.now(timezone.utc)
+mins = open_minutes(ts, now)
+if mins > STALE_OPEN_MIN:
+    print("STALE %d open min (last candle %s UTC)" % (mins, last[0]))
+else:
+    print("ok (%d open min since last candle)" % mins)
+PYEOF
+)
+log "freshness: $FRESH_MSG"
+case "$FRESH_MSG" in
+    STALE*)
+        EXTRA="$EXTRA
+🛑 engine/feed starving: no new candles for $FRESH_MSG - check systemctl status goldbot mt5 mt5feed"
+        ;;
+esac
+
 log "done. data=[$DATA_MSG] deploy=[$DEPLOY_MSG] check=[$CHECK_MSG]"
 
 QUIET_SKIP=0
@@ -249,5 +304,6 @@ if [ "$QUIET_SKIP" = "0" ]; then
 📦 data: $DATA_MSG (push: $PUSH_MSG)
 🚀 deploy: $DEPLOY_MSG
 🩺 integrity: $CHECK_MSG
+📈 candles: $FRESH_MSG
 💰 $STATS$EXTRA"
 fi

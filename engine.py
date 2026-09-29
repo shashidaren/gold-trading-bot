@@ -84,6 +84,18 @@ MIN_ATR = 1.10
 STALE_FEED_SECONDS = 10 * 60            # force reconnect if no price event this long
 STALE_ALERT_COOLDOWN_SECONDS = 30 * 60  # Telegram alert at most this often
 
+# --- MT5 publisher heartbeat (silent frozen-file stall, 2026-09-29) ---
+# tools/mt5_feed.py rewrites MT5_FEED_FILE every poll (5 s) *even when the
+# market is closed* (it republishes the last closed bar). So a file whose mtime
+# stops moving means the *publisher* died (MT5 terminal logged out / stuck /
+# wine prefix gone) - NOT that the market is quiet. This is the signal the
+# price-event guard cannot see: with a frozen file no candle is ever accepted,
+# so `_last_price_mono` never advances (and after a restart it stays None),
+# which is how a 2026-09-29 host reboot left the engine looping silently for
+# 6 h while the dashboard said STALE and nothing else complained.
+MT5_FEED_PUBLISHER_STALE_SECONDS = 3 * 60   # stale mtime = 36 missed 5-s polls
+MT5_FEED_PROBLEM_LOG_COOLDOWN_SECONDS = 5 * 60  # journal print at most this often
+
 # --- Regime gates (EMA Slope & Distance from Mean) ---
 REQUIRE_EMA_SLOPE = True       # EMA50 slope direction filter
 EMA_SLOPE_LOOKBACK = 30        # Compare EMA50 vs N candles ago
@@ -261,6 +273,11 @@ class GoldEngine:
         self._last_price_mono = None
         self._last_stale_alert_mono = None
         self._mt5_last_candle_ts = None
+
+        # MT5 feed-health state (see mt5_feed_problem / run_mt5_test)
+        self._mt5_feed_read_error = None      # last read_mt5_feed() failure, if any
+        self._mt5_feed_problem_active = False  # already reported the current stall
+        self._last_feed_problem_log_mono = None
 
         # Buy Funnel Counters
         self.hit_tested_floor = 0
@@ -598,16 +615,109 @@ class GoldEngine:
             now_mono = time.monotonic()
         return max(0.0, now_mono - self._last_price_mono)
 
-    def maybe_alert_stale_feed(self, stale_seconds: float) -> bool:
-        """Rate-limited Telegram alert for a stalled feed. True if it alerted."""
+    def maybe_alert_stale_feed(self, stale_seconds: float, detail: str = None) -> bool:
+        """Rate-limited Telegram alert for a stalled feed. True if it alerted.
+
+        `detail` overrides the default Twelve Data wording so the MT5 path can
+        say what actually died (2026-09-29: frozen feed file).
+        """
         if self._last_stale_alert_mono is not None and \
                 time.monotonic() - self._last_stale_alert_mono < STALE_ALERT_COOLDOWN_SECONDS:
             return False
         self._last_stale_alert_mono = time.monotonic()
+        if detail:
+            self.send_telegram(detail)
+            return True
         self.send_telegram(
             f"⚠️ gold engine: no price ticks for {stale_seconds / 60:.0f} min — "
             f"stale-feed guard forced a WebSocket reconnect"
         )
+        return True
+
+    def feed_publisher_age_seconds(self) -> float:
+        """Seconds since the MT5 sidecar last rewrote MT5_FEED_FILE (its
+        heartbeat), or None if the file cannot be stat'ed.
+
+        The sidecar republishes every poll (5 s) even on a closed market, so
+        this tracks the *publisher*, not the market (see the constants block).
+        """
+        try:
+            return max(0.0, time.time() - os.path.getmtime(MT5_FEED_FILE))
+        except OSError:
+            return None
+
+    def mt5_feed_problem(self) -> str:
+        """A short human reason when the MT5 feed looks dead, else None.
+
+        Checked *before* the candle dedup in run_mt5_test on purpose: the dedup
+        path `continue`s (the same closed candle is republished every poll), and
+        the old guard sat below it, so a frozen feed file was never reported
+        (2026-09-29: host reboot -> MT5 terminal stuck -> 6 h of silent
+        starvation, zero journal lines, zero Telegram alerts).
+
+        Three failure modes, in order of certainty:
+          1. file missing / unreadable  -> sidecar never started or wrong path;
+          2. publisher heartbeat stale  -> terminal down/logged out: the file
+             stopped being rewritten (this fires even right after a restart,
+             when no candle has been accepted yet and the price-event clock is
+             still None);
+          3. no closed candle accepted for > STALE_FEED_SECONDS *in market
+             hours* while the publisher is alive -> feed stalled but terminal
+             reachable.
+
+        A closed market (weekend / daily break) is explicitly NOT a problem -
+        the sidecar keeps the heartbeat fresh and is_market_quiet() suppresses
+        (3) - and hard failures (1)/(2) are still reported then, because a
+        dead publisher means no data when the market reopens.
+
+        Call this right after read_mt5_feed() (as run_mt5_test does): (1) and
+        the parse check below read the flag that call sets.
+        """
+        age = self.feed_publisher_age_seconds()
+        if age is None:
+            return (f"feed file {MT5_FEED_FILE} missing/unreadable"
+                    f"{' (' + self._mt5_feed_read_error + ')' if self._mt5_feed_read_error else ''}"
+                    " — is mt5feed running? wrong path?")
+        if self._mt5_feed_read_error:
+            return f"cannot parse {MT5_FEED_FILE}: {self._mt5_feed_read_error}"
+        if age > MT5_FEED_PUBLISHER_STALE_SECONDS:
+            return (f"sidecar stopped publishing {MT5_FEED_FILE} "
+                    f"{age / 60:.0f} min ago — mt5feed dead or MT5 terminal not "
+                    f"logged in (check: systemctl status mt5 mt5feed)")
+        stale = self.feed_stale_seconds()
+        if stale > STALE_FEED_SECONDS and not is_market_quiet():
+            return f"no new closed candles for {stale / 60:.0f} min — feed stalled"
+        return None
+
+    def report_mt5_feed_problem(self, problem: str) -> bool:
+        """Print (rate-limited) + Telegram-alert on a dead MT5 feed.
+
+        Telegram keeps the 30-min cooldown and quiet-hours suppression of the
+        Twelve Data guard (weekend peace); the journal print repeats every
+        MT5_FEED_PROBLEM_LOG_COOLDOWN_SECONDS so the outage is visible in
+        `journalctl -u goldbot` even when alerts are suppressed. The 3-hourly
+        autosync digest is the always-on backstop.
+        """
+        self._mt5_feed_problem_active = True
+        now = time.monotonic()
+        if self._last_feed_problem_log_mono is None or \
+                now - self._last_feed_problem_log_mono > MT5_FEED_PROBLEM_LOG_COOLDOWN_SECONDS:
+            print(f"\nMT5 feed problem: {problem}", flush=True)
+            self._last_feed_problem_log_mono = now
+        if not is_market_quiet():
+            return self.maybe_alert_stale_feed(
+                0.0, detail=f"⚠️ gold engine: MT5 feed dead — {problem}")
+        return False
+
+    def report_mt5_feed_recovered(self, ts: int) -> bool:
+        """One journal + Telegram line when the feed comes back after a stall."""
+        if not self._mt5_feed_problem_active:
+            return False
+        self._mt5_feed_problem_active = False
+        self._last_feed_problem_log_mono = None
+        when = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+        print(f"\nMT5 feed recovered: candle @ {when} UTC", flush=True)
+        self.send_telegram(f"✅ gold engine: MT5 feed recovered (candle @ {when} UTC)")
         return True
 
     def log_candle(self, timestamp, o, h, l, c, ratio, tick_count, vol_ma, dynamic_floor, ema_f, ema_s, tested, rejected, held, vol_conf, trend_conf, rsi_val, atr_val):
@@ -1223,11 +1333,13 @@ class GoldEngine:
     def read_mt5_feed(self):
         """Read the latest closed M1 candle published by tools/mt5_feed.py
         (Wine sidecar), normalized to the mt5 rate-dict shape, or None if the
-        file is missing/unreadable."""
+        file is missing/unreadable. Records the failure reason in
+        `_mt5_feed_read_error` for mt5_feed_problem().
+        """
         try:
             with open(MT5_FEED_FILE) as f:
                 d = json.load(f)
-            return [{
+            rates = [{
                 "time": int(d["ts"]),
                 "open": float(d["open"]),
                 "high": float(d["high"]),
@@ -1235,7 +1347,10 @@ class GoldEngine:
                 "close": float(d["close"]),
                 "tick_volume": int(d["tick_volume"]),
             }]
-        except Exception:
+            self._mt5_feed_read_error = None
+            return rates
+        except Exception as e:
+            self._mt5_feed_read_error = f"{type(e).__name__}: {e}"
             return None
 
     def mt5_next_candle(self, rates, last_ts):
@@ -1268,6 +1383,14 @@ class GoldEngine:
             while True:
                 rates = self.read_mt5_feed()
 
+                # Feed-health check FIRST: it must also run on the dedup path
+                # below (a frozen file republishes the same candle forever, and
+                # the old guard sat *after* that `continue`, so a dead feed was
+                # never logged or alerted - 2026-09-29 incident).
+                problem = self.mt5_feed_problem()
+                if problem is not None:
+                    self.report_mt5_feed_problem(problem)
+
                 if rates is not None and len(rates) > 0:
                     candle = self.mt5_next_candle(rates, last_ts)
                     if candle is None:
@@ -1277,6 +1400,7 @@ class GoldEngine:
                     last_ts = ts
                     self._mt5_last_candle_ts = ts
                     self._last_price_mono = time.monotonic()
+                    self.report_mt5_feed_recovered(ts)
                     try:
                         # Candle-driven feed: no tick events, so SL/TP for an
                         # open simulated position must be resolved against the
@@ -1290,20 +1414,11 @@ class GoldEngine:
                               f"{datetime.fromtimestamp(ts, tz=timezone.utc):%Y-%m-%d %H:%M} MT5-server-time "
                               f"| close {c:.2f}", flush=True)
                 else:
-                    print(f"MT5: no feed in {MT5_FEED_FILE} - retrying in 5s "
-                          "(is the mt5feed sidecar running? terminal logged in?)", flush=True)
+                    # No readable feed file: already reported at the top of the
+                    # loop by mt5_feed_problem() / report_mt5_feed_problem().
                     time.sleep(5)
                     continue
 
-                # Stale-feed guard (same as run_forward_test): feed went quiet
-                # (sidecar crashed / terminal logged out) -> alert. The sidecar
-                # is a separate service: systemctl restart mt5feed.
-                stale = self.feed_stale_seconds()
-                if stale > STALE_FEED_SECONDS:
-                    print(f"\nStale MT5 feed: no closed candles for {stale:.0f}s - "
-                          f"check the mt5feed sidecar (systemctl restart mt5feed)", flush=True)
-                    if not is_market_quiet():
-                        self.maybe_alert_stale_feed(stale)
                 time.sleep(5)
         except KeyboardInterrupt:
             print("\nShutting down...")
