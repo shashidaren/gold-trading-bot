@@ -34,6 +34,13 @@ Scenarios:
      candle was ever accepted after a restart), and an unparseable payload;
      MUST stay quiet on a closed market with a live heartbeat; recovery fires
      once, on a newly accepted candle
+  M) Restart boundary candle (2026-09-29) -> the mt5_last_candle_ts watermark
+     MUST survive a restart. __init__ runs save_status() before run_mt5_test()
+     reads it, so a None start clobbered it to null, dropped the dedup floor to
+     0 and re-played the boundary candle (re-logged + re-tradeable). MUST also
+     survive a flat candle (h==l) and an evaluate_candle() error, MUST still
+     accept the next candle, and MUST degrade to a fresh start on a corrupt
+     status.json
 
 Usage: python3 tools/smoke_test.py
 """
@@ -668,6 +675,139 @@ check("L: new candle accepted after recovery (exactly once)",
       c_l is not None and c_l[0] == CANDLE["ts"] + 60
       and eng_l2.mt5_next_candle(eng_l2.read_mt5_feed(), CANDLE["ts"] + 60) is None)
 shutil.rmtree(tmp_l, ignore_errors=True)
+
+
+# --- Scenario M ---
+print("\nScenario M: restart boundary candle (watermark must survive a restart)")
+tmp_m = tempfile.mkdtemp(prefix="gold_smoke_m_")
+engine.LOG_FILE_PATH = os.path.join(tmp_m, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_m, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_m, "trades.csv")
+engine.MT5_FEED_FILE = os.path.join(tmp_m, "mt5_last_candle.json")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_m, "skipped_trades.csv")
+
+BOUNDARY_TS = 1790681280
+
+
+def publish_m(ts, o=4141.0, h=4142.0, l=4140.0, c=4141.5, v=17):
+    with open(engine.MT5_FEED_FILE, "w") as f:
+        json.dump({"ts": ts, "open": o, "high": h, "low": l, "close": c,
+                   "tick_volume": v, "updated_at": "2026-09-29 08:29:19"}, f)
+    t = time.time()
+    os.utime(engine.MT5_FEED_FILE, (t, t))
+
+
+def persisted_ts():
+    try:
+        with open(engine.STATUS_FILE_PATH) as f:
+            return json.load(f).get("mt5_last_candle_ts")
+    except Exception:
+        return "<unreadable>"
+
+
+def count_log_rows(ts=None):
+    """Rows in forward_test_log.csv, optionally only those matching an OHLC."""
+    if not os.path.isfile(engine.LOG_FILE_PATH):
+        return 0
+    with open(engine.LOG_FILE_PATH) as f:
+        rows = list(csv.reader(f))
+    rows = [r for r in rows[1:] if r]
+    if ts is None:
+        return len(rows)
+    return sum(1 for r in rows if r[1:5] == ["4141.0", "4142.0", "4140.0", "4141.5"])
+
+
+# Session 1: accept the boundary candle and persist the watermark.
+eng_m1 = engine.GoldEngine()
+publish_m(BOUNDARY_TS)
+c_m1 = eng_m1.mt5_next_candle(eng_m1.read_mt5_feed(), eng_m1._mt5_last_candle_ts or 0)
+check("M: session 1 accepts the boundary candle",
+      c_m1 is not None and c_m1[0] == BOUNDARY_TS, str(c_m1))
+eng_m1._mt5_last_candle_ts = BOUNDARY_TS
+eng_m1.save_status()
+check("M: watermark persisted to status.json", persisted_ts() == BOUNDARY_TS, str(persisted_ts()))
+
+# Session 2: restart. __init__ runs save_status() *before* run_mt5_test() reads
+# the watermark, so starting _mt5_last_candle_ts at None used to null it out and
+# drop the dedup floor to 0 -> the boundary candle got re-played.
+eng_m2 = engine.GoldEngine()
+check("M: restart restores the watermark in memory",
+      eng_m2._mt5_last_candle_ts == BOUNDARY_TS, str(eng_m2._mt5_last_candle_ts))
+check("M: __init__'s own save_status() does NOT null the watermark",
+      persisted_ts() == BOUNDARY_TS, str(persisted_ts()))
+publish_m(BOUNDARY_TS)
+check("M: boundary candle NOT re-accepted after restart (no re-log, no re-trade)",
+      eng_m2.mt5_next_candle(eng_m2.read_mt5_feed(), eng_m2._mt5_last_candle_ts or 0) is None)
+publish_m(BOUNDARY_TS + 60)
+check("M: the NEXT candle is still accepted (fix must not stall the feed)",
+      (lambda c: c is not None and c[0] == BOUNDARY_TS + 60)(
+          eng_m2.mt5_next_candle(eng_m2.read_mt5_feed(), eng_m2._mt5_last_candle_ts or 0)))
+
+# The watermark must also survive candles whose evaluate_candle() bails before
+# its save_status(): a flat candle (h == l) and the loop's exception handler.
+eng_m3 = engine.GoldEngine()
+eng_m3._mt5_last_candle_ts = BOUNDARY_TS
+eng_m3.save_status()
+eng_m3.evaluate_candle(4141.0, 4141.0, 4141.0, 4141.0, 5)   # flat: early return
+check("M: flat candle (h==l) still persists the watermark",
+      persisted_ts() == BOUNDARY_TS, str(persisted_ts()))
+FLAT_TS = BOUNDARY_TS + 120
+eng_m3._mt5_last_candle_ts = FLAT_TS
+eng_m3.evaluate_candle(4141.0, 4141.0, 4141.0, 4141.0, 5)   # flat, new ts
+check("M: a flat candle is consumed (no replay of it after a restart)",
+      persisted_ts() == FLAT_TS, str(persisted_ts()))
+check("M: a flat candle is not logged as a price row",
+      count_log_rows() == 0, f"{count_log_rows()} rows")
+
+# ...and when evaluate_candle() raises: run_mt5_test's handler has to persist,
+# because that candle was already consumed from the feed. Drive one real loop
+# iteration in a thread; mt5_feed_problem() is patched to end the loop on the
+# next pass (KeyboardInterrupt is only delivered to the main thread, so it has
+# to be raised from inside the worker).
+import threading  # noqa: E402
+
+eng_m4 = engine.GoldEngine()
+eng_m4._mt5_last_candle_ts = BOUNDARY_TS
+eng_m4.save_status()
+RAISE_TS = BOUNDARY_TS + 180
+publish_m(RAISE_TS, o=4200.0, h=4201.0, l=4199.0, c=4200.5)
+
+_real_eval = engine.GoldEngine.evaluate_candle
+_real_problem = engine.GoldEngine.mt5_feed_problem
+_calls = {"n": 0}
+
+
+def _raiser(self, *a, **k):
+    _calls["n"] += 1
+    raise RuntimeError("synthetic evaluate_candle failure")
+
+
+def _stopper(self, *a, **k):
+    if _calls["n"]:
+        raise KeyboardInterrupt        # ends the loop after the erroring pass
+    return _real_problem(self)
+
+
+engine.GoldEngine.evaluate_candle = _raiser
+engine.GoldEngine.mt5_feed_problem = _stopper
+th = threading.Thread(target=eng_m4.run_mt5_test, daemon=True)
+th.start()
+th.join(timeout=30)
+engine.GoldEngine.evaluate_candle = _real_eval
+engine.GoldEngine.mt5_feed_problem = _real_problem
+check("M: erroring candle was attempted", _calls["n"] >= 1, f"calls={_calls['n']}")
+check("M: evaluate_candle error still persists the watermark (no replay)",
+      persisted_ts() == RAISE_TS, f"persisted={persisted_ts()} expected={RAISE_TS}")
+check("M: loop thread exited", not th.is_alive())
+
+# Corrupt status.json must degrade to a fresh start, never crash the boot.
+with open(engine.STATUS_FILE_PATH, "w") as f:
+    f.write("{not json")
+eng_m5 = engine.GoldEngine()
+check("M: corrupt status.json -> no crash, watermark None",
+      eng_m5._mt5_last_candle_ts is None, str(eng_m5._mt5_last_candle_ts))
+shutil.rmtree(tmp_m, ignore_errors=True)
 
 print()
 if FAILURES:
