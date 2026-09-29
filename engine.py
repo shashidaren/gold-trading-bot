@@ -272,7 +272,15 @@ class GoldEngine:
         # Stale-feed guard state (see run_forward_test)
         self._last_price_mono = None
         self._last_stale_alert_mono = None
+        # MT5 candle dedup watermark. This MUST be restored from status.json
+        # *here*, before the save_status() calls at the end of __init__:
+        # save_status() writes _mt5_last_candle_ts back out, so starting it at
+        # None clobbered the persisted watermark with null before
+        # run_mt5_test() ever read it -> the dedup floor came back 0 and the
+        # restart re-played the boundary candle (re-logged to
+        # forward_test_log.csv and free to re-enter a trade on it).
         self._mt5_last_candle_ts = None
+        self.restore_mt5_candle_ts_from_status()
 
         # MT5 feed-health state (see mt5_feed_problem / run_mt5_test)
         self._mt5_feed_read_error = None      # last read_mt5_feed() failure, if any
@@ -392,6 +400,33 @@ class GoldEngine:
             self.be_exits = 0
             self.time_exits = 0
             self.balance = 500.00
+
+    def restore_mt5_candle_ts_from_status(self):
+        """Restore the MT5 candle dedup watermark from status.json.
+
+        Called from __init__ BEFORE any save_status(), because save_status()
+        re-publishes _mt5_last_candle_ts: without this restore the field was
+        written back out as null on every boot and run_mt5_test() lost the
+        previous session's watermark. The boundary candle was then re-accepted
+        (ts <= 0 is never true), re-logged and re-traded - breaking the
+        documented invariant that a restart never re-logs the boundary candle.
+
+        Silent and non-fatal by design: a missing/corrupt status.json just
+        means a fresh start (watermark None), same as before.
+        """
+        if not os.path.isfile(STATUS_FILE_PATH):
+            return
+        try:
+            with open(STATUS_FILE_PATH) as f:
+                ts = json.load(f).get("mt5_last_candle_ts")
+            self._mt5_last_candle_ts = int(ts) if ts else None
+        except Exception as e:
+            print(f"Could not read status.json for MT5 candle-ts restore: {e}")
+            return
+        if self._mt5_last_candle_ts:
+            print(f"Restored MT5 candle watermark -> "
+                  f"{datetime.fromtimestamp(self._mt5_last_candle_ts, tz=timezone.utc):%Y-%m-%d %H:%M:%S} UTC "
+                  f"(restart will not re-play this candle)")
 
     def restore_open_trade_from_status(self):
         """Restore open simulated trade from status.json after crash/restart."""
@@ -891,6 +926,12 @@ class GoldEngine:
     def evaluate_candle(self, o, h, l, c, tick_count):
         candle_range = h - l
         if candle_range <= 0:
+            # Degenerate/flat candle: still consumed from the feed, so persist
+            # the watermark before bailing. Otherwise the caller's advanced
+            # last_ts never reaches status.json (its only writer for a
+            # no-trade candle is the save_status() further down) and a restart
+            # replays this candle plus every candle after it.
+            self.save_status()
             return
         
         self.candles_evaluated += 1
@@ -1373,12 +1414,21 @@ class GoldEngine:
         deduplicated by candle timestamp.
         """
         print("Gold Engine FORWARD TEST (MT5 feed) starting...")
-        last_ts = 0
+        # Dedup floor. __init__ already restored the watermark from status.json
+        # (restore_mt5_candle_ts_from_status); prefer that in-memory value over
+        # a second read of the file, which __init__'s own save_status() has
+        # just rewritten. Same value when the restore worked, but this no
+        # longer depends on file read/write ordering.
+        last_ts = self._mt5_last_candle_ts or 0
         try:
             with open(STATUS_FILE_PATH) as f:
-                last_ts = int(json.load(f).get("mt5_last_candle_ts") or 0)
+                last_ts = max(last_ts, int(json.load(f).get("mt5_last_candle_ts") or 0))
         except Exception:
-            last_ts = 0
+            pass
+        if last_ts:
+            print(f"Resuming after candle ts={last_ts} "
+                  f"({datetime.fromtimestamp(last_ts, tz=timezone.utc):%Y-%m-%d %H:%M:%S} UTC) - "
+                  f"that candle and earlier will not be re-logged")
         try:
             while True:
                 rates = self.read_mt5_feed()
@@ -1409,6 +1459,10 @@ class GoldEngine:
                         self.evaluate_candle(o, h, l, c, vol)
                     except Exception as e:
                         print(f"\nError evaluating candle @ {ts}: {e}", flush=True)
+                        # last_ts already advanced past this candle in memory;
+                        # persist it so a restart does not replay a candle that
+                        # errored (the error path never reaches save_status()).
+                        self.save_status()
                     if ts % 3600 == 0:
                         print(f"Heartbeat: candle @ "
                               f"{datetime.fromtimestamp(ts, tz=timezone.utc):%Y-%m-%d %H:%M} MT5-server-time "
