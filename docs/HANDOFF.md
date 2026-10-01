@@ -18,8 +18,10 @@ from the first commit.
    python3 tools/win_rate_report.py
    python3 tools/momentum_regime.py     # regime/side + the 09-28 hypothesis & its bar
    ```
-3. **Next formal work:** max-hold re-review (~2026-10-05 or n≈200 max-hold-era trades);
-   score the registered `H-side-awareness` hypothesis there (ANALYSIS-2026-09-28 §5).
+3. **Next formal work:** max-hold re-review (~2026-10-05 or n≈200 max-hold-era trades;
+   currently n=178); score `H-side-awareness` there (ANALYSIS-2026-09-28 §5).
+   Read `docs/ANALYSIS-2026-10-01-stop-loss-rate.md` first: high SL rate verified,
+   **no bot changes**, research-tool corrections and next-session checklist.
 4. Never change `BE_TRIGGER_R` / `MAX_HOLD_MINUTES` / ATR bounds / blackouts without a
    pre-registered bar + REVIEW/ANALYSIS doc.
 
@@ -67,50 +69,55 @@ from the first commit.
 | 2026-09-17 | Falsification bar tripped (−$0.40/trade at n≥60) |
 | 2026-09-21 ~06:00 | `MAX_HOLD_MINUTES=240` live (PR #15); **no era counter reset** |
 
-## 1. Where things stand (as of 2026-09-29)
+## 1. Where things stand (as of 2026-10-01, 14:59:04 UTC snapshot)
 
-- Repo: `shashidaren/gold-trading-bot`, default branch `main` (session PR from
-  the 09-28 analysis cycle open on the arena branch; prior arena branches are
-  historical).
-- **PR #15 MERGED** (2026-09-21 04:50:49Z): max-hold time stop
-  (`MAX_HOLD_MINUTES = 240`, reason TIME) — **deploy confirmed live**; **0 TIME
-  exits still**. **PR #16/#17 MERGED** same day: win-rate drop check (NO drop) +
-  dashboard Win-Rate tile clarity + §2b era table / no-reset decision.
-  Earlier: **PR #9** (2026-09-15) `BE_TRIGGER_R` 0.30 → 0.75; **PR #7** (2026-09-10)
-  BE ratchet + direction-aware London blackout + trend-side daily breaker.
-  **No code/param change in the 09-28 cycle** — analysis + tooling only
-  (`tools/momentum_regime.py`, `docs/ANALYSIS-2026-09-28-falling-gold-win-rate.md`).
-- Current ledger (`status.json` last_update **2026-09-29 08:29:19**, data on
-  main — **frozen there by the 09-29 feed outage, §1a**):
-  - **402 closed trades, 0 active** → 64W / 166L / 172BE / 0TIME →
-    **27.8% decisive** [22.4–33.9], true P&L from $500 **−$254.99 → $245.01**
-    (engine ledger $261.98; known drift +$16.97, unchanged order of magnitude).
-  - **0.75R era** (entries ≥ 09-15 06:00 UTC): **n=227** → 46W/107L/74BE,
-    **30.1% decisive** [23.4–37.7], ≈ **−$0.576/trade** (**still below the
-    −$0.40 falsification bar**). **Max-hold era** (entries ≥ 09-21 06:00):
-    **n=132** → 26W/66L/40BE, **28.3% decisive** [20.1–38.2], ≈ −$0.683/trade —
-    **still 0 TIME fires**.
-  - **Falsification bar FORMALLY TRIPPED 09-17** → fallback step 1 (max-hold)
-    **SHIPPED and LIVE 09-21**; step 2 (ratchet-off) still queued behind the
-    pre-registered re-review (deploy + ~2 weeks / n ≈ 200 max-hold-era).
-  - 0.30R era (09-10 12:34 → 09-15 06:00, n=130): 10W/22L/98BE, 31.2% dec,
-    −$0.321/trade. Pre-ratchet (n=45): 17.8% dec, −$1.834/trade.
-- **09-28 observation cycle ("WR improves when gold falls"): answered in
-  `docs/ANALYSIS-2026-09-28-falling-gold-win-rate.md` — real pattern, wrong
-  cause.** Falling-tape entries are 30.7% decisive vs 25.0% (60-min lookback,
-  p=0.37), but (i) day-level it is null (down days 27.9% vs up days 28.1%),
-  (ii) 94% of falling-tape entries ARE SELLs / 96% of rising-tape are BUYs
-  (trend-gate coupling), so it is largely the **side** effect (SELL 34.0% vs
-  BUY 22.3%, p=0.070; max-hold era 36.5% vs 14.3%, p=0.041 — but p→0.16 without
-  09-28), and (iii) the whole falling-vs-rising gap is **3 trading days old**
-  (09-24→09-28; 09-14→09-18 was a dead heat) and **inverts in the one up-leg**
-  (09-17/09-18: BUY 45.0% vs SELL 12.5%). The recent bleed was the BUY side:
-  max-hold era BUY −$84.07 (14.3% dec) vs SELL +$10.69 (36.5%). Registered as a
-  falsifiable hypothesis with a **pre-registered bar** (ANALYSIS §5) — **not
-  adopted**, nothing changes during the max-hold isolation window.
-- Live bot runs from `/opt/gold` via systemd (`goldbot.service` =
-  engine, `mt5feed.service` = sidecar, `mt5.service` = Wine MT5 terminal).
-  Daily Grok HANDOFF job + autosync every 3 h (§10).
+- Repo: `shashidaren/gold-trading-bot`, default branch `main`. This session is
+  on `arena/01a0f896-gold-trading-bot`; **analysis + notes only**, no bot/code/
+  parameter/data/deploy change. Latest review:
+  `docs/ANALYSIS-2026-10-01-stop-loss-rate.md` (read before proposing a fix).
+- Historical deploys unchanged: **PR #15 MERGED** (09-21 04:50:49Z),
+  `MAX_HOLD_MINUTES = 240` live since ~06:00; **PR #9** (09-15) BE 0.30→0.75R;
+  **PR #7** (09-10) ratchet + BUY-only London blackout + trend-side daily breaker.
+  Feed-health/restart guards are present in the checkout; **production-host
+  hardening/deploy verification was not performed in this session**.
+- Current ledger (data collection 160, commit `3e734c4`; **not frozen at 09-29
+  anymore**, §1a): **448 closed / 0 active**, 77W / 184L / 187BE / 0TIME →
+  **29.5% decisive** [24.3–35.3], paper P&L from $500 **−$251.69 → $248.31**.
+  Engine ledger $265.28; known drift **+$16.97**. Integrity **0 fail / 8 warn**;
+  synthetic smoke **A–M passed**. October 1 is a **partial day**.
+  - **0.75R master book** (entries ≥09-15 06:00): **n=273**, 59W/125L/89BE,
+    **32.1% decisive** [25.8–39.1], **−$0.467/trade**; original −$0.40
+    falsification bar remains tripped (formally since 09-17).
+  - **Max-hold era** (entries ≥09-21 06:00): **n=178**, 39W/84L/55BE,
+    **31.7% decisive** [24.1–40.4], **−$0.488/trade**, **0 TIME fires**.
+    Longest hold **67.97 min**, #409 BE across the normal daily closure;
+    median SL hold 9.02 min. The 240-min cap has not bound any recorded trade.
+  - 0.30R era unchanged: n=130, 10W/22L/98BE, 31.2% decisive,
+    −$0.321/trade. Pre-ratchet: n=45, 17.8%, −$1.834/trade.
+- **High SL percentage verified:** **41.1% of all closed trades** versus
+  **70.5% of decisive TP/SL outcomes** (BE/TIME excluded). In the current
+  0.75R book: 45.8% / 67.9%. No current-era BE→SL mislabelling or incorrect
+  2×ATR stop geometry found; a matched-rule diagnostic reproduces its ledger.
+  Nevertheless gross profit factor is only **0.637** pooled / **0.736** at
+  0.75R. Planned 1:1.5 needs ~40% decisive wins before costs. **Not a reason
+  to widen/tighten SL or lower TP ad hoc.** The 46 new trades since the last
+  handoff made +$3.30; no fresh win-rate collapse, but no confirmed edge either.
+- **Candidates, not approvals:** max-hold BUY **−$103.83** (22.9% decisive)
+  versus SELL **+$16.95** (37.3%), Fisher p=0.1137; remove 09-28 and SELL is
+  **−$24.97**. `H-side-awareness` still does not qualify; no BUY ban/SELL-only
+  gate. Fast <5-min same-side entries after BE lose **−$72.65 across 54 trades**
+  in the 0.75R book (max-hold: −$55.31 across 33), but this is observational,
+  not saved money or approval for the queued pause. RSI/ATR combo does not
+  persist in the max-hold sample. See the latest analysis §§3–5.
+- **Required next-session research corrections:** existing replay tools mix
+  ratchet eras, carry stale 0.30R labels, and have cooldown/alignment/cost-model
+  limitations. Correct/calibrate them **before** using their simulated profit
+  to pick a change. A current-era observed-entry ratchet-off diagnostic is
+  only **+$1.45 / 191 taken trades before costs** (max-hold-only +$9.37/130),
+  not a proven replacement; it does not regenerate the full signal stream.
+- Live bot historically runs from `/opt/gold` via systemd (`goldbot`, `mt5feed`,
+  Wine `mt5`); daily HANDOFF job + autosync every 3 h (§10). Live-host state
+  cannot be inferred from this checkout alone.
 
 ### 1a. 🛑 2026-09-29 feed outage — 6 h of silent starvation (read before trusting a "STALE" badge)
 
@@ -130,11 +137,14 @@ from the first commit.
 - **Precursor (undocumented):** a second stall **09-28 17:50:05 → 09-29
   03:33:37** (9.7 h, ~283 open-market minutes) with the same signature — so the
   failure hit twice in 24 h, and the ~09-28 "slide" discussion never noticed it.
-- **Impact:** ~6 h of London/NY missing (engine does **not** backfill) + ~283
-  open minutes on 09-28. **No trade was open across either gap** (#397 exit
-  09-28 17:40:02, #403 exit 09-29 07:51:03, `trade_active: false`) → no phantom
-  P&L. Ledger frozen at the numbers above; **strategy/params untouched, the
-  max-hold isolation window is undisturbed**.
+- **Impact (historical):** ~6 h of London/NY missing (engine does **not**
+  backfill) + ~283 open minutes on 09-28. **No trade was open across either
+  outage** (#397 exit 09-28 17:40:02, #403 exit 09-29 07:51:03) → no phantom P&L.
+  At the outage the ledger froze at 402 closed, 64W/166L/172BE, −$254.99.
+  **Recovery now visible in CSVs:** 09-29 14:47:39 (6 h 18 min gap); another
+  14:50:40→15:43:06 gap also overlaps no trade. Data advances through 10-01
+  14:59:04; §1 has current numbers. This does not prove server-side hardening.
+  **Strategy/params untouched; the max-hold isolation window is undisturbed.**
 - **Fix shipped (detection only, `docs/REVIEW-2026-09-29-feed-outage.md`):**
   engine feed-health check (`feed_publisher_age_seconds()` = sidecar heartbeat,
   missing/corrupt file, price-event stall — evaluated **before** the dedup,
@@ -147,18 +157,17 @@ from the first commit.
   §7 of the review, and treat the Wine MT5 terminal as the least reliable
   component (the 08:29 reboot cause is still unexplained).
 
-**Current stance:** Edge is **not confirmed**. Mechanism (scratch rate, BE
-behaviour) is still consistent with the 0.75R design, but P&L/trade remains
-negative and the max-hold stop has never fired (longest holds still ≪ 240 min
-in the recent sample). The 09-28 "falling gold" observation is a
-**regime/side artifact, not a new edge** — the bot is weakly trend-following and
-looks good whenever its SELL half is the side that is firing (gold has fallen
-−6.7% over the book window, with exactly one up-leg). **Next formal re-review**
-of the max-hold isolation window ≈ deploy + 2 weeks from 09-21 (target
-~2026-10-05) or n≈200 max-hold-era trades — the registered §5 hypothesis is
-scored there. Do **not** treat the bot as income. Auto-trade timeline unchanged:
-edge confirmation ~8 weeks, multi-regime 3–4 months, micro live pilot Q1 2027,
-decision **6–12 months (Mar–Sep 2027)**.
+**Current stance:** Edge is **not confirmed**; the current 0.75R and max-hold
+books still lose money even before realistic costs. Stop/BE mechanics check
+out on the paper ledger; the never-fired max-hold cannot explain the many
+~9-min SL exits. Preserve isolation. **Next formal review** remains
+~2026-10-05 or n≈200 post-deploy trades (currently 178). The proposed step-2
+bar is not approved by this analysis; confirm/register any ratchet-off
+experiment at that review, after costed, stateful research validation. Score
+the registered momentum/side hypothesis there; keep the post-BE pause as a
+separate later candidate. **No runtime change was made or adopted 10-01.**
+Stay paper-only and do **not** treat the bot as income. Capital decisions
+remain evidence-gated, not promised by the existing calendar timeline (§11).
 
 ### Definitions (binding)
 
@@ -175,7 +184,8 @@ decision **6–12 months (Mar–Sep 2027)**.
 
 Simulated XAUUSD scalper on 1-min candles. BUY at the 20-bar floor /
 SELL at the 20-bar ceiling after a ≥38% wick rejection, trend-gated by
-EMA50 vs EMA200 (+30-bar slope, ≤0.3·ATR from EMA50), RSI 30–68, ATR 1.10–4.50.
+EMA50 vs EMA200 (+30-bar slope, one-sided 0.3·ATR EMA50 buffer),
+RSI BUY 30–68 / SELL 32–70, ATR 1.10–4.50.
 Exits: SL = entry ∓ 2·ATR, TP = entry ± 3·ATR (1:1.5), plus a breakeven ratchet
 that moves SL to entry once the trade is +0.75R ahead (`BE_TRIGGER_R`, 0.30R
 from 09-10 to 09-15 — see §4). `engine.py` = signals +
@@ -223,7 +233,7 @@ feed** (~4.4k), not spot XAUUSD.
 | `BE_TRIGGER_R` | 0.75 | `engine.py` |
 | `MAX_HOLD_MINUTES` | 240 | `engine.py` |
 | `ATR_SL_MULT` / `ATR_TP_MULT` | 2.0 / 3.0 | `engine.py` |
-| `RSI_MIN` / `RSI_MAX` | 30 / 68 | `engine.py` |
+| `RSI_MIN` / `RSI_MAX` | BUY 30 / 68; SELL mirrored 32 / 70 | `engine.py` |
 | `MIN_ATR` (engine) | 1.10 | `engine.py` |
 | `MIN_ATR_TO_TRADE` / `MAX_ATR_TO_TRADE` | 1.10 / 4.50 | `trade_filter.py` |
 | `MAX_DAILY_LOSSES` | 10 | `trade_filter.py` |
@@ -266,6 +276,14 @@ for the ratchet).
 ## 5. Evidence base (don't re-derive)
 
 Key documents:
+- `docs/ANALYSIS-2026-10-01-stop-loss-rate.md` (**latest, analysis-only**):
+  448 closed; SL/all 41.1% versus SL/decisive 70.5%; current 0.75R n=273,
+  −$0.467/trade, max-hold n=178, −$0.488/trade / 0 TIME. Geometry/labels and
+  current-rule replay verified; smoke A–M passed, integrity 0 fail / 8 warn.
+  **No bot change justified by the percentage alone.** Next-session queue:
+  verify host/feed, repair/calibrate research tools, formal isolation review,
+  costed stateful ratchet-off only if approved, separate post-BE-pause test.
+  Replaces stale candidate headlines, not historical review records.
 - `docs/REVIEW-2026-09-29-feed-outage.md` (latest — 6-h silent starvation after
   the 08:29 reboot: evidence chain, the guard bug that hid it, the undocumented
   09-28 precursor, detection fix + ops runbook)
@@ -302,7 +320,8 @@ Key documents:
 - `docs/ANALYSIS-2026-09-10-losing-trades.md`
 - `docs/REVIEW-2026-09-10-PM.md`
 
-Current headlines (2026-09-15, 164 trades / 119 new-regime):
+Historical headlines (2026-09-15, 164 trades / 119 new-regime; superseded
+for current decisions by the dated reviews above and §6):
 - 19.4% decisive (14/72), CI 12.0–30.0; 56% of all trades are $0 scratches.
   Needs 40% decisive to break even at 1:1.5.
 - **The ratchet, not the entries, was crushing the win rate.** Same 119 entries
@@ -344,25 +363,27 @@ Current headlines (2026-09-15, 164 trades / 119 new-regime):
 
 ## 6. Next steps (in order)
 
-0. **Ops (do first after the 09-29 outage): bring the MT5 terminal back and
-   harden it.** `mt5.service` was stuck in `deactivating` for 6 h and only the
-   reboot stopped it; runbook + drop-in in `docs/REVIEW-2026-09-29-feed-outage.md`
-   §7 (`Restart=always`, `TimeoutStopSec=30`, `KillMode=control-group`,
-   `systemctl enable mt5.service`). Then confirm the feed is live again
-   (`mt5_last_candle.json` mtime + `updated_at` advancing, `status.json`
-   rewriting, `📈 candles: ok` in the autosync digest) and expect the new
-   engine alert to stay silent. Two stalls in 24 h (09-28 17:50→03:33 and
-   09-29 08:29→recovery) make this the top operational risk — the 09-29 check
-   was pushed to `main` for the 09-30 autosync cycle, so verify it deployed
-   (`journalctl -u goldbot | grep "feed problem"` should be empty on a healthy
-   feed).
+0. **Ops verification first:** CSV collection recovered on 09-29 and advances
+   through 10-01, but confirm the heartbeat/alerts/dedup deployment and
+   `mt5.service` hardening **on the production host**. Runbook + drop-in in
+   `docs/REVIEW-2026-09-29-feed-outage.md` §7 (`Restart=always`,
+   `TimeoutStopSec=30`, `KillMode=control-group`, `systemctl enable`). Recover
+   the terminal only if it is stalled; do not infer a fresh outage from a
+   cloned snapshot's age. Check `mt5_last_candle.json` mtime/`updated_at`, live
+   status/log progression, `📈 candles: ok` and journal recovery/health lines.
+   Server access/deployment was **not** verified in the 10-01 analysis.
+   **Research prerequisite:** fix the era, SL-streak, timestamp-alignment,
+   direction-aware gate and costs issues in ANALYSIS-2026-10-01 §4; calibrate
+   each era's actual rule before trusting any hypothetical P&L. Tools-only
+   validation does not authorise runtime/strategy changes.
 1. **Max-hold time stop SHIPPED 09-21 — LIVE, in isolation; re-review next**
    (max-hold re-baseline + ~2 weeks in-isolation data, ≈ deploy + 14 d).
    Deploy confirmed (PR #15 merged 04:50:49Z → ~06:00 autosync restart; the
    engine's 06:59:06 `status.json` carries `time_exits`); the max-hold era is
-   at **n ≈ 80, 0 TIME fires** as of 09-25 (still within the pre-registered
-   isolation window — do not act on the short-run −$1.20/trade until the
-   scheduled re-review). Still pin the exact boundary timestamp
+   at **n=178, 0 TIME fires** as of 10-01 14:59 (−$0.488/trade; longest
+   67.97 min, one BE across the normal daily closure). Still within the
+   isolation window — **22 trades short of n=200**; no runtime change at this
+   analysis-only checkpoint. Still pin the exact boundary timestamp
    from `/var/log/gold_autosync.log` or the Telegram deploy digest
    (the engine logs no version, so it cannot be recovered from the CSVs alone).
    After pulling the latest data:
@@ -385,44 +406,52 @@ Current headlines (2026-09-15, 164 trades / 119 new-regime):
    outcomes in the counter-trend bucket; (b) ≥5 pp gap, same direction, **within
    BUY and within SELL separately**; (c) must also hold in a rising-gold
    sub-period (≥1 day, gold +≥0.5%); (d) P&L/trade no worse than −$0.10; (e) doc
-   + isolation before adoption. Current scoreboard: **all three of (a)(b)(c)
-   fail** — drop it unless the data moves.
+   + isolation before adoption. **10-01 60-min diagnostic:** counter-trend
+   outcomes total only 24 decisive (16 BUY / 8 SELL); the within-SELL gap is
+   opposite to the required direction. Current-era gaps also do not qualify
+   (ANALYSIS-2026-10-01 §3). Score all criteria formally; no adoption now.
 
-2. **Queued strategy changes** — status after the 09-18 review:
-   - (a) **RSI ≥ 45 entry filter** — **~DROPPED** (reversal confirmed: skip
-     bucket 36.0% dec / −$18.79 vs 27.9% kept; the 09-15 signal was an
-     artifact of the old ratchet). Reopen only on a clear reversal at the
-     full re-review.
+2. **Queued strategy changes** — refreshed 10-01; candidates only, no adoption:
+   - (a) **RSI ≥45 entry filter — remains DROPPED/not approved.** 10-01
+     0.75R keep/skip: 32.5%/31.4% decisive, −$0.493/−$0.422 per trade; no
+     standalone P&L benefit. The RSI+ATR combo is less bad in the master book
+     but reverses in max-hold (−$0.529 kept vs −$0.449 skipped). Reopen only
+     with an era-correct, pre-registered test, not the old 09-15 adoption claim.
    - (b) **BE resets the SL streak** (cooldown de-escalation) — still queued
-     (cooldown phantoms +$206 sequential) but **down-graded**: FOMC day showed
-     escalation covering 17:28–18:28 UTC, the one hour it mattered most. It is
-     a leak that also buys real protection; treat as a trade-off, not a free win.
+     but **down-graded**: FOMC day showed escalation covering 17:28–18:28 UTC.
+     Treat it as a protection/opportunity trade-off, not a free win. Current
+     phantom/cascade tools do not model the full live semantics; calibrate
+     those before changing a gate. Do not combine this with a post-BE pause.
    - (c) **RISE120 entry gate** — **REJECTED / dropped** (as a keep-filter it
      retains a worse book: 135 kept, 18% decisive, −$123.40).
-   - (d) **MAX_ATR 4.50 → 2.50** — still eligible (0.75R-era ATR≥2.5 bucket
-     was thin) but held one more cycle until the max-hold re-review so it is
-     not confounded with the time-stop experiment.
+   - (d) **MAX_ATR 4.50→2.50 — queued, NOT approved.** 10-01 0.75R
+     below/above-2.5 buckets both ~32.1% decisive; dollar loss can reflect
+     position risk rather than signal quality. Max-hold keep −$0.509/trade
+     vs skip −$0.401. Require normalized-risk/costed evidence at the formal
+     review; no tightening during isolation.
    - **~4 h max-hold time stop — SHIPPED 09-21, in isolation from deploy.**
      Era re-baselines at the deploy restart; judge at deploy + ~2 weeks on
      P&L/day + bleed/trade, TIME count + P&L split, >60-min holds ≈ 0.
      Proposed (not yet pre-registered) bar for fallback step 2: post-deploy
      P&L/trade ≤ −$0.40 at n ≥ 200 max-hold-era trades → ratchet-off
      experiment. Confirm or amend at the re-review.
-   - Still queued: **~5-min post-scratch pause** (27/58 0.75R entries came
-     <10 min after the previous exit); a **scheduled-news gate** is a *named*
-     candidate post-FOMC but that event passed without one.
-   - (e) **BUY-side momentum gate / `H-side-awareness`** — **REGISTERED
-     2026-09-28 (not adopted)**: the BUY side is the bleeding side in the
-     current era (max-hold: 4W/24L, 14.3% dec, −$84.07 vs SELL +$10.69) and
-     counter-trend BUYs are the worst bucket (13 trades, 15.4% dec, −$2.12/t).
-     But the effect is 3 days old, insignificant pooled (p=0.070), and inverts
-     in the one up-leg — so it must clear the 5-part bar in ANALYSIS-2026-09-28
-     §5 at the 10-05 re-review before any code change. Do **not** pre-empt it
-     with an ad-hoc BUY blocker.
+   - Still queued: **fixed ~5-min post-scratch pause**, separate from SL-streak
+     changes. 10-01: 54/273 0.75R entries are same-side <5 min after BE,
+     9W/30L/15BE, −$72.65 (max-hold 33 entries, −$55.31). Observational only;
+     replay the changed signal/occupancy cascade and pre-register a bar before
+     adoption. A **scheduled-news gate** remains a named, unadopted candidate.
+   - (e) **Momentum gate / `H-side-awareness` — REGISTERED 09-28, not adopted.**
+     10-01 max-hold BUY 11W/37L/24BE, 22.9% decisive, −$103.83; SELL
+     28W/47L/31BE, 37.3%, +$16.95 (−$24.97 without 09-28), Fisher p=0.1137.
+     It still fails the unchanged 5-part bar in ANALYSIS-2026-09-28 §5; latest
+     side/era diagnostics in ANALYSIS-2026-10-01 §3. No ad-hoc BUY blocker.
    - Falsification for the ratchet change: **TRIPPED** (09-17 16:17 UTC,
-     −$0.595/trade at n=60) — fallback in progress with the
-     **~4h max-hold stop** in isolation, then ratchet-off if needed (replay
-     +$0.52/trade, 41% decisive) — **never** back to 0.30R.
+     −$0.595/trade at n=60; now −$0.467 at n=273). Fallback max-hold remains
+     in isolation. Step 2 is a **candidate ratchet-off experiment**, not a
+     proven edge: current-era observed-entry replay +$1.45/191 gross, easily
+     erased by costs (ANALYSIS-2026-10-01 §4). Confirm the proposed step-2 bar
+     at review, then pre-register an isolated experiment if proceeding —
+     **never** back to 0.30R.
 
 3. Historical research (optional, later): use `tools/mt5_history_dump.py`
    once you want to stress-test candidate filters on multi-year data. A
@@ -451,9 +480,11 @@ data drop, not just after code changes.
 ## 8. Data gotchas (hard-won)
 
 - `trades.csv` has historical Trade_Num resets — dedupe by timestamp.
-- **Ratcheted rows** log the *live* stop, so `Stop_Loss == Entry_Price` on 98
-  rows: all 92 BE scratches **plus 6 TP winners** (#95, #120, #123, #133, #156, #164).
-  Reconstruct original SL/TP from `ATR_At_Entry` (SL = entry ∓ 2·ATR, TP = entry ± 3·ATR).
+- **Ratcheted rows** log the *live* stop: at the 10-01 snapshot,
+  `Stop_Loss == Entry_Price` on **256 rows: 187 BE + 69 TP**. Reconstruct
+  original risk geometrically, not just on BE (SL = entry ∓ 2·ATR, TP =
+  entry ± 3·ATR). For exact baseline calibration, preserve the logged target
+  and account for ATR/price rounding; see ANALYSIS-2026-10-01 §4.
 - `status.json` `win_rate` is decisive (TP/(TP+SL)); dashboard tile now labels it.
 - Balance vs sum(Profit) drift is known (~$10–25); order of magnitude is the authority.
 - Entry times are UTC; local session labels (London/NY) use UTC windows in code.
@@ -507,7 +538,7 @@ tools/             analysis / integrity / report scripts (not on the hot path)
 | Horizon          | Gate                              | Action |
 |------------------|-----------------------------------|--------|
 | Now              | Edge not confirmed                | Isolation: max-hold only |
-| ~2 weeks (10-05) | Max-hold re-review                | Judge TIME + P&L; queue (a) approved-next, (c) dropped |
+| ~2 weeks (10-05) / n≈200 | Max-hold re-review        | Judge TIME + P&L; score registered/queued candidates, none auto-approved |
 | ~2–4 weeks       | Judge the new ratchet level       | Re-run suite; P&L/day + bleed/trade, not WR alone |
 | ~2–4 months      | 100+ trades, multiple regimes     | First serious evaluation of edge            |
 | 6–12 months      | Durable positive expectancy?      | Decide if it deserves any real capital      |
