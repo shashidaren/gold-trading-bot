@@ -915,3 +915,10 @@ Timestamp,Reason,Price,ATR
 2026-09-30 22:03:05,Blackout: Daily Market Rollover & Spread Spike,4159.35,1.49
 2026-09-30 22:04:06,Blackout: Daily Market Rollover & Spread Spike,4159.26,1.54
 2026-09-30 22:05:02,Blackout: Daily Market Rollover & Spread Spike,4159.12,1.51
+2026-10-01 10:14:07,SL Cooldown: 60 min remaining (2 consecutive SLs -> 60m cooldown),4157.62,1.86
+2026-10-01 10:50:03,SL Cooldown: 25 min remaining (2 consecutive SLs -> 60m cooldown),4174.35,2.07
+2026-10-01 10:59:04,SL Cooldown: 16 min remaining (2 consecutive SLs -> 60m cooldown),4174.96,1.92
+2026-10-01 11:02:05,SL Cooldown: 13 min remaining (2 consecutive SLs -> 60m cooldown),4173.10,1.75
+2026-10-01 11:04:06,SL Cooldown: 10 min remaining (2 consecutive SLs -> 60m cooldown),4173.74,1.63
+2026-10-01 11:08:07,SL Cooldown: 6 min remaining (2 consecutive SLs -> 60m cooldown),4172.59,1.74
+2026-10-01 11:11:03,SL Cooldown: 4 min remaining (2 consecutive SLs -> 60m cooldown),4171.24,1.67
