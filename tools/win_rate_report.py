@@ -43,8 +43,11 @@ LOG = f"{ROOT}/forward_test_log.csv"
 
 # Deploy points that define the eras we compare (UTC).
 BE_DEPLOY = datetime(2026, 9, 10, 12, 34)
+BE_075_DEPLOY = datetime(2026, 9, 15, 6, 0)   # BE_TRIGGER_R 0.30 -> 0.75
+MAXHOLD_DEPLOY = datetime(2026, 9, 21, 6, 0)  # MAX_HOLD_MINUTES = 240 (approx)
 WALK_CAP_MIN = 240          # counterfactual horizon from entry
 ATR_SL_MULT, ATR_TP_MULT = 2.0, 3.0   # live engine geometry
+LIVE_RATCHET_R = 0.75       # BE_TRIGGER_R actually live since 2026-09-15
 
 
 def load_trades():
@@ -168,8 +171,18 @@ print(f"  breakeven decisive WR at 1:{ATR_TP_MULT/ATR_SL_MULT:.1f} RR = "
 print(f"== 2. ERAS (split at {BE_DEPLOY} = BE ratchet deploy) ==")
 PRE = [t for t in TRADES_L if t["et"] < BE_DEPLOY]
 NEW = [t for t in TRADES_L if t["et"] >= BE_DEPLOY]
+MASTER_075 = [t for t in TRADES_L if t["et"] >= BE_075_DEPLOY]
+MAXHOLD = [t for t in TRADES_L if t["et"] >= MAXHOLD_DEPLOY]
 stats(PRE, "pre-ratchet")
-stats(NEW, "new regime (all gates live)")
+stats(NEW, "new regime (POOLS 0.30R+0.75R)")
+# Sub-periods of NEW (not extra trades): the eras below partition it. The
+# falsification bar stays judged on the whole 0.75R master book (no counter
+# reset at the max-hold deploy - see docs/ANALYSIS-2026-09-21-win-rate-drop-check.md).
+stats([t for t in NEW if t["et"] < BE_075_DEPLOY], "  ... 0.30R era (09-10->09-15)")
+stats([t for t in NEW if BE_075_DEPLOY <= t["et"] < MAXHOLD_DEPLOY],
+      "  ... 0.75R pre-maxhold")
+stats(MASTER_075, "0.75R master (>=09-15, bar book)")
+stats(MAXHOLD, "max-hold era (>=09-21, isolated)")
 for name, ts in (("pre-ratchet", PRE), ("new regime", NEW)):
     if ts:
         r = statistics.mean(abs(t["entry"] - t["sl"]) for t in ts)
@@ -268,8 +281,10 @@ def walk_with_ratchet(t, trig, cap_min=WALK_CAP_MIN, tp_R=ATR_TP_MULT / ATR_SL_M
     return "L", -1.0
 
 
-for trig, note in ((None, "no ratchet at all"), (0.30, "<-- LIVE SINCE 09-10"),
-                   (0.50, ""), (0.75, ""), (1.00, ""), (1.25, "")):
+for trig, note in ((None, "no ratchet at all"),
+                   (0.30, "<-- HISTORICAL 0.30R era (09-10 -> 09-15)"),
+                   (0.50, ""), (0.75, f"<-- LIVE trigger since 09-15 ({LIVE_RATCHET_R}R)"),
+                   (1.00, ""), (1.25, "")):
     W = L = BE = 0
     pnl = 0.0
     for t in NEW:
@@ -293,9 +308,12 @@ nb = sum(1 for t in NEW if t["reason"] == "BE")
 np_ = sum(t["profit"] for t in NEW)
 print(f"    {'ACTUAL':>10s} {nw:4d} {nl:4d} {nb:4d} "
       f"{(nw/(nw+nl)*100 if nw+nl else 0):6.1f}% {np_:9.2f}   <- what the engine really did")
-print("    The +0.30R row should land near ACTUAL - if it does not, the walk and the\n"
-      "    engine disagree (bar granularity / clock skew), so read every row here as an\n"
-      "    estimate. Rows are cascade-ignorant: a held trade blocks later entries.\n")
+print(f"    ACTUAL mixes both ratchet levels (0.30R before {BE_075_DEPLOY}, "
+      f"{LIVE_RATCHET_R}R after),\n"
+      "    so no single grid row is expected to match it now. The +0.30R row was the\n"
+      "    calibration check only while 0.30R was live; if the walk and the engine\n"
+      "    disagree there (bar granularity / clock skew), read every row as an estimate.\n"
+      "    Rows are cascade-ignorant: a held trade blocks later entries.\n")
 
 
 # ------------------------------------------------- 5c. cascade-aware replay
@@ -396,7 +414,10 @@ def experiment(name, keep_fn, sample, note):
           f"   ({note})")
 
 
-for label, sample in (("NEW REGIME", NEW), ("ALL DATA", TRADES_L)):
+for label, sample in (("NEW REGIME 09-10+ (POOLS 0.30R + 0.75R)", NEW),
+                      ("0.75R MASTER (>=09-15 06:00)", MASTER_075),
+                      ("MAX-HOLD ERA (>=09-21 06:00)", MAXHOLD),
+                      ("ALL DATA", TRADES_L)):
     print(f"  --- {label} (n={len(sample)}) ---")
     experiment("RSI >= 45 (candidate #1)", lambda t: t["rsi"] >= 45, sample,
                "adopt if skip-bucket n>=30 and stays clearly worse")
