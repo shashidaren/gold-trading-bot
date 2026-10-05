@@ -1051,3 +1051,9 @@ Timestamp,Reason,Price,ATR
 2026-10-05 08:51:05,Blackout: London Open & Early Session Kill-Zone,4166.75,2.50
 2026-10-05 08:53:01,Blackout: London Open & Early Session Kill-Zone,4167.65,2.47
 2026-10-05 08:57:02,Blackout: London Open & Early Session Kill-Zone,4164.09,2.46
+2026-10-05 10:21:01,SL Cooldown: 14 min remaining (2 consecutive SLs -> 60m cooldown),4156.35,1.53
+2026-10-05 10:22:02,SL Cooldown: 13 min remaining (2 consecutive SLs -> 60m cooldown),4156.70,1.50
+2026-10-05 10:23:02,SL Cooldown: 12 min remaining (2 consecutive SLs -> 60m cooldown),4156.51,1.39
+2026-10-05 10:25:03,SL Cooldown: 10 min remaining (2 consecutive SLs -> 60m cooldown),4157.95,1.25
+2026-10-05 10:29:04,SL Cooldown: 5 min remaining (2 consecutive SLs -> 60m cooldown),4158.20,1.27
+2026-10-05 10:32:05,SL Cooldown: 2 min remaining (2 consecutive SLs -> 60m cooldown),4158.22,1.15
