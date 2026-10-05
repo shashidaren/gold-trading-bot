@@ -20,10 +20,11 @@ from the first commit.
    ```
 3. **10-05 re-review is DONE:** `docs/REVIEW-2026-10-05.md`. Max-hold isolation
    closed (n=209, 1 TIME exit, cap never bound in-session); fallback step-2
-   trigger **MET** (−$0.570/trade at n=209) → ratchet-off is **eligible to be
-   pre-registered, but blocked on the costed harness + user sign-off**;
+   trigger **MET** (−$0.570/trade at n=209) → ratchet-off **SIGNED OFF & PRE-REGISTERED**
+   as forward shadow A/B (`docs/PREREG-2026-10-05-ratchet-off.md`). Stateful harness
+   built (`tools/ratchet_shadow.py`), calibration gate passed, T0 registered.
    `H-side-awareness` **DROPPED** (bar (b) and (c) fail). New named candidate:
-   London/NY session-band bleed (§5a) — not adopted. No runtime change.
+   London/NY session-band bleed (§5a) — not adopted. No live runtime change.
 4. Never change `BE_TRIGGER_R` / `MAX_HOLD_MINUTES` / ATR bounds / blackouts /
    session windows without a pre-registered bar + REVIEW/ANALYSIS doc.
 
@@ -75,7 +76,7 @@ from the first commit.
 ## 1. Where things stand (as of **2026-10-05, 02:59:08 UTC snapshot**)
 
 - Repo: `shashidaren/gold-trading-bot`, default branch `main`. This session is
-  on `arena/01a10a6c-gold-trading-bot`; **analysis + notes only** (two
+  on `arena/01a10a7f-gold-trading-bot`; **analysis + notes only** (two
   analysis-tool label fixes, no bot/code/parameter/runtime change). Latest
   review: `docs/REVIEW-2026-10-05.md` (read it before proposing a change).
 - Historical deploys unchanged: **PR #15 MERGED** (09-21, `MAX_HOLD_MINUTES =
@@ -435,13 +436,13 @@ for current decisions by the dated reviews above and §6):
    an in-session trade** (longest non-TIME hold 68.0 min) → keep it as cheap
    insurance, it is **not** the cause of the SL cluster. Era result −$0.570/trade,
    −$8.64/calendar day.
-   **Fallback step-2 trigger MET** (n≥200 and ≤−$0.40/trade) → a **ratchet-off
-   experiment is eligible to be pre-registered, NOT approved.** Order of work:
-   (i) finish the §0 prereqs (costed, stateful, era-matched harness); (ii)
-   pre-register the experiment with an explicit success/failure bar and get
-   owner sign-off; (iii) run it one variable at a time in isolation; (iv)
-   **never** back to 0.30R. Do not start it on the strength of the current
-   observed-entry replay (+$1.45/191 before costs).
+   **Fallback step-2 trigger MET** (n≥200 and ≤−$0.40/trade) → **Ratchet-off experiment
+   SIGNED OFF & PRE-REGISTERED** as a forward shadow A/B (`docs/PREREG-2026-10-05-ratchet-off.md`).
+   Stateful harness built in `tools/ratchet_shadow.py` and calibrated:
+   reproduces live max-hold era within 0.0% trades, $3.43 P&L, 0.00 pp decisive WR,
+   and exact #476 weekend TIME behavior. T0 initialized at `2026-10-05 01:44:06 UTC`.
+   Evaluation gate: whichever is later between >=150 shadow trades and >=21 days.
+   Live runtime retains 0.75R control. Never revert to 0.30R.
 2. **Queued strategy changes** — refreshed 10-05; candidates only, no adoption
    (all numbers 0.75R master / max-hold era; `R` = Profit ÷ 2·ATR):
    - (a) **RSI ≥45 — remains DROPPED.** keep 31.0% dec / −0.151R vs skip

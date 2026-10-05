@@ -1,0 +1,17 @@
+{
+  "experiment": "ratchet-off",
+  "status": "FORWARD_SHADOW_ACTIVE",
+  "T0": "2026-10-05 01:44:06",
+  "evaluation_gate": {
+    "min_trades": 150,
+    "min_days": 21,
+    "earliest_eval_date": "2026-10-26 01:44:06"
+  },
+  "shadow_balance": 492.0,
+  "shadow_closed_trades": 2,
+  "shadow_wins": 0,
+  "shadow_losses": 2,
+  "shadow_be": 0,
+  "shadow_time": 0,
+  "updated_at": "2026-10-05 05:30:02"
+}

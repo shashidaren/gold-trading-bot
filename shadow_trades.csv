@@ -1,0 +1,3 @@
+Trade_Num,Trade_Type,Entry_Time,Exit_Time,Entry_Price,Stop_Loss,Take_Profit,Exit_Price,Exit_Reason,Profit,Balance_After,RSI_At_Entry,ATR_At_Entry,Wick_Ratio_At_Entry,EMA50_At_Entry,EMA200_At_Entry
+1,SELL,2026-10-05 03:18:03,2026-10-05 03:29:05,4139.56,4143.34,4133.89,4143.34,SL,-3.78,496.22,39.7,1.89,63.5%,4145.26,4150.63
+2,SELL,2026-10-05 04:39:06,2026-10-05 05:08:08,4131.07,4135.29,4124.74,4135.29,SL,-4.22,492.00,46.7,2.11,61.1%,4134.58,4145.50
