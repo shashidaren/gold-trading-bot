@@ -200,15 +200,21 @@ def check_trades():
                   f"{other[0]['Exit_Reason']}" if other else ""))
         info(msg + "; R-multiple math must reconstruct 2x/3xATR geometry from "
              "ATR_At_Entry")
-    # No time stop in the engine: a trade can ride an overnight/weekend gap.
+    # 240-min TIME stop live since 2026-09-21, but it closes on the first
+    # candle/tick back and cannot fire while the market is closed: a position
+    # can still ride an overnight/weekend gap (see #476, the only TIME exit so
+    # far: 49.1 h wall-clock across the 10-02 -> 10-04 weekly close). Do not
+    # label a survivor "pre-deploy" without checking its entry date.
     holds = [(t, (t["exit_dt"] - t["entry_dt"]).total_seconds() / 60.0)
              for t in trades if t["entry_dt"] and t["exit_dt"]]
     long_holds = [(t, m) for t, m in holds if m > 60]
     if long_holds:
         t, m = max(long_holds, key=lambda x: x[1])
         warn(f"{len(long_holds)} trades held > 60 min (longest #{t['num']} "
-             f"{m:.0f} min = {m/60:.1f} h, {t['Entry_Time']} -> {t['Exit_Time']}); "
-             f"(240-min TIME stop live since 2026-09-21; survivors are pre-deploy rows)")
+             f"{m:.0f} min = {m/60:.1f} h, {t['Entry_Time']} -> {t['Exit_Time']}, "
+             f"{t['Exit_Reason']}); 240-min TIME stop live since 2026-09-21 "
+             f"cannot fire while the market is closed - check each survivor's "
+             f"entry era against 2026-09-21 06:00 before calling it pre-deploy")
     if abs(drift) > 0.02:
         warn("engine ledger disagrees with sum of profits (documented reset gap)")
     return trades
