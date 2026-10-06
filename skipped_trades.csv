@@ -1095,3 +1095,19 @@ Timestamp,Reason,Price,ATR
 2026-10-05 18:39:06,SL Cooldown: 55 min remaining (6 consecutive SLs -> 60m cooldown),4136.71,1.59
 2026-10-05 22:10:09,Blackout: Daily Market Rollover & Spread Spike,4142.95,1.37
 2026-10-05 22:12:05,Blackout: Daily Market Rollover & Spread Spike,4142.20,1.41
+2026-10-06 00:16:04,SL Cooldown: 60 min remaining (7 consecutive SLs -> 60m cooldown),4136.20,1.29
+2026-10-06 01:06:05,SL Cooldown: 10 min remaining (7 consecutive SLs -> 60m cooldown),4147.52,2.04
+2026-10-06 01:44:03,SL Cooldown: 38 min remaining (8 consecutive SLs -> 60m cooldown),4132.48,2.02
+2026-10-06 01:45:04,SL Cooldown: 37 min remaining (8 consecutive SLs -> 60m cooldown),4133.03,1.99
+2026-10-06 01:55:05,SL Cooldown: 27 min remaining (8 consecutive SLs -> 60m cooldown),4129.53,1.46
+2026-10-06 01:59:06,SL Cooldown: 23 min remaining (8 consecutive SLs -> 60m cooldown),4130.73,1.53
+2026-10-06 02:01:07,SL Cooldown: 20 min remaining (8 consecutive SLs -> 60m cooldown),4129.64,1.52
+2026-10-06 02:03:03,SL Cooldown: 19 min remaining (8 consecutive SLs -> 60m cooldown),4129.56,1.50
+2026-10-06 02:04:04,SL Cooldown: 18 min remaining (8 consecutive SLs -> 60m cooldown),4129.69,1.45
+2026-10-06 02:07:05,SL Cooldown: 15 min remaining (8 consecutive SLs -> 60m cooldown),4129.37,1.35
+2026-10-06 02:08:05,SL Cooldown: 14 min remaining (8 consecutive SLs -> 60m cooldown),4129.94,1.31
+2026-10-06 02:12:06,SL Cooldown: 10 min remaining (8 consecutive SLs -> 60m cooldown),4129.72,1.21
+2026-10-06 02:16:07,SL Cooldown: 5 min remaining (8 consecutive SLs -> 60m cooldown),4130.39,1.21
+2026-10-06 02:17:08,SL Cooldown: 4 min remaining (8 consecutive SLs -> 60m cooldown),4129.67,1.23
+2026-10-06 02:19:04,SL Cooldown: 3 min remaining (8 consecutive SLs -> 60m cooldown),4129.51,1.29
+2026-10-06 02:20:05,SL Cooldown: 2 min remaining (8 consecutive SLs -> 60m cooldown),4129.35,1.25
