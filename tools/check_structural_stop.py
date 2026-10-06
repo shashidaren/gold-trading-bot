@@ -4,8 +4,8 @@ check_structural_stop.py — guard the 2026-10-05 structural-stop change.
 
 Why this exists: the change is justified by a MECHANICAL property, not by P&L. The
 stop must never sit inside the 20-bar level the entry was anchored to. Before the
-change it did, in 68.6% of the 0.75R master book (218/318), and 69.1% of SL exits
-were that class - a stop-out needed no structural break at all. That property is
+change it did, in 203/318 = 63.8% of the 0.75R master book (and 95/149 = 63.8% of its
+SL exits) - a stop-out needed no structural break at all. That property is
 checkable on any ledger, cost-free, and it is the FIRST thing to verify after a
 deploy: if it fails, the code is wrong (or the log/replay join is), and no expectancy
 number in docs/ANALYSIS-2026-10-05-stop-loss-geometry.md can be judged yet.
@@ -18,7 +18,7 @@ floor/ceiling in it exclude the current bar), and reports for each era:
                          (replay prediction under the new rule: ~80%)
   2. stop-inside-level    how many have the SL between the entry and the level, i.e.
                          the stop prints without the level breaking (must be 0 now;
-                         it was 68.6% of the 0.75R master book before 2026-10-05)
+                         it was 63.8% of the 0.75R master book before 2026-10-05)
   3. clearance            median ATR by which the stop sits BEYOND the level (>= 0 for
                          every trade, >= SL_CLEAR_ATR = 0.5 whenever the level bound it)
   4. recall               trades whose decision bar was found at all (the join check)

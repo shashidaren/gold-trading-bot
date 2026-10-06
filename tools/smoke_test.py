@@ -841,7 +841,7 @@ atr_n = eng_n.atr
 p_n = list(eng_n.closes)[-1]
 check("N: setup is a *chased* entry (close well clear of the floor)",
       (p_n - floor_n) / atr_n > 1.5,
-      f"entry-floor distance {(p_n - floor_n) / atr_n:.2f} ATR (live median 2.53 ATR)")
+      f"entry-floor distance {(p_n - floor_n) / atr_n:.2f} ATR (live median 2.42 ATR)")
 
 # Rejection bar: sweeps below the 20-bar floor, closes above it, 90% lower wick.
 dip_n = (p_n, p_n + 0.3, floor_n - 0.1, p_n - 1.2)
