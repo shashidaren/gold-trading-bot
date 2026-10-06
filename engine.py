@@ -37,10 +37,36 @@ EMA_FAST = 50
 EMA_SLOW = 200
 RSI_PERIOD = 14
 ATR_PERIOD = 14
+# SCALE WARNING (2026-10-05): this tolerance is a PRICE-%, so on gold at ~$4,150 it is
+# ~$8.30 = 4.5x the median ATR (1.83) while every other threshold in the funnel is
+# ATR-scaled. Measured consequence: "price tested the 20-bar floor" is TRUE on 86.9% of
+# logged bars (89.1% recomputed for the 0.75R era), i.e. the level test selects for
+# almost nothing. Re-scaling it to ATR (0.15-0.25
+# ATR) lifts the pooled replay a lot (all-eras cascade at $0.30 round trip: bleed
+# -12.4 -> -2.1 $/day, n 563 -> 137) and the current max-hold era (+0.010R vs -0.245R),
+# but it is WORSE in 2 of the 4 parameter eras
+# (0.30R slice: 0 winners of 21 decisive; 0.75R pre-max-hold: -0.273R vs -0.154R), so it
+# is a REGISTERED CANDIDATE only - do not flip it on replay evidence alone.
+# Reproduce: tools/strategy_lab.py --grid level
 FLOOR_BUFFER_PCT = 0.0020
 
 ATR_SL_MULT = 2.0
 ATR_TP_MULT = 3.0
+
+# ── STRUCTURAL STOP (2026-10-05, docs/ANALYSIS-2026-10-05-stop-loss-geometry.md) ──
+# 2xATR is a FLOOR on the stop distance, not the right answer. The entry fills at the
+# CLOSE of the rejection bar, a median 2.42 ATR away from the 20-bar level it claims to
+# bounce off, so the stop sits INSIDE that range - median 0.42 ATR short of it - on
+# 203/318 = 63.8% of the 0.75R master book, and 95/149 = 63.8% of its SL exits were that
+# class. Price then only has to come BACK to the level to stop us out; no structural break
+# is required (median SL lifetime 7.2 min, 46% <= 7 min, out of a 240-min hold budget).
+# The stop must clear the level the trade's own premise was built on.
+# Verify any era with: python3 tools/check_structural_stop.py   (post-cutover it must print 0)
+SL_CLEAR_ATR = 0.5           # min distance the stop sits beyond the tested level
+# Reward stays a multiple of the ACTUAL risk so 1:1.5 does not silently degrade as the
+# stop widens: TP = RR_TARGET * risk == ATR_TP_MULT * ATR whenever the level does not
+# bind, i.e. the pre-2026-10-05 geometry is reproduced exactly in that case.
+RR_TARGET = ATR_TP_MULT / ATR_SL_MULT
 
 # Breakeven stop ratchet (adopted 2026-09-10, docs/ANALYSIS-2026-09-10-losing-trades.md):
 # once a trade is +BE_TRIGGER_R in profit, SL moves to entry. Sequence-aware replay of all
@@ -248,6 +274,7 @@ class GoldEngine:
         self.entry_price = 0.0
         self.stop_loss = 0.0
         self.take_profit = 0.0
+        self.structural_stop_bound = False   # True when the 20-bar level (not the ATR floor) set the stop
         self.be_armed = False  # True once the breakeven ratchet (BE_TRIGGER_R) fired
         self.current_trade_num = None
 
@@ -1124,9 +1151,9 @@ class GoldEngine:
                 return
 
             if TRADING_MODE == "LIVE":
-                self.execute_live_trade("BUY", c, lower_wick_ratio, ts)
+                self.execute_live_trade("BUY", c, lower_wick_ratio, ts, level=dynamic_floor)
             else:
-                self.execute_simulated_trade("BUY", c, lower_wick_ratio, ts)
+                self.execute_simulated_trade("BUY", c, lower_wick_ratio, ts, level=dynamic_floor)
 
         elif sell_signal:
             self.hit_sell_all += 1
@@ -1148,11 +1175,26 @@ class GoldEngine:
                 return
 
             if TRADING_MODE == "LIVE":
-                self.execute_live_trade("SELL", c, upper_wick_ratio, ts)
+                self.execute_live_trade("SELL", c, upper_wick_ratio, ts, level=dynamic_ceiling)
             else:
-                self.execute_simulated_trade("SELL", c, upper_wick_ratio, ts)
+                self.execute_simulated_trade("SELL", c, upper_wick_ratio, ts, level=dynamic_ceiling)
 
-    def execute_live_trade(self, direction: str, c: float, wick_ratio: float, ts: str):
+    def structural_risk(self, direction: str, entry: float, atr: float, level) -> float:
+        """Stop distance in $: the ATR floor, or further if the level demands it.
+
+        `level` is the 20-bar floor (BUY) / ceiling (SELL) that the rejection gate was
+        measured against, or None when history is too short. Returns ATR_SL_MULT * atr
+        unchanged when level is None or the ATR stop already clears the level by
+        SL_CLEAR_ATR, so trades taken right at the level keep the old geometry.
+        """
+        risk = atr * ATR_SL_MULT
+        if level and atr > 0:
+            beyond = abs(entry - level) + SL_CLEAR_ATR * atr
+            if beyond > risk:
+                risk = beyond
+        return risk
+
+    def execute_live_trade(self, direction: str, c: float, wick_ratio: float, ts: str, level=None):
         print(f"\nALL CONDITIONS MET! PREPARING LIVE {direction} ORDER...")
         point = mt5.symbol_info(SYMBOL).point
         tick = mt5.symbol_info_tick(SYMBOL)
@@ -1160,16 +1202,21 @@ class GoldEngine:
             print("Failed to get tick data")
             return
 
+        # Live SL/TP mirror the paper engine: risk is the ATR floor, pushed out when
+        # the 20-bar level the entry was anchored to sits further away (structural_risk).
+        # Distance is measured from the ORDER price, which is the fill, not the bar close.
         if direction == "BUY":
             price = tick.ask
             order_type = mt5.ORDER_TYPE_BUY
-            sl_price = price - (self.atr * ATR_SL_MULT)
-            tp_price = price + (self.atr * ATR_TP_MULT)
+            risk = self.structural_risk(direction, price, self.atr, level)
+            sl_price = price - risk
+            tp_price = price + RR_TARGET * risk
         else:
             price = tick.bid
             order_type = mt5.ORDER_TYPE_SELL
-            sl_price = price + (self.atr * ATR_SL_MULT)
-            tp_price = price - (self.atr * ATR_TP_MULT)
+            risk = self.structural_risk(direction, price, self.atr, level)
+            sl_price = price + risk
+            tp_price = price - RR_TARGET * risk
 
         sl_price = round(sl_price / point) * point
         tp_price = round(tp_price / point) * point
@@ -1207,7 +1254,7 @@ class GoldEngine:
                 f"TP: `${tp_price:.2f}`"
             )
 
-    def execute_simulated_trade(self, direction: str, c: float, wick_ratio: float, ts: str):
+    def execute_simulated_trade(self, direction: str, c: float, wick_ratio: float, ts: str, level=None):
         self.trade_active = True
         self.trade_type = direction
         self.current_trade_num = self.next_trade_num
@@ -1215,12 +1262,18 @@ class GoldEngine:
         self.be_armed = False  # fresh trade: ratchet re-arms at +BE_TRIGGER_R
 
         self.entry_price = c
+        # risk = ATR floor, pushed out beyond the tested 20-bar level when that level
+        # sits further away (see structural_risk / SL_CLEAR_ATR). TP keeps the 1:1.5
+        # ratio against the ACTUAL risk, so the BE ratchet trigger (0.75R) and every
+        # R-denominated stat mean the same thing as before.
+        risk = self.structural_risk(direction, c, self.atr, level)
+        self.structural_stop_bound = risk > self.atr * ATR_SL_MULT + 1e-9
         if direction == "BUY":
-            self.stop_loss = c - (self.atr * ATR_SL_MULT)
-            self.take_profit = c + (self.atr * ATR_TP_MULT)
+            self.stop_loss = c - risk
+            self.take_profit = c + RR_TARGET * risk
         else:
-            self.stop_loss = c + (self.atr * ATR_SL_MULT)
-            self.take_profit = c - (self.atr * ATR_TP_MULT)
+            self.stop_loss = c + risk
+            self.take_profit = c - RR_TARGET * risk
 
         self.entry_time = ts
         self.entry_rsi = self.rsi
@@ -1229,11 +1282,13 @@ class GoldEngine:
         self.entry_ema_fast = self.ema_fast
         self.entry_ema_slow = self.ema_slow
 
+        bound = (f" (level-bound: {'floor' if direction == 'BUY' else 'ceiling'} "
+                 f"${level:.2f} +{SL_CLEAR_ATR:.2f}ATR)") if level and self.structural_stop_bound else ""
         msg = (
             f"GOLD {direction} SETUP #{self.current_trade_num}\n"
             f"Entry: `${self.entry_price:.2f}`\n"
             f"RSI: `{self.rsi:.1f}` | ATR: `{self.atr:.2f}`\n"
-            f"SL: `${self.stop_loss:.2f}`\n"
+            f"SL: `${self.stop_loss:.2f}`{bound}\n"
             f"TP: `${self.take_profit:.2f}`"
         )
         self.send_telegram(msg)

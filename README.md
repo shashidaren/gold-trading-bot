@@ -11,7 +11,9 @@ changelog.
 | Path | What it is |
 |---|---|
 | `docs/HANDOFF.md` | **Start here for any new session** — current state, definitions, next steps, ops. |
-| `engine.py` | Data ingestion, indicators (EMA/RSI/ATR), the Buy/Sell signal funnel, trade execution. Includes `migrate_trades_csv()` — self-healing schema fix (see 09-10 review) — and the breakeven stop ratchet (`BE_TRIGGER_R`: 0.30R since the 09-10 losing-trade analysis, **raised to 0.75R on 09-15** — the tight trigger was scratching 77% of trades; see `docs/REVIEW-2026-09-15.md`). |
+| `engine.py` | Data ingestion, indicators (EMA/RSI/ATR), the Buy/Sell signal funnel, trade execution. Includes `migrate_trades_csv()` — self-healing schema fix (see 09-10 review) — the **structural stop** (`SL_CLEAR_ATR = 0.5` + `RR_TARGET`, live 2026-10-05: risk = `max(2·ATR, |entry − level| + 0.5·ATR)`, TP = 1.5 × that risk — see `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md`), and the breakeven stop ratchet (`BE_TRIGGER_R`: 0.30R since the 09-10 losing-trade analysis, **raised to 0.75R on 09-15** — the tight trigger was scratching 77% of trades; see `docs/REVIEW-2026-09-15.md`). |
+| `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` | **Why the stop-loss rate is high, and the change that shipped for it** (structural stop, live 2026-10-05 21:00 UTC): the inert `FLOOR_BUFFER_PCT` level test, the 63.8% of trades whose stop sat *inside* the 20-bar level, the costed/stateful era-matched evidence, everything rejected, and the **pre-registered forward bar** (§7) that must be judged at n≥100 before anything else changes. |
+| `tools/strategy_lab.py` | Canonical **costed, stateful, era-matched** full-strategy replay (funnel + exits + cooldown/breaker/blackouts). Read-only. This is what an exit or gate idea must be measured with; `exit_sims.py` / `pathwalk_sims.py` / `phantom_trades.py` predate it and are cascade-ignorant. |
 | `trade_filter.py` | Risk gatekeeper: direction-aware session blackouts (London blocks BUYs, allows SELLs), SL cooldowns, momentum-gated daily-loss breaker (trend-side-only after limit), ATR bounds. |
 | `dashboard.py` | Web dashboard (funnel telemetry, equity, active trade). |
 | `trades.csv` | **The ledger** — one row per closed trade (16-field schema with `Trade_Type`). |
@@ -34,13 +36,23 @@ python3 tools/analyze_losers.py   # 6. winner/loser features + entry-filter expe
 python3 tools/exit_sims.py        # 7. quick MFE exit scan (overstates — confirm via 5)
 python3 tools/smoke_test.py       # 8. engine regression tests (gates, SELL, drift auto-fix)
 python3 tools/momentum_regime.py  # 9. falling-gold / side regime + the 09-28 registered bar
+python3 tools/strategy_lab.py --calib-only  # 10. CANONICAL replay (costed, stateful, era-matched) —
+                                            #     required before any exit/gate/param idea is judged
+python3 tools/strategy_lab.py --table --only baseline,structstop  # 11. era x cost counterfactual grid
+python3 tools/check_structural_stop.py      # 12. is the stop really beyond the tested level? (2026-10-05 rule)
 ```
 
 All tools are read-only except the engine's own self-healing migration. Every
 tool that re-walks 1-min bars must key BE geometry on the logged *shape*
 (`Stop_Loss == Entry_Price` appears on scratches AND on winners that armed the
-ratchet before TP printed) and must treat a SELL's favourable bar extreme as its
-LOW — both of those were wrong until 2026-09-15.
+ratchet before TP printed), recover the pre-ratchet risk from the **reward leg**
+(`|TP − Entry| / 1.5`) rather than from `2·ATR` — from 2026-10-05 the stop is
+*structural* (it clears the 20-bar level) so the ATR multiple is only a floor —
+and must treat a SELL's favourable bar extreme as its LOW — both of those were
+wrong until 2026-09-15. `tools/exit_sims.py`, `pathwalk_sims.py`
+and `phantom_trades.py` are **cascade-ignorant** (no
+one-position/cooldown/breaker state, no costs): descriptive only. Use
+`tools/strategy_lab.py` for anything that would change a rule.
 
 ## 🚀 Deploying to production
 
@@ -76,7 +88,9 @@ alerts on Telegram (10-min silence threshold, muted during the daily break).
 
 1. **`docs/HANDOFF.md` first** — current ledger, definitions, next steps, ops.
 2. Latest `docs/REVIEW-*.md` / `docs/ANALYSIS-*.md` if the handoff points at them
-   (most recent: `docs/ANALYSIS-2026-09-28-falling-gold-win-rate.md` — the
+   (most recent: `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` — the stop-loss-rate
+   question, the structural stop that shipped for it, and its pre-registered bar; before that
+   `docs/REVIEW-2026-10-05.md` and `docs/ANALYSIS-2026-09-28-falling-gold-win-rate.md` — the
    "does the bot do better when gold falls?" question, its refutations, and the
    registered `H-side-awareness` bar).
 3. `git log --oneline` — what changed recently.
