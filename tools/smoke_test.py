@@ -29,7 +29,7 @@ Scenarios:
      with reason "TIME" once older than the window (tick path + MT5 candle
      path, P&L-signed, own time_exits counter, survives restart); price exits
      take priority over TIME; a fresh trade must stay open
-  L) MT5 feed health (2026-09-29 frozen-file stall) -> MUST report a missing
+  L) MT5 feed health (2026-09-29 frozen-file stall) -> MUST report a missing (clock pinned)
      file, a stale sidecar heartbeat (frozen mt5_last_candle.json, even when no
      candle was ever accepted after a restart), and an unparseable payload;
      MUST stay quiet on a closed market with a live heartbeat; recovery fires
@@ -41,6 +41,12 @@ Scenarios:
      survive a flat candle (h==l) and an evaluate_candle() error, MUST still
      accept the next candle, and MUST degrade to a fresh start on a corrupt
      status.json
+
+  N) Structural stop (2026-10-05) -> the stop must clear the 20-bar level the entry was
+     anchored to (risk = max(2xATR, |entry-level| + SL_CLEAR_ATR x ATR)) and TP must keep
+     1:1.5 against that ACTUAL risk; a retest of the level must NOT stop the trade out;
+     the BE ratchet must arm at BE_TRIGGER_R x the NEW risk; entries that hug the level
+     (and level=None) must keep the pre-change geometry byte-for-byte.
 
 Usage: python3 tools/smoke_test.py
 """
@@ -586,6 +592,14 @@ trade_filter.SKIP_LOG = os.path.join(tmp_l, "skipped_trades.csv")
 
 eng_l = engine.GoldEngine()
 
+# Pin the clock's "quiet hours" verdict for this scenario: mt5_feed_problem() calls
+# is_market_quiet() with NO argument, so the stall checks below read the REAL wall
+# clock and the scenario went red on a clean checkout at 00:09 UTC on 2026-10-05
+# (quiet hours are 21:00-01:59 UTC + weekends). A smoke test must be a fact about the
+# code, not about the time of day it happens to run.
+REAL_IS_QUIET = engine.is_market_quiet
+engine.is_market_quiet = lambda now=None: False     # active market hours
+
 # 1) file missing -> reported, and never silently looped over
 check("L: missing feed file reported", (eng_l.mt5_feed_problem() or "").startswith("feed file"),
       eng_l.mt5_feed_problem() or "None")
@@ -674,6 +688,7 @@ c_l = eng_l2.mt5_next_candle(eng_l2.read_mt5_feed(), CANDLE["ts"])
 check("L: new candle accepted after recovery (exactly once)",
       c_l is not None and c_l[0] == CANDLE["ts"] + 60
       and eng_l2.mt5_next_candle(eng_l2.read_mt5_feed(), CANDLE["ts"] + 60) is None)
+engine.is_market_quiet = REAL_IS_QUIET
 shutil.rmtree(tmp_l, ignore_errors=True)
 
 
@@ -808,6 +823,112 @@ eng_m5 = engine.GoldEngine()
 check("M: corrupt status.json -> no crash, watermark None",
       eng_m5._mt5_last_candle_ts is None, str(eng_m5._mt5_last_candle_ts))
 shutil.rmtree(tmp_m, ignore_errors=True)
+
+# --- Scenario N ---
+print("\nScenario N: structural stop -> the stop must clear the 20-bar level the entry was built on")
+tmp_n = tempfile.mkdtemp(prefix="gold_smoke_n_")
+engine.LOG_FILE_PATH = os.path.join(tmp_n, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_n, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_n, "trades.csv")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_n, "skipped_trades.csv")
+trade_filter.is_in_blackout = lambda now=None, side=None: (False, "")
+
+eng_n = engine.GoldEngine()
+run_candles(eng_n, candles_uptrend(240), datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc))
+floor_n = min(list(eng_n.lows)[-engine.LOOKBACK_PERIOD:])
+atr_n = eng_n.atr
+p_n = list(eng_n.closes)[-1]
+check("N: setup is a *chased* entry (close well clear of the floor)",
+      (p_n - floor_n) / atr_n > 1.5,
+      f"entry-floor distance {(p_n - floor_n) / atr_n:.2f} ATR (live median 2.53 ATR)")
+
+# Rejection bar: sweeps below the 20-bar floor, closes above it, 90% lower wick.
+dip_n = (p_n, p_n + 0.3, floor_n - 0.1, p_n - 1.2)
+run_candles(eng_n, [dip_n], datetime(2026, 6, 1, 4, 0, tzinfo=timezone.utc))
+check("N: BUY trade triggered", eng_n.trade_active and eng_n.trade_type == "BUY",
+      f"active={eng_n.trade_active} type={eng_n.trade_type}")
+
+entry_n = eng_n.entry_price
+risk_n = entry_n - eng_n.stop_loss
+atr_entry_n = eng_n.atr            # unchanged until the NEXT bar is evaluated
+expected_n = (entry_n - floor_n) + engine.SL_CLEAR_ATR * atr_entry_n
+check("N: stop is level-bound, not ATR-bound",
+      eng_n.structural_stop_bound and risk_n > engine.ATR_SL_MULT * atr_entry_n + 1e-9,
+      f"risk={risk_n:.3f} ATR-floor={engine.ATR_SL_MULT * atr_entry_n:.3f}")
+check("N: risk == distance-to-level + clearance",
+      abs(risk_n - expected_n) < 1e-6, f"risk={risk_n:.3f} expected={expected_n:.3f}")
+check("N: stop sits beyond the floor by >= SL_CLEAR_ATR (the premise of the trade)",
+      floor_n - eng_n.stop_loss >= engine.SL_CLEAR_ATR * atr_entry_n - 1e-6,
+      f"sl={eng_n.stop_loss:.3f} floor={floor_n:.3f} clearance={floor_n - eng_n.stop_loss:.3f} "
+      f"(needs {engine.SL_CLEAR_ATR * atr_entry_n:.3f})")
+check("N: TP keeps the 1:1.5 ratio against the ACTUAL risk",
+      abs((eng_n.take_profit - entry_n) - engine.RR_TARGET * risk_n) < 1e-6,
+      f"tp dist={eng_n.take_profit - entry_n:.3f} vs {engine.RR_TARGET:.2f}x risk")
+
+# The old 2xATR stop was INSIDE the range, so a mere retest of the level printed an
+# SL (median SL lifetime 7.2 min on the 0.75R master book). Now it must survive one.
+legacy_stop = entry_n - engine.ATR_SL_MULT * atr_entry_n
+retest_low = floor_n - 0.2
+check("N: the retest WOULD have hit the old 2xATR stop",
+      retest_low < legacy_stop, f"retest_low={retest_low:.2f} old stop={legacy_stop:.2f}")
+sl_before_n = eng_n.stop_loss
+run_candles(eng_n, [(entry_n - 0.5, entry_n + 0.2, retest_low, entry_n - 0.8)],
+            datetime(2026, 6, 1, 4, 1, tzinfo=timezone.utc))
+check("N: level retest no longer stops the trade out",
+      eng_n.trade_active and eng_n.losses == 0 and eng_n.stop_loss == sl_before_n,
+      f"active={eng_n.trade_active} losses={eng_n.losses} sl={eng_n.stop_loss} was={sl_before_n}")
+
+# A restart mid-trade must keep the WIDER stop: restore_open_trade_from_status() reads
+# entry/SL/TP from status.json, and its "if be_armed: SL = entry" branch must not
+# re-derive the geometry from ATR (that would move the stop back inside the level).
+with open(engine.STATUS_FILE_PATH) as f:
+    st_n = json.load(f)
+eng_n3 = engine.GoldEngine()
+check("N: status.json + restart keep the structural stop/TP",
+      eng_n3.trade_active and abs(eng_n3.stop_loss - eng_n.stop_loss) < 0.011
+      and abs(eng_n3.take_profit - eng_n.take_profit) < 0.011
+      and abs(st_n["stop_loss"] - eng_n.stop_loss) < 0.011,
+      f"sl={eng_n3.stop_loss:.3f} want={eng_n.stop_loss:.3f} tp={eng_n3.take_profit:.3f} "
+      f"want={eng_n.take_profit:.3f}")
+
+# +0.40R must NOT arm the ratchet, +0.75R must - and 0.75R is measured against the
+# WIDER risk (that is the point: the scratch rate was 33% because 0.75 x 2ATR was noise).
+if engine.BE_TRIGGER_R > 0.4:
+    sl_before_n = eng_n.stop_loss
+    mid_n = entry_n + 0.40 * risk_n
+    run_candles(eng_n, [(entry_n - 0.6, mid_n + 0.2, entry_n - 0.8, mid_n)],
+                datetime(2026, 6, 1, 4, 2, tzinfo=timezone.utc))
+    check("N: +0.40R of the NEW risk does not arm", not eng_n.be_armed and eng_n.stop_loss == sl_before_n,
+          f"armed={eng_n.be_armed}")
+be_level_n = entry_n + engine.BE_TRIGGER_R * risk_n
+run_candles(eng_n, [(mid_n, be_level_n + 0.1, mid_n - 0.1, be_level_n)],
+            datetime(2026, 6, 1, 4, 3, tzinfo=timezone.utc))
+check(f"N: ratchet arms at +{engine.BE_TRIGGER_R:.2f}R of the structural risk",
+      eng_n.be_armed and eng_n.stop_loss == round(entry_n, 2),
+      f"armed={eng_n.be_armed} sl={eng_n.stop_loss} entry={entry_n}")
+
+# Backward compatibility, checked on the pure function because the funnel's own
+# MAX_BELOW_EMA_ATR guard makes a *hugging* entry nearly impossible in a trending
+# synthetic series (median |EMA50 - level| is 0.93 ATR, so a floor-close entry has to
+# be far below the EMA): whenever the ATR floor already clears the level, or there is
+# no level at all (short history, restart restore), geometry must be EXACTLY the
+# pre-2026-10-05 one - risk = 2 x ATR, TP = 3 x ATR.
+a = 1.5
+for label, lvl in (("no level (history too short)", None), ("level 0.1 ATR away", 4400.0 - 0.15),
+                   ("level 1.5 ATR away", 4400.0 - 2.25)):
+    got = eng_n.structural_risk("BUY", 4400.0, a, lvl)
+    check(f"N: {label} -> risk = ATR_SL_MULT x ATR ({engine.ATR_SL_MULT * a:.2f})",
+          abs(got - engine.ATR_SL_MULT * a) < 1e-12, f"got={got}")
+check("N: a level 3.9 ATR away pushes risk to level + clearance",
+      abs(eng_n.structural_risk("BUY", 4400.0, a, 4400.0 - 3.9 * a) - (3.9 * a + engine.SL_CLEAR_ATR * a)) < 1e-9,
+      f"got={eng_n.structural_risk('BUY', 4400.0, a, 4400.0 - 3.9 * a):.4f} "
+      f"want={3.9 * a + engine.SL_CLEAR_ATR * a:.4f}")
+check("N: a SELL stop is mirrored (above the ceiling, same distance)",
+      abs(eng_n.structural_risk("SELL", 4400.0, a, 4400.0 + 3.9 * a) - (3.9 * a + engine.SL_CLEAR_ATR * a)) < 1e-9)
+
+shutil.rmtree(tmp_n, ignore_errors=True)
+
 
 print()
 if FAILURES:

@@ -46,7 +46,13 @@ BE_DEPLOY = datetime(2026, 9, 10, 12, 34)
 BE_075_DEPLOY = datetime(2026, 9, 15, 6, 0)   # BE_TRIGGER_R 0.30 -> 0.75
 MAXHOLD_DEPLOY = datetime(2026, 9, 21, 6, 0)  # MAX_HOLD_MINUTES = 240 (approx)
 WALK_CAP_MIN = 240          # counterfactual horizon from entry
-ATR_SL_MULT, ATR_TP_MULT = 2.0, 3.0   # live engine geometry
+ATR_SL_MULT, ATR_TP_MULT = 2.0, 3.0   # live engine geometry (pre-2026-10-05)
+# From 2026-10-05 the stop is STRUCTURAL (risk = max(2xATR, level distance + 0.5xATR),
+# SL_CLEAR_ATR in engine.py), so re-deriving risk from the ATR multiple would be wrong
+# for the level-bound trades that are now most of the book. TP is logged and TP = 1.5 x
+# risk in BOTH regimes, so risk is recovered from the reward leg instead: exact before
+# and after the change. ATR geometry stays as the fallback for rows with no usable TP.
+RR_TARGET = ATR_TP_MULT / ATR_SL_MULT
 LIVE_RATCHET_R = 0.75       # BE_TRIGGER_R actually live since 2026-09-15
 
 
@@ -60,9 +66,13 @@ def load_trades():
             atr = float(r["ATR_At_Entry"])
             sl, tp = float(r["Stop_Loss"]), float(r["Take_Profit"])
             if reason == "BE" or abs(entry - sl) < 1e-9:
-                # Ratchet-armed row: rebuild the ORIGINAL geometry.
+                # Ratchet-armed row: the logged SL was overwritten to entry, so rebuild
+                # the ORIGINAL geometry from the reward leg (TP survives the ratchet).
                 d = 1 if side == "BUY" else -1
-                sl, tp = entry - d * ATR_SL_MULT * atr, entry + d * ATR_TP_MULT * atr
+                risk = abs(tp - entry) / RR_TARGET
+                if not (risk > 0):
+                    risk = ATR_SL_MULT * atr
+                sl, tp = entry - d * risk, entry + d * RR_TARGET * risk
             out.append(dict(
                 num=int(r["Trade_Num"]), side=side, reason=reason, atr=atr,
                 et=datetime.strptime(r["Entry_Time"], "%Y-%m-%d %H:%M:%S"),
