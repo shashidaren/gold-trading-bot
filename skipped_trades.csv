@@ -1151,3 +1151,5 @@ Timestamp,Reason,Price,ATR
 2026-10-06 14:50:01,Blackout: NY Open & US High-Impact Macro Releases,4150.68,1.62
 2026-10-07 12:55:07,ATR too high - News volatility (4.88 > 4.5),4080.78,4.88
 2026-10-07 14:59:08,Blackout: NY Open & US High-Impact Macro Releases,4104.68,2.14
+2026-10-07 15:00:04,Blackout: NY Open & US High-Impact Macro Releases,4104.19,2.10
+2026-10-07 15:10:05,Blackout: NY Open & US High-Impact Macro Releases,4103.99,2.51
