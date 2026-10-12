@@ -1252,3 +1252,18 @@ Timestamp,Reason,Price,ATR
 2026-10-12 02:12:05,SL Cooldown: 5 min remaining (3 consecutive SLs -> 60m cooldown),4211.05,1.89
 2026-10-12 02:15:05,SL Cooldown: 2 min remaining (3 consecutive SLs -> 60m cooldown),4213.43,1.80
 2026-10-12 02:45:03,SL Cooldown: 50 min remaining (4 consecutive SLs -> 60m cooldown),4208.81,2.11
+2026-10-12 06:03:05,SL Cooldown: 20 min remaining,4188.76,1.70
+2026-10-12 06:07:01,SL Cooldown: 17 min remaining,4184.96,1.97
+2026-10-12 06:08:01,SL Cooldown: 16 min remaining,4185.56,1.94
+2026-10-12 06:11:02,SL Cooldown: 13 min remaining,4183.89,1.86
+2026-10-12 06:14:03,SL Cooldown: 10 min remaining,4185.99,1.78
+2026-10-12 06:19:04,SL Cooldown: 4 min remaining,4183.23,1.62
+2026-10-12 07:25:07,SL Cooldown: 40 min remaining (2 consecutive SLs -> 60m cooldown),4183.60,1.18
+2026-10-12 07:28:03,SL Cooldown: 38 min remaining (2 consecutive SLs -> 60m cooldown),4183.27,1.16
+2026-10-12 07:31:04,SL Cooldown: 35 min remaining (2 consecutive SLs -> 60m cooldown),4185.03,1.16
+2026-10-12 07:42:05,SL Cooldown: 24 min remaining (2 consecutive SLs -> 60m cooldown),4185.13,1.47
+2026-10-12 07:52:06,SL Cooldown: 13 min remaining (2 consecutive SLs -> 60m cooldown),4182.12,1.85
+2026-10-12 07:56:07,SL Cooldown: 9 min remaining (2 consecutive SLs -> 60m cooldown),4182.02,1.72
+2026-10-12 08:00:08,SL Cooldown: 5 min remaining (2 consecutive SLs -> 60m cooldown),4180.34,1.47
+2026-10-12 08:02:09,SL Cooldown: 3 min remaining (2 consecutive SLs -> 60m cooldown),4179.33,1.35
+2026-10-12 08:05:05,SL Cooldown: 1 min remaining (2 consecutive SLs -> 60m cooldown),4180.89,1.30
