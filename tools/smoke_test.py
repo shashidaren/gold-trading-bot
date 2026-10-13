@@ -48,6 +48,13 @@ Scenarios:
      the BE ratchet must arm at BE_TRIGGER_R x the NEW risk; entries that hug the level
      (and level=None) must keep the pre-change geometry byte-for-byte.
 
+  O) Structural-stop GUARD + replay-harness fidelity (2026-10-13) -> strategy_lab's 20-bar level
+     MUST equal the engine's own logged Dynamic_Floor on every bar (it was 19 bars: 86% match);
+     tools/check_structural_stop.py MUST classify each stop as OLD / NEW / BOTH rule, MUST locate the
+     deploy between the last OLD and first NEW trade, and MUST tell a BOUNDARY error (old-rule trades
+     before the first new-rule trade: exit 1 'BOUNDARY ERROR') from a REGRESSION (old-rule trade
+     after the first new-rule trade) while passing a clean deploy (exit 0). Synthetic data only.
+
 Usage: python3 tools/smoke_test.py
 """
 import os
@@ -928,6 +935,168 @@ check("N: a SELL stop is mirrored (above the ceiling, same distance)",
       abs(eng_n.structural_risk("SELL", 4400.0, a, 4400.0 + 3.9 * a) - (3.9 * a + engine.SL_CLEAR_ATR * a)) < 1e-9)
 
 shutil.rmtree(tmp_n, ignore_errors=True)
+
+# --- Scenario O ---
+print("\nScenario O: structural-stop guard + replay-harness fidelity "
+      "(tools/check_structural_stop.py, tools/strategy_lab.py)")
+import contextlib  # noqa: E402
+import io  # noqa: E402
+import strategy_lab as SL  # noqa: E402
+import check_structural_stop as CSS  # noqa: E402
+
+# O1: the lab's 20-bar level is the ENGINE's level (20 PRIOR bars, oldest included). Feed one
+# synthetic series to the real engine and to the lab, and compare the engine's own logged
+# Dynamic_Floor with the lab's floor on every bar. (The lab used 19 prior bars until 2026-10-13:
+# an 86% match on the live log, which tightened every replayed structural stop.)
+tmp_o = tempfile.mkdtemp(prefix="gold_smoke_o_")
+engine.LOG_FILE_PATH = os.path.join(tmp_o, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_o, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_o, "trades.csv")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_o, "skipped_trades.csv")
+trade_filter.is_in_blackout = lambda now=None, side=None: (False, "")
+
+cand_o, p_o = [], 4400.0
+for k in range(70):
+    d_o = (0.6, -0.4, 0.5, -0.7, 0.3)[k % 5]
+    o_o, c_o = p_o, p_o + d_o
+    hi_o = max(o_o, c_o) + 0.3 + 0.05 * (k % 3)
+    lo_o = min(o_o, c_o) - 0.3 - 0.05 * (k % 4)
+    if k == 0:                       # extreme bar 0: it is the OLDEST bar of bar 20's window
+        lo_o -= 6.0
+        hi_o += 6.0
+    if k == 40:                      # a later extreme that drops out of the window at bar 60
+        lo_o -= 3.0
+    cand_o.append((round(o_o, 2), round(hi_o, 2), round(lo_o, 2), round(c_o, 2)))
+    p_o = c_o
+eng_o = engine.GoldEngine()
+run_candles(eng_o, cand_o, datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc))
+with open(engine.LOG_FILE_PATH, newline="") as fh_o:
+    rows_o = list(csv.DictReader(fh_o))
+bars_o = [(datetime(2026, 6, 1) + timedelta(minutes=k), o_, h_, l_, c_, 30.0)
+          for k, (o_, h_, l_, c_) in enumerate(cand_o)]
+lab_o = SL.Lab(bars_o)
+n_cmp = n_bad = 0
+for k in range(SL.LOOKBACK, len(cand_o)):
+    logged_o = rows_o[k]["Dynamic_Floor"]
+    if logged_o in ("Calculating", ""):
+        continue
+    n_cmp += 1
+    if abs(float(logged_o) - lab_o.floor[k]) > 0.006:
+        n_bad += 1
+check("O: strategy_lab floor == the engine's logged Dynamic_Floor on every bar",
+      n_cmp >= 40 and n_bad == 0, f"{n_cmp} bars compared, {n_bad} differ")
+check("O: bar 20's level window still holds bar 0 (the oldest of the 20 prior bars)",
+      lab_o.floor[SL.LOOKBACK] == min(l_ for (_o, _h, l_, _c) in cand_o[:20])
+      and lab_o.ceil[SL.LOOKBACK] == max(h_ for (_o, h_, _l, _c) in cand_o[:20]),
+      f"floor={lab_o.floor[SL.LOOKBACK]} ceil={lab_o.ceil[SL.LOOKBACK]}")
+check("O: bar 0 has left the window by bar 21; no level exists before LOOKBACK bars",
+      lab_o.floor[SL.LOOKBACK + 1] == min(l_ for (_o, _h, l_, _c) in cand_o[1:21])
+      and lab_o.floor[SL.LOOKBACK - 1] is None and lab_o.ceil[SL.LOOKBACK - 1] is None)
+shutil.rmtree(tmp_o, ignore_errors=True)
+
+# O2: which rule produced a stop? (pure; atr=2.0 so 2xATR=4.0, SL_CLEAR_ATR*ATR=1.0)
+for label, risk_, dist_, want_ in (
+        ("risk 2.0 ATR with the level 5 $ away -> OLD", 4.0, 5.0, "OLD"),
+        ("risk = level + 0.5 ATR -> NEW", 6.0, 5.0, "NEW"),
+        ("level hugging the entry: both rules give 2.0 ATR -> BOTH", 4.0, 0.4, "BOTH"),
+        ("a stop between the two rules (join error?) -> ???", 5.0, 5.0, "???")):
+    got_ = CSS.geometry_class(risk_, 2.0, dist_)
+    check(f"O: geometry_class: {label}", got_ == want_, f"got {got_}")
+
+
+# O3/O4: locate the deploy from the ledger and diagnose a failure (pure)
+def _orow(num, minute, cls_):
+    return {"cls": cls_, "tr": {"num": num, "et": datetime(2026, 10, 6, 3, minute), "side": "SELL"},
+            "risk": 2.0, "dist": 2.5}
+
+
+clean_o = [_orow(1, 0, "OLD"), _orow(2, 5, "BOTH"), _orow(3, 10, "OLD"), _orow(4, 20, "NEW"), _orow(5, 25, "BOTH")]
+lo_, fn_, late_ = CSS.boundary_evidence(clean_o)
+check("O: boundary evidence = (last OLD, first NEW, no late OLD) on a clean deploy",
+      lo_["tr"]["num"] == 3 and fn_["tr"]["num"] == 4 and late_ == [])
+mixed_o = clean_o + [_orow(6, 30, "OLD")]
+lo_, fn_, late_ = CSS.boundary_evidence(mixed_o)
+check("O: an OLD trade after the first NEW one is reported as late (mixed geometry)",
+      [r["tr"]["num"] for r in late_] == [6])
+check("O: no NEW trade yet -> no evidence, no crash",
+      CSS.boundary_evidence([_orow(1, 0, "OLD")])[1] is None)
+cut_o = datetime(2026, 10, 6, 3, 0)
+check("O: diagnosis: old-rule trades before the first new-rule trade = BOUNDARY ERROR",
+      "BOUNDARY ERROR" in CSS.diagnose_failure([clean_o[0]], clean_o[2], clean_o[3], [], cut_o))
+check("O: diagnosis: an old-rule trade after the first new-rule trade = REGRESSION",
+      "REGRESSION" in CSS.diagnose_failure([mixed_o[5]], mixed_o[5], clean_o[3], [mixed_o[5]], cut_o))
+
+# O5: the whole tool, end to end, on a synthetic ledger. Flat 4100 tape (range 2.0 -> ATR 2.0)
+# with a 4110 spike at 02:20 and another at 03:20, so the 20-bar ceiling sits ~10 $ above a SELL
+# entry for the 20 bars after each spike (the level binds: new risk 11 vs old 4).
+def _o_world(trades_spec):
+    """trades_spec = [(hh, mm, 'OLD'|'NEW')] SELLs entered at that minute of 2026-10-06."""
+    root_ = tempfile.mkdtemp(prefix="gold_smoke_o2_")
+    t0_ = datetime(2026, 10, 6, 1, 0)
+    bars_ = []
+    for k in range(170):
+        t_ = t0_ + timedelta(minutes=k)
+        hi_ = 4101.0
+        if t_ in (datetime(2026, 10, 6, 2, 20), datetime(2026, 10, 6, 3, 20)):
+            hi_ = 4110.0
+        bars_.append((t_, 4100.0, hi_, 4099.0, 4100.0, 20.0))
+    with open(os.path.join(root_, "forward_test_log.csv"), "w", newline="") as fh_:
+        w_ = csv.writer(fh_)
+        w_.writerow(["Timestamp", "Open", "High", "Low", "Close", "Volume"])
+        for b_ in bars_:
+            w_.writerow([b_[0].strftime("%Y-%m-%d %H:%M:%S")] + [f"{x_:.2f}" for x_ in b_[1:5]] + [int(b_[5])])
+    lab_ = SL.Lab(bars_)
+    with open(os.path.join(root_, "trades.csv"), "w", newline="") as fh_:
+        w_ = csv.writer(fh_)
+        w_.writerow(["Trade_Num", "Trade_Type", "Entry_Time", "Exit_Time", "Entry_Price", "Stop_Loss",
+                     "Take_Profit", "Exit_Price", "Exit_Reason", "Profit", "Balance_After", "RSI_At_Entry",
+                     "ATR_At_Entry", "Wick_Ratio_At_Entry", "EMA50_At_Entry", "EMA200_At_Entry"])
+        for n_, (hh_, mm_, rule_) in enumerate(trades_spec, start=1):
+            et_ = datetime(2026, 10, 6, hh_, mm_)
+            i_ = [b[0] for b in bars_].index(et_)
+            atr_, lvl_ = lab_.atr[i_], lab_.ceil[i_]
+            risk_ = 2.0 * atr_ if rule_ == "OLD" else max(2.0 * atr_, abs(4100.0 - lvl_) + 0.5 * atr_)
+            sl_, tp_ = round(4100.0 + risk_, 2), round(4100.0 - SL.RR_TARGET * risk_, 2)
+            w_.writerow([n_, "SELL", et_.strftime("%Y-%m-%d %H:%M:%S"),
+                         (et_ + timedelta(minutes=3)).strftime("%Y-%m-%d %H:%M:%S"), "4100.00",
+                         f"{sl_:.2f}", f"{tp_:.2f}", f"{sl_:.2f}", "SL", f"{-risk_:.2f}", "490.00", "45.0",
+                         f"{atr_:.2f}", "60.0%", "4100.00", "4100.00"])
+    return root_
+
+
+def _o_run(spec):
+    root_ = _o_world(spec)
+    buf_ = io.StringIO()
+    with contextlib.redirect_stdout(buf_):
+        rc_ = CSS.main(["--root", root_])
+    shutil.rmtree(root_, ignore_errors=True)
+    return rc_, buf_.getvalue()
+
+
+# The synthetic timeline is built around a 03:00 cutover. Pin the constant for these cases so the
+# scenario stays valid when LIVE_CUTOVER is legitimately moved for a future deploy (this file is the
+# autosync deploy gate: a test coupled to the live constant would roll back a good deploy).
+_live_cutover_saved = SL.LIVE_CUTOVER
+SL.LIVE_CUTOVER = datetime(2026, 10, 6, 3, 0)
+# clean: two old-rule trades before 03:00, two new-rule trades after it
+rc_, out_ = _o_run([(2, 30, "OLD"), (2, 40, "OLD"), (3, 25, "NEW"), (3, 35, "NEW")])
+check("O: clean deploy (OLD before the cutover, NEW after) -> exit 0, PASS, bracket OK",
+      rc_ == 0 and "PASS" in out_ and "is inside the bracket" in out_, f"rc={rc_}")
+# boundary error: an OLD-rule trade at 03:25 is 'post-cutover' only because the constant is too early
+rc_, out_ = _o_run([(2, 30, "OLD"), (2, 40, "OLD"), (3, 25, "OLD"), (3, 35, "NEW")])
+check("O: old-rule trade after LIVE_CUTOVER but before the first new-rule trade -> exit 1, BOUNDARY ERROR",
+      rc_ == 1 and "FAIL" in out_ and "BOUNDARY ERROR" in out_ and "too EARLY" in out_, f"rc={rc_}")
+# regression: new rule is running, then an old-rule stop shows up again
+rc_, out_ = _o_run([(2, 30, "OLD"), (3, 25, "NEW"), (3, 35, "OLD")])
+check("O: old-rule trade AFTER the first new-rule trade -> exit 1, REGRESSION",
+      rc_ == 1 and "REGRESSION" in out_, f"rc={rc_}")
+# a cutover constant that contradicts the ledger evidence is itself a failure, even with 0 'inside'
+SL.LIVE_CUTOVER = datetime(2026, 10, 6, 2, 35)       # earlier than the last old-rule trade (02:40)
+rc_, out_ = _o_run([(2, 30, "OLD"), (2, 40, "OLD"), (3, 25, "NEW"), (3, 35, "NEW")])
+check("O: a cutover constant earlier than the last old-rule trade is flagged EARLY (exit 1)",
+      rc_ == 1 and "too EARLY" in out_, f"rc={rc_}")
+SL.LIVE_CUTOVER = _live_cutover_saved
 
 
 print()

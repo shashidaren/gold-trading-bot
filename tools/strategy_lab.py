@@ -47,11 +47,12 @@ Usage
                                                    # quotes, so the doc and the tool cannot drift)
     python3 tools/strategy_lab.py --json /tmp/lab.json
 
-Variant `baseline` (no cfg overrides) = the rules production used up to 2026-10-05, which is
-the correct replay of every historical era. `structstop` = the rule that is LIVE from
-2026-10-05 21:00 UTC (structural stop, TP = 1.5 x actual risk); after the cutover `structstop`
-IS production, so its recall vs the ledger is the "harness still matches the engine" test
-(docs/ANALYSIS-2026-10-05-stop-loss-geometry.md 7-A3).
+Variant `baseline` (no cfg overrides) = the rules production used up to the structural-stop
+deploy, which is the correct replay of every historical era. `structstop` = the rule that is
+LIVE from 2026-10-06 03:00 UTC (structural stop, TP = 1.5 x actual risk; planned for 10-05
+21:00 but only deployed by the 03:00 autosync, see LIVE_CUTOVER below); after the cutover
+`structstop` IS production, so its recall vs the ledger is the "harness still matches the
+engine" test (docs/ANALYSIS-2026-10-05-stop-loss-geometry.md 7-A3).
 """
 import argparse
 import csv
@@ -190,12 +191,18 @@ class Lab:
                     self.atr[i] = sum(trs) / ATR_N
             prev = c
             self.ema_f[i], self.ema_s[i] = ef, es
+            # engine.evaluate_candle: floor/ceiling = min/max of the last LOOKBACK_PERIOD (20)
+            # PRIOR bars - list(self.lows)[-20:] is taken BEFORE the current bar is appended.
+            # This window therefore holds LOOKBACK bars *excluding* bar i. (Until 2026-10-13 it
+            # kept LOOKBACK bars including bar i and sliced [:-1], i.e. 19 prior bars: that matched
+            # the engine's logged Dynamic_Floor on only 86.0% of bars vs 99.96% for 20, and made
+            # every replayed structural stop up to ~1.6 $ tighter than the live one.)
+            if i >= LOOKBACK:
+                self.floor[i] = min(lows)
+                self.ceil[i] = max(highs)
             lows.append(l); highs.append(h)
             if len(lows) > LOOKBACK:
                 lows.pop(0); highs.pop(0)
-            if i >= LOOKBACK:
-                self.floor[i] = min(lows[:-1])      # EXCLUDES the current bar
-                self.ceil[i] = max(highs[:-1])      # (engine appends after)
         self.ready = [i for i in range(n)
                       if self.atr[i] is not None and self.ema_s[i] is not None
                       and self.floor[i] is not None]
@@ -467,7 +474,19 @@ def fisher(ra, rb):
 # `baseline` (= {}) is the correct replay of every historical era; `structstop` is the
 # rule that is live from the cutover on, i.e. post-cutover the two only differ if the
 # level bound the stop, and a recall check on NEW data must use structstop.
-LIVE_CUTOVER = datetime(2026, 10, 5, 21, 0)
+#
+# CUTOVER = the moment the ENGINE ON THE HOST loaded the new code - not the day it was
+# written, not the planned time, not the PR merge. The 2026-10-05 session planned 21:00 UTC
+# ("next autosync") but PR #28 merged 2026-10-06 00:31:53Z, and autosync (cron 00/03/06/...
+# UTC) only deployed it with the `autosync: merge upstream` commit 2f4f4c6 at 03:00:04Z.
+# The ledger agrees: #495 / #497 / #498 (entered 10-06 00:11-02:39) carry EXACTLY 2.00 ATR
+# of risk although the level was 2.3-2.7 ATR away (old rule), and #499 (03:33:05) is the
+# first trade on the new geometry. Re-derive it any time with
+# `python3 tools/check_structural_stop.py` (it prints the evidence bracket and warns if this
+# constant falls outside it). Rule for the next deploy: set the cutover from the host's
+# `autosync: merge upstream` commit time, then let that check confirm it.
+PLANNED_CUTOVER = datetime(2026, 10, 5, 21, 0)   # what the docs promised (kept for the record)
+LIVE_CUTOVER = datetime(2026, 10, 6, 3, 0)       # what actually happened (autosync 03:00:04Z)
 SL_CLEAR_ATR, RR_TARGET = 0.5, 1.5
 
 VARIANTS = {
@@ -527,7 +546,7 @@ def main():
     print(f"strategy_lab — {len(bars)} bars {bars[0][0]} -> {bars[-1][0]} | first ready bar {lab.ts[first]}")
     post = [t for t in ledger if t["et"] >= LIVE_CUTOVER]
     legacy = [t for t in ledger if t["et"] < LIVE_CUTOVER]
-    print(f"ledger: {len(ledger)} closed trades ({len(legacy)} pre-2026-10-05-cutover -> replay with "
+    print(f"ledger: {len(ledger)} closed trades ({len(legacy)} pre-{LIVE_CUTOVER:%Y-%m-%d %H:%M}-cutover -> replay with "
           f"`baseline`; {len(post)} under the structural stop -> replay with `--only structstop`)\n"
           f"        cost model ${args.cost:.2f}/side = ${2*args.cost:.2f}/round trip (BE included)\n")
 
@@ -582,7 +601,7 @@ def main():
                           f"{(avgW / -avgL) if (W and L and avgL) else 0:7.2f}"
                           f"{statistics.median(t['risk'] for t in trs):7.2f}"
                           f"{statistics.median(t['risk'] / t['atr'] for t in trs):8.2f}")
-        print("\n  `baseline` = the geometry production used until 2026-10-05 (risk = 2xATR,")
+        print(f"\n  `baseline` = the geometry production used until {LIVE_CUTOVER:%Y-%m-%d %H:%M} UTC (risk = 2xATR,")
         print("  TP = 3xATR). `structstop` = what is live from the cutover. Pre-cutover eras are")
         print("  counterfactuals; the post-cutover row is the real measurement once data exists.")
         return
