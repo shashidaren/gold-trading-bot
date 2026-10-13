@@ -63,6 +63,23 @@ Scenarios:
      strategy_lab.LIVE_CUTOVER, a missing key, a missing block (exit 2). `--update` rewrites only
      the marked block. Synthetic data only; the verdict is advisory in autosync (never blocks).
 
+  Q) XM quote + contract-spec logger (2026-10-13, port of bitcoin-trading-bot PR #10) ->
+     tools/mt5_quotes.py MUST be read-only by construction (AST walk for trading-API names, a fake
+     terminal that records any trading call), MUST never write a login/name/server/balance/Windows
+     path into the public repo (allow-lists, planted secrets), MUST write 30 s UTC-aligned rows
+     with a point sample + 5 s envelope, MUST record a closed market as STALE rows (not NOQUOTE,
+     and without tripping its own dead-logger watchdog), MUST NOT let a frozen tick or one glitchy
+     tick move the learned server offset, MUST pick up a DST change on 2 agreeing fresh ticks -
+     including one that happens while gold is shut - and MUST survive schema drift, a torn line,
+     restarts and UTC-midnight rotation. The autosync/unit wiring is checked statically.
+     Synthetic data only; fake terminal + fake clock (no sleeping, no Wine).
+
+  R) xm_quote_report + broker_time (2026-10-13) -> MUST separate scheduled closures from feed
+     stalls from logger outages, count only usable rows in the spread tables, join ledger trades to
+     the quote at entry AND exit (cost = the mean of the two, vs the assumed $0.40), print the
+     --spread/--cost flags that re-cost the ledger, and keep the DST verdict UNVERIFIED until a
+     transition has been observed (EU vs US vs NEITHER). Also reads the logger's OWN output.
+
 Usage: python3 tools/smoke_test.py
 """
 import os
@@ -1238,6 +1255,868 @@ check("P: a doc with no snapshot block is exit 2, one line, no crash",
       rc_p == 2 and out_p.startswith("not run"), out_p.strip()[:100])
 shutil.rmtree(root_p, ignore_errors=True)
 
+# --- Scenario Q ------------------------------------------------------------
+print("\nScenario Q: XM GOLD quote + contract-spec logger (tools/mt5_quotes.py, read-only sidecar)")
+import ast  # noqa: E402
+import collections  # noqa: E402
+import contextlib  # noqa: E402,F811
+import io  # noqa: E402,F811
+import re  # noqa: E402
+import mt5_quotes as MQ  # noqa: E402
+
+Q_T0 = 1791892800  # 2026-10-13 12:00:00 UTC (a Tuesday, market open)
+Q_DAY = "2026-10-13"
+Q_SECRETS = ("123456789", "Jane Doe", "XMGlobal-MT5 17", "99999.5", "jane", "Common")
+
+
+class QClock:
+    def __init__(self, t):
+        self.t = float(t)
+
+    def __call__(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+
+class QMT5(types.ModuleType):
+    """A fake terminal. Ticks carry the current SERVER time (UTC + offset). mode='stale' freezes the
+    tick (a closed market: its time never moves). Any trading call is recorded - the logger must
+    never make one."""
+    ORDER_TYPE_BUY = 0
+
+    def __init__(self, clock, offset=10800):
+        super().__init__("MetaTrader5")
+        self.clock, self.offset = clock, offset
+        self.flip_utc = self.offset_after = None
+        self.spread, self.bid, self.mode, self.frozen = 0.25, 4500.0, "ok", None
+        self.glitch = False                      # next fresh tick carries a bogus +1 h skew, once
+        self.stops_level = 30
+        self.used, self.trading_calls, self.unknown = collections.Counter(), [], set()
+        for name in MQ.FORBIDDEN_API:                       # recorded, never legitimately called
+            setattr(self, name, (lambda n: lambda *a, **k: self.trading_calls.append(n))(name))
+
+    def __getattr__(self, name):
+        self.unknown.add(name)
+        raise AttributeError(name)
+
+    def _off_at(self, utc):
+        return self.offset_after if (self.flip_utc is not None and utc >= self.flip_utc) else self.offset
+
+    def symbol_info_tick(self, symbol):
+        self.used["symbol_info_tick"] += 1
+        T = collections.namedtuple("Tick", "time bid ask last volume time_msc flags volume_real")
+        if self.mode == "none":
+            return None
+        if self.mode == "bad":
+            return T(int(self.clock.t + self._off_at(self.clock.t)), 0.0, 0.0, 0, 0, 0, 0, 0)
+        if self.mode == "crossed":
+            return T(int(self.clock.t + self._off_at(self.clock.t) - 0.4), self.bid, self.bid - 0.5, 0, 0, 0, 0, 0)
+        if self.mode == "stale":                           # a frozen tick: its time never moves
+            if self.frozen is None:
+                self.frozen = int(self.clock.t + self._off_at(self.clock.t) - 5)
+            return T(self.frozen, self.bid, self.bid + self.spread, 0, 0, 0, 0, 0)
+        self.frozen = None
+        skew, self.glitch = (3600 if self.glitch else 0), False
+        return T(int(self.clock.t + self._off_at(self.clock.t) - 0.4 + skew), self.bid, self.bid + self.spread,
+                 0, 0, 0, 0, 0)
+
+    def symbol_info(self, symbol):
+        self.used["symbol_info"] += 1
+        S = collections.namedtuple("S", "name description path digits point spread spread_float "
+                                   "trade_calc_mode trade_mode trade_exemode filling_mode order_mode "
+                                   "expiration_mode trade_stops_level trade_freeze_level "
+                                   "trade_contract_size volume_min volume_max volume_step swap_mode "
+                                   "swap_long swap_short swap_rollover3days session_deals bidhigh")
+        return S("GOLD", "Gold vs US Dollar", "Metals\\GOLD", 2, 0.01, 25, True, 2, 4, 2, 3, 127,
+                 15, self.stops_level, 0, 100.0, 0.01, 50.0, 0.01, 1, -25.0, 10.0, 3, 7, 4600.0)
+
+    def account_info(self):
+        self.used["account_info"] += 1
+        A = collections.namedtuple("A", "login name server balance equity profit trade_mode leverage "
+                                   "margin_mode currency trade_allowed company margin_free credit")
+        return A(123456789, "Jane Doe", "XMGlobal-MT5 17", 99999.5, 99998.0, 1.5, 0, 500, 2, "USD", True,
+                 "XM Global Limited", 99990.0, 0.0)
+
+    def terminal_info(self):
+        self.used["terminal_info"] += 1
+        Tm = collections.namedtuple("Tm", "build connected trade_allowed maxbars company name path "
+                                    "data_path commondata_path ping_last")
+        return Tm(5000, True, True, 100000, "XM Global Limited", "MetaTrader 5", "C:\\Users\\jane\\MT5",
+                  "C:\\Users\\jane\\MT5\\data", "C:\\Users\\jane\\Common", 77000)
+
+    def order_calc_profit(self, action, symbol, volume, price_open, price_close):
+        self.used["order_calc_profit"] += 1
+        return round((price_close - price_open) * volume * 100.0, 2)          # contract = 100 oz
+
+    def order_calc_margin(self, action, symbol, volume, price):
+        self.used["order_calc_margin"] += 1
+        return round(price * volume * 100.0 / 500.0, 2)
+
+    def shutdown(self):
+        self.used["shutdown"] += 1
+
+    def initialize(self):
+        self.used["initialize"] += 1
+        return True
+
+    def symbol_select(self, symbol, enable):
+        self.used["symbol_select"] += 1
+        return True
+
+
+def q_new(tmp, clk, fm, **kw):
+    logs = []
+    return MQ.XmLogger(fm, "GOLD", tmp, log=logs.append, sleep=clk.sleep, **kw), logs
+
+
+def q_run(lg, clk, seconds):
+    """Poll on the logger's own 5 s grid for `seconds` of fake time."""
+    end = clk.t + seconds
+    t = lg.next_poll_time(clk.t)
+    while t < end:
+        clk.t = t
+        lg.step(t)
+        t = lg.next_poll_time(t)
+
+
+def q_quotes(tmp, day=Q_DAY):
+    with open(os.path.join(tmp, f"quotes-{day}.csv"), newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def q_flush(lg, clk, tmp, k=None, day=Q_DAY):
+    lg.flush_window(clk.t)
+    rows = q_quotes(tmp, day)
+    return rows if k is None else rows[-k:]
+
+
+# Q1: read-only by construction (AST, so docstrings that NAME the forbidden calls are fine)
+src_tree = ast.parse(open(os.path.join(HERE, "mt5_quotes.py")).read())
+used_names = {n.attr for n in ast.walk(src_tree) if isinstance(n, ast.Attribute)} | \
+             {n.id for n in ast.walk(src_tree) if isinstance(n, ast.Name)}
+hit = sorted(set(MQ.FORBIDDEN_API) & used_names)
+check("Q: the logger never references a trading API (order_send/positions/history/login...)",
+      not hit, f"found {hit}")
+check("Q: it imports without MetaTrader5 (pure functions usable on Linux)", hasattr(MQ, "XmLogger"))
+check("Q: no engine import, so it can never touch the order path",
+      not any(isinstance(n, (ast.Import, ast.ImportFrom)) and
+              any(a.name.split(".")[0] in ("engine", "trade_filter") for a in getattr(n, "names", []))
+              for n in ast.walk(src_tree)))
+check("Q: no candle code was ported (gold's engine already consumes this broker's feed)",
+      "copy_rates" not in used_names and not hasattr(MQ, "merge_candles"))
+
+# Q2: server-offset estimator (MT5 'time' is broker server time, not UTC)
+check("Q: a fresh tick on a +3 h server -> offset 10800",
+      MQ.estimate_offset(Q_T0 + 10800 - 1, Q_T0) == 10800)
+check("Q: a fresh tick on a +2 h server -> offset 7200",
+      MQ.estimate_offset(Q_T0 + 7200 - 2, Q_T0) == 7200)
+check("Q: a tick 20 min old is NOT used to learn the offset (rounding would be ambiguous)",
+      MQ.estimate_offset(Q_T0 + 10800 - 1200, Q_T0) is None)
+check("Q: an empty tick time gives no offset", MQ.estimate_offset(0, Q_T0) is None)
+check("Q: tick age uses the offset (a 3 h-behind stale tick is 3 h old, not fresh)",
+      abs(MQ.tick_age_s(Q_T0 + 10800 - 10800, 10800, Q_T0) - 10800) < 1e-6)
+
+# Q3: a session of polls -> aligned rows, point sample + envelope, no duplicates
+tmp = tempfile.mkdtemp()
+try:
+    clk = QClock(Q_T0 + 7)                       # start mid-window on purpose
+    fm = QMT5(clk)
+    lg, logs = q_new(tmp, clk, fm)
+    lg.start(clk(), clock=clk)
+    check("Q: the server offset is learned from live ticks at start-up", lg.offset == 10800, f"{lg.offset}")
+    n_poll = [0]
+    real_step = lg.step
+
+    def scripted(now):                           # spreads 0.25 .. 0.30 cycling every poll
+        fm.spread = 0.25 + 0.01 * (n_poll[0] % 6)
+        n_poll[0] += 1
+        return real_step(now)
+
+    lg.step = scripted
+    q_run(lg, clk, 190)
+    lg.flush_window(clk.t)
+    rows = q_quotes(tmp)
+    stamps = [r["ts_utc"] for r in rows]
+    check("Q: the window grid - a poll at the boundary still belongs to the OLD window, ~1 s later to the new one",
+          lg.grid(Q_T0 + 30.0) == Q_T0 and lg.grid(Q_T0 + 31.0) == Q_T0 + 30 and lg.grid(Q_T0 + 59.0) == Q_T0 + 30
+          and lg.next_poll_time(Q_T0 + 31.0) == Q_T0 + 36.0)
+    check("Q: quote rows land on the 30 s grid (UTC)", all(x[-2:] in ("00", "30") for x in stamps), f"{stamps[:3]}")
+    check("Q: no duplicate or out-of-order quote stamps", stamps == sorted(set(stamps)), f"{len(stamps)} rows")
+    full = [r for r in rows if r["n_ok"] == "6"]
+    check("Q: a full window holds 6 polls (30 s / 5 s)", len(full) >= 4, f"{[r['n_ok'] for r in rows]}")
+    check("Q: the point sample is the FIRST valid poll; spread = ask - bid",
+          all(abs(float(r["ask"]) - float(r["bid"]) - float(r["spread"])) < 0.005 for r in rows))
+    check("Q: spread_min/max bracket the point sample",
+          all(float(r["spread_min"]) <= float(r["spread"]) <= float(r["spread_max"]) for r in rows))
+    check("Q: the envelope catches spikes between row stamps",
+          any(float(r["spread_max"]) > float(r["spread"]) for r in rows))
+    check("Q: the half-window start is flagged LATE (the sample was not at the boundary)",
+          rows[0]["flags"] == "LATE" and all(r["flags"] == "" for r in rows[1:]), f"{[r['flags'] for r in rows]}")
+    check("Q: the row carries the server offset and a small tick age",
+          all(r["srv_offset_s"] == "10800" and 0 <= float(r["tick_age_s"]) < 5 for r in rows))
+    check("Q: prices are written with the symbol's 2 digits",
+          all(len(r["bid"].split(".")[1]) == 2 and len(r["spread"].split(".")[1]) == 2 for r in rows),
+          f"{rows[0]['bid']} {rows[0]['spread']}")
+
+    # Q4: restart on the same files -> no duplicates; 25 min downtime -> an honest, visible gap
+    stamps_before = len(q_quotes(tmp))
+    lg2, logs2 = q_new(tmp, clk, fm)
+    lg2.start(clk(), clock=clk)
+    check("Q: a restart resumes after the last quote row", lg2.last_stamp is not None)
+    q_run(lg2, clk, 70)
+    lg2.flush_window(clk.t)
+    st2 = [r["ts_utc"] for r in q_quotes(tmp)]
+    check("Q: a restart never duplicates a quote row", st2 == sorted(set(st2)) and len(st2) > stamps_before)
+    clk.t += 25 * 60                               # the sidecar was down for 25 minutes
+    lg3, logs3 = q_new(tmp, clk, fm)
+    lg3.start(clk(), clock=clk)
+    q_run(lg3, clk, 40)
+    lg3.flush_window(clk.t)
+    st3 = [MQ.parse_utc(r["ts_utc"]) for r in q_quotes(tmp)]
+    check("Q: a downtime is an honest gap in the data (no invented rows), still ascending and unique",
+          st3 == sorted(set(st3)) and max(b - a for a, b in zip(st3, st3[1:])) >= 25 * 60)
+
+    # Q5: bad / stale / crossed quotes are recorded explicitly, never silently skipped
+    fm.mode = "none"
+    q_run(lg3, clk, 65)
+    r_none = q_flush(lg3, clk, tmp, 2)
+    fm.mode = "bad"
+    q_run(lg3, clk, 65)
+    r_bad = q_flush(lg3, clk, tmp, 2)
+    fm.mode = "crossed"
+    q_run(lg3, clk, 65)
+    r_crossed = q_flush(lg3, clk, tmp, 2)
+    check("Q: no tick -> NOQUOTE rows (outages are explicit)",
+          all(r["flags"] == "NOQUOTE" and r["bid"] == "" and r["n_ok"] == "0" for r in r_none), f"{r_none}")
+    check("Q: zero-price ticks -> BADQUOTE rows", all(r["flags"] == "BADQUOTE" for r in r_bad), f"{r_bad}")
+    check("Q: crossed quotes (ask < bid) are never logged as a negative spread",
+          all(r["flags"] == "BADQUOTE" and r["spread"] == "" for r in r_crossed), f"{r_crossed}")
+
+    # the CLOSED MARKET (weekend / daily break): the terminal keeps answering with a frozen tick
+    fm.mode = "stale"
+    off_before = lg3.offset
+    n_changes_before = sum(1 for m in logs3 if "offset changed" in m)
+    code_frozen = None
+    try:
+        q_run(lg3, clk, 7500)   # 2 h 5 min: the frozen tick passes through 'exactly 1 h' and '2 h old'
+    except SystemExit as e:
+        code_frozen = e.code
+    check("Q: two hours of frozen ticks never trip the dead-logger watchdog (a closed market is not a dead logger)",
+          code_frozen is None, f"exit {code_frozen}")
+    r_stale = q_flush(lg3, clk, tmp, 3)
+    check("Q: a closed market (frozen tick) is written as STALE rows - not NOQUOTE, the logger is alive",
+          all("STALE" in r["flags"] and "NOQUOTE" not in r["flags"] and r["bid"] != "" for r in r_stale),
+          f"{r_stale}")
+    check("Q: a feed frozen for hours does NOT move the learned server offset (a tick exactly N hours "
+          "old looks like a fresh tick on a server N hours behind) and the rows keep carrying it",
+          lg3.offset == off_before == 10800
+          and sum(1 for m in logs3 if "offset changed" in m) == n_changes_before
+          and all(r["srv_offset_s"] == "10800" for r in r_stale), f"{lg3.offset}")
+    fm.mode = "ok"
+    q_run(lg3, clk, 70)
+    r_back = q_flush(lg3, clk, tmp, 2)
+    check("Q: when the market reopens the rows are usable again with the same offset",
+          all(r["flags"] == "" and r["srv_offset_s"] == "10800" for r in r_back), f"{r_back}")
+
+    # one glitchy fresh tick (an hour off) must not flip the learned offset: a CHANGE needs 2 agreeing ticks
+    fm.glitch = True
+    q_run(lg3, clk, 40)
+    check("Q: a single glitchy tick (an hour off) does not flip the learned offset (a change needs 2 agreeing ticks)",
+          lg3.offset == 10800 and sum(1 for m in logs3 if "offset changed" in m) == n_changes_before,
+          f"{lg3.offset}")
+    fm.glitch = True
+    q_run(lg3, clk, 40)                      # a second glitch, separated from the first by good ticks
+    check("Q: two glitches separated by good ticks do not add up to a change (consecutive agreement only)",
+          lg3.offset == 10800 and sum(1 for m in logs3 if "offset changed" in m) == n_changes_before,
+          f"{lg3.offset}")
+
+    # Q6: server DST fall-back (+3 h -> +2 h) while the market is OPEN
+    fm.flip_utc, fm.offset_after = int(clk.t) + 200, 7200
+    q_run(lg3, clk, 1500)
+    lg3.flush_window(clk.t)
+    check("Q: the logger notices the server offset change (needs 2 consistent fresh ticks)",
+          lg3.offset == 7200 and any("offset changed" in m for m in logs3), f"offset {lg3.offset}")
+    offs = [r["srv_offset_s"] for r in q_quotes(tmp)]
+    check("Q: the quote rows switch offset with it (the empirical DST record the converter needs)",
+          {"10800", "7200"} <= set(offs) and offs.index("7200") > offs.index("10800"), f"{collections.Counter(offs)}")
+
+    # Q7: contract-spec snapshot - allow-listed, decoded, change-logged, nothing identifying
+    spec = json.load(open(os.path.join(tmp, "symbol_spec.json")))
+    dec = spec["decoded"]
+    check("Q: spec decodes account kind, execution mode and filling flags",
+          dec["account_kind"] == "DEMO" and dec["execution_mode"] == "MARKET"
+          and dec["filling_allowed_flags"] == ["FOK", "IOC"] and dec["margin_mode"] == "RETAIL_HEDGING", f"{dec}")
+    check("Q: spec records stops level, volume step, swap and contract size (100 oz)",
+          spec["symbol_info"]["trade_stops_level"] == 30 and spec["symbol_info"]["volume_step"] == 0.01
+          and spec["symbol_info"]["swap_long"] == -25.0 and spec["symbol_info"]["trade_contract_size"] == 100.0)
+    check("Q: the order_calc probe confirms 0.01 lot x $1 = $1.00 (the engine's P/L unit equals the broker's)",
+          spec["probes"]["calc_profit_usd_0.01lot_plus_1usd"] == 1.0, f"{spec['probes']}")
+    blob = "".join(open(os.path.join(tmp, f), encoding="utf-8", errors="replace").read()
+                   for f in sorted(os.listdir(tmp)))
+    leaked = [x for x in Q_SECRETS if x in blob]
+    check("Q: PRIVACY - no login, name, server, balance or Windows path in any output file (the repo is public)",
+          not leaked, f"leaked {leaked}")
+    check("Q: PRIVACY - the allow-lists contain no identifying field",
+          not ({"login", "name", "server", "balance", "equity", "profit", "margin_free"} & set(MQ.ACCOUNT_FIELDS))
+          and not ({"path", "data_path", "commondata_path"} & set(MQ.TERMINAL_FIELDS)))
+    hist = open(os.path.join(tmp, "symbol_spec_history.jsonl")).read().splitlines()
+    h0 = json.loads(hist[0])["hash"]
+    lg3.snapshot_spec(clk.t + 7 * 3600)
+    check("Q: an unchanged spec is NOT re-appended to the history",
+          len(open(os.path.join(tmp, "symbol_spec_history.jsonl")).read().splitlines()) == len(hist))
+    fm.stops_level = 250                          # the broker widens the stops level
+    lg3.snapshot_spec(clk.t + 14 * 3600)
+    hist2 = open(os.path.join(tmp, "symbol_spec_history.jsonl")).read().splitlines()
+    check("Q: a CHANGED spec (stops level) is appended and logged",
+          len(hist2) == len(hist) + 1 and json.loads(hist2[-1])["hash"] != h0
+          and json.loads(hist2[-1])["symbol_info"]["trade_stops_level"] == 250
+          and any("CHANGED" in m for m in logs3))
+
+    # Q8: what the fake terminal saw - read-only, and only the documented calls
+    allowed = {"symbol_info_tick", "symbol_info", "account_info", "terminal_info", "order_calc_profit",
+               "order_calc_margin", "shutdown", "initialize", "symbol_select"}
+    check("Q: read-only - not one trading call reached the terminal", fm.trading_calls == [],
+          f"{fm.trading_calls}")
+    check("Q: only the documented read calls were used", set(fm.used) <= allowed and not fm.unknown,
+          f"used {sorted(fm.used)} unknown {sorted(fm.unknown)}")
+finally:
+    shutil.rmtree(tmp, ignore_errors=True)
+
+# Q6b: a DST change that happens while the market is SHUT (it always does: Sunday 01:00 UTC)
+tmp = tempfile.mkdtemp()
+try:
+    clk = QClock(Q_T0 + 1)
+    fm = QMT5(clk)
+    lg, logs = q_new(tmp, clk, fm)
+    lg.start(clk(), clock=clk)
+    q_run(lg, clk, 90)
+    fm.mode = "stale"                               # the weekend close ...
+    fm.flip_utc, fm.offset_after = int(clk.t) + 600, 7200    # ... and the server clock falls back during it
+    q_run(lg, clk, 3 * 3600)
+    r_shut = q_flush(lg, clk, tmp, 3)
+    check("Q: while the market is shut the old offset is carried and every row is STALE",
+          lg.offset == 10800 and all("STALE" in r["flags"] and r["srv_offset_s"] == "10800" for r in r_shut),
+          f"{lg.offset} {[r['flags'] for r in r_shut]}")
+    fm.mode = "ok"                                  # ... the Sunday-evening reopen
+    q_run(lg, clk, 120)
+    r_open = q_flush(lg, clk, tmp, 2)
+    check("Q: the new offset is learned from the first two fresh ticks after the reopen",
+          lg.offset == 7200 and any("offset changed" in m for m in logs)
+          and all(r["srv_offset_s"] == "7200" and r["flags"] == "" for r in r_open), f"{lg.offset} {r_open}")
+finally:
+    shutil.rmtree(tmp, ignore_errors=True)
+
+# Q9: file hygiene - schema drift, torn line, CRLF, midnight rotation
+tmp = tempfile.mkdtemp()
+try:
+    clk = QClock(Q_T0 + 1)
+    fm = QMT5(clk)
+    lg, logs = q_new(tmp, clk, fm)
+    lg.start(clk(), clock=clk)
+    q_run(lg, clk, 100)
+    lg.flush_window(clk.t)
+    qpath = os.path.join(tmp, f"quotes-{Q_DAY}.csv")
+    txt = open(qpath, newline="").read()
+    open(qpath, "w", newline="").write(txt.replace("n_ok,n_bad", "n_ok,n_bad,extra", 1))
+    lg2, logs2 = q_new(tmp, clk, fm)
+    lg2.start(clk(), clock=clk)
+    q_run(lg2, clk, 70)
+    lg2.flush_window(clk.t)
+    aside = [f for f in os.listdir(tmp) if f.startswith(f"quotes-{Q_DAY}.csv.old-")]
+    check("Q: a drifted header moves the file ASIDE instead of appending misaligned rows",
+          len(aside) == 1 and open(qpath).readline().strip().split(",") == MQ.QUOTE_FIELDS
+          and any("schema drift" in m for m in logs2), f"{aside}")
+    TORN = "2026-10-13 12:05:00,4500.00,450"
+    with open(qpath, "ab") as f:
+        f.write(TORN.encode())                              # killed mid-write: no newline
+    lg3, logs3 = q_new(tmp, clk, fm)
+    lg3.start(clk(), clock=clk)
+    q_run(lg3, clk, 70)
+    lg3.flush_window(clk.t)
+    lines = open(qpath).read().splitlines()
+    bad = [ln for ln in lines[1:] if len(ln.split(",")) != len(MQ.QUOTE_FIELDS)]
+    check("Q: a torn last line stays isolated (byte-identical, not glued to the next row) and the next row is intact",
+          bad == [TORN] and len(lines[-1].split(",")) == len(MQ.QUOTE_FIELDS)
+          and len(lines) > lines.index(TORN) + 1, f"bad {bad}")
+    check("Q: no carriage return in any file (the Wine Python would write CRLF in text mode)",
+          not any(b"\r" in open(os.path.join(tmp, f), "rb").read() for f in os.listdir(tmp)))
+    clk.t = float(Q_T0 + 12 * 3600 - 40)                   # 40 s before 2026-10-14 00:00 UTC
+    lg4, logs4 = q_new(tmp, clk, fm)
+    lg4.start(clk(), clock=clk)
+    q_run(lg4, clk, 100)
+    lg4.flush_window(clk.t)
+    days = sorted(f for f in os.listdir(tmp) if f.startswith("quotes-") and f.endswith(".csv"))
+    d2 = q_quotes(tmp, "2026-10-14")
+    check("Q: quote files rotate at UTC midnight", days == ["quotes-2026-10-13.csv", "quotes-2026-10-14.csv"]
+          and d2 and d2[0]["ts_utc"] == "2026-10-14 00:00:00", f"{days} {d2[:1]}")
+finally:
+    shutil.rmtree(tmp, ignore_errors=True)
+
+# Q10/Q11: watchdog and the real loop (injected clock + sleep, no real waiting)
+tmp = tempfile.mkdtemp()
+try:
+    clk = QClock(Q_T0 + 1)
+    fm = QMT5(clk)
+    lg, logs = q_new(tmp, clk, fm)
+    lg.start(clk(), clock=clk)
+    q_run(lg, clk, 30)
+    fm.mode = "none"
+    code = None
+    try:
+        q_run(lg, clk, 1200)
+    except SystemExit as e:
+        code = e.code
+    check("Q: 15 minutes without a quote exits 2 so systemd restarts a clean process", code == 2, f"{code}")
+    check("Q: before exiting it re-initialises the MT5 link (once a minute)",
+          fm.used["shutdown"] >= 5 and fm.used["initialize"] >= 5, f"{fm.used['shutdown']}")
+    check("Q: the outage is in the data as NOQUOTE rows",
+          sum(1 for r in q_quotes(tmp) if r["flags"] == "NOQUOTE") >= 20)
+finally:
+    shutil.rmtree(tmp, ignore_errors=True)
+
+tmp = tempfile.mkdtemp()
+try:
+    clk = QClock(Q_T0 + 2.3)
+    fm = QMT5(clk)
+    fm.mode = "stale"                       # a closed market must NOT trip the watchdog: ticks still answer
+    seen = []
+    lg, logs = q_new(tmp, clk, fm)
+    real = lg.step
+
+    def spy(now):
+        seen.append(round(now, 3))
+        if len(seen) >= 14:
+            raise KeyboardInterrupt
+        return real(now)
+
+    lg.step = spy
+    lg.run_forever(clock=clk)
+    gaps = {round(b - a, 3) for a, b in zip(seen, seen[1:])}
+    check("Q: run_forever polls on a steady 5 s grid and ends cleanly on interrupt",
+          len(seen) == 14 and gaps == {5.0}, f"{gaps}")
+    check("Q: the partial window is flushed on shutdown", len(q_quotes(tmp)) >= 2)
+    lg.step = real                           # drop the spy: the next check polls for real
+    code = None
+    try:
+        q_run(lg, clk, 3 * 3600)             # three hours of closed market through the watchdog
+    except SystemExit as e:
+        code = e.code
+    check("Q: a closed market (frozen but answering ticks) never trips the dead-logger watchdog", code is None,
+          f"exit {code}")
+finally:
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+# Q14: the CLI modes the on-box checklist tells the operator to run (docs/XM-LOGGER.md)
+def q_cli(argv, env=None):
+    clk = QClock(Q_T0 + 1)
+    fm = QMT5(clk)
+    old = dict(os.environ)
+    os.environ.update(env or {})
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            rc = MQ.main(argv, mt5mod=fm, clock=clk, sleep=clk.sleep)
+    finally:
+        os.environ.clear()
+        os.environ.update(old)
+    return rc, buf.getvalue(), fm
+
+
+tmp = tempfile.mkdtemp()
+try:
+    rc, out, fm = q_cli(["--spec", "--dir", tmp])
+    try:
+        parsed = json.loads(out)
+    except ValueError:
+        parsed = None
+    check("Q: --spec prints PURE JSON (nothing before or after it) and writes no file",
+          rc == 0 and parsed is not None and os.listdir(tmp) == [], f"rc {rc} files {os.listdir(tmp)}")
+    check("Q: --spec output carries no login/name/server/balance/path",
+          not [x for x in Q_SECRETS if x in out] and parsed["decoded"]["account_kind"] == "DEMO",
+          f"{[x for x in Q_SECRETS if x in out]}")
+    rc, out, fm = q_cli(["--once", "--dir", tmp], {"MT5_QUOTES_LABEL": "XM Standard demo"})
+    names = sorted(os.listdir(tmp))
+    i_spec, i_off = out.find("contract spec recorded"), out.find("server offset +3h")
+    check("Q: --once learns the offset, records the spec and writes a quote row, in that order",
+          rc == 0 and 0 <= i_spec < i_off and "quote row" in out
+          and names == [f"quotes-{Q_DAY}.csv", "symbol_spec.json", "symbol_spec_history.jsonl"],
+          f"rc {rc} {names}\n{out[:300]}")
+    check("Q: --once is read-only too, and the operator's label is published (MT5 does not expose the tier)",
+          fm.trading_calls == [] and not fm.unknown
+          and json.load(open(os.path.join(tmp, "symbol_spec.json")))["label"] == "XM Standard demo")
+    if MQ.mt5 is None:
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                MQ.main(["--spec"])
+            code = None
+        except SystemExit as e:
+            code = e.code
+        check("Q: without MetaTrader5 the CLI refuses with a clear message and exit 1 (Linux python)",
+              code == 1 and "install it in the WINE python" in buf.getvalue(), f"{code}")
+finally:
+    shutil.rmtree(tmp, ignore_errors=True)
+
+# Q12: the deploy wiring that gets the logger's data to main (static: autosync is bash with side
+# effects, so it is exercised by the sandbox harness in docs/XM-LOGGER.md, but these lines must never regress)
+auto = open(os.path.join(HERE, "autosync.sh")).read()
+data_line = next((ln for ln in auto.splitlines() if ln.startswith("DATA_FILES=")), "")
+check("Q: autosync commits xm_data/ with the other live data (else the logger's output never reaches main)",
+      "xm_data" in data_line, data_line)
+check("Q: an autosync merge conflict in xm_data/ resolves server-wins like the other data files",
+      "|xm_data/*)" in auto and "git checkout --ours" in auto.split("|xm_data/*)")[1][:80])
+check("Q: autosync actually RUNS the report and puts its line in the digest (advisory)",
+      re.search(r"python3 tools/xm_quote_report\.py --quiet\s*>", auto) is not None and "\U0001F4E1 $XM_MSG" in auto)
+alert_block = auto.split('"xm logger: STALE"*)')[1].split(";;")[0] if '"xm logger: STALE"*)' in auto else "$"
+check("Q: the STALE alert names the unit and carries no changing numbers",
+      "$XM_MSG" not in alert_block and "mt5quotes-gold" in alert_block, alert_block.strip()[:90])
+before_4d, after_4d = auto.split("phase 4d")[0], auto.split("phase 4d")[1].split('log "done.')[0]
+check("Q: the logger phase runs AFTER the deploy decision and never assigns a deploy variable (advisory only)",
+      "XM_MSG" not in before_4d and not any(v in after_4d for v in ("SMOKE=", "DEPLOY_MSG=", "git reset", "MERGE_RC=")))
+unit_txt = open(os.path.join(ROOT, "deploy", "mt5quotes.service")).read()
+check("Q: the unit file installs as mt5quotes-gold (never BTC's mt5quotes-btc) and never carries a login or password",
+      "mt5quotes-gold" in unit_txt and "mt5quotes-btc" not in unit_txt
+      and "MT5_QUOTES_DIR=Z:/opt/gold/xm_data" in unit_txt
+      and not any(w in unit_txt.lower().replace("never put a login", "").replace("or password", "")
+                  for w in ("password=", "login=", "mt5_login", "mt5_password")))
+check("Q: the logger's default data dir is the one autosync commits (xm_data under /opt/gold)",
+      MQ.DEFAULT_DIR == "Z:/opt/gold/xm_data")
+check("Q: an incompatible interval/poll falls back to 30/5 instead of mis-aligning rows",
+      (lambda lg: (lg.interval, lg.poll))(MQ.XmLogger(QMT5(QClock(Q_T0)), "GOLD", "/nonexistent-never-written",
+                                                    interval=30, poll=7, log=lambda m: None)) == (30, 5))
+
+# --- Scenario R ------------------------------------------------------------
+print("\nScenario R: xm_quote_report + broker_time (measured cost vs the assumed $0.40, "
+      "closed market vs stall, DST evidence)")
+import re  # noqa: E402
+import xm_quote_report as XR  # noqa: E402
+import broker_time as BT  # noqa: E402
+
+R_START = datetime(2026, 10, 5, 0, 0, tzinfo=timezone.utc)      # a Monday
+R_END = datetime(2026, 10, 21, 0, 0, tzinfo=timezone.utc)        # 16 whole days
+R_STEP = 300                                  # this fixture's logger interval (the report reads it from the data)
+R_FIELDS = MQ.QUOTE_FIELDS
+
+
+def r_closed(dt):
+    """Synthetic schedule: daily break 21:55-23:05 UTC, weekend Fri 21:55 -> Sun 23:05."""
+    m, wd = dt.hour * 60 + dt.minute, dt.weekday()
+    if 21 * 60 + 55 <= m < 23 * 60 + 5:
+        return True
+    return (wd == 4 and m >= 21 * 60 + 55) or wd == 5 or (wd == 6 and m < 23 * 60 + 5)
+
+
+def r_spread(dt):
+    m, h = dt.hour * 60 + dt.minute, dt.hour
+    if 21 * 60 + 45 <= m <= 22 * 60 + 30:
+        return 0.60                                     # the engine's rollover blackout
+    if h >= 23 or h < 7:
+        return 0.30                                     # ASIA
+    return 0.20 if h < 12 else 0.22                     # LONDON / NY
+
+
+def r_stall(dt):                                        # market open but the tick is frozen: Wed 10:00-10:40
+    return dt.date().isoformat() == "2026-10-14" and 10 * 60 <= dt.hour * 60 + dt.minute < 10 * 60 + 40
+
+
+def r_outage(dt):                                       # the LOGGER is down: Thu 14:00-14:30 (no rows)
+    return dt.date().isoformat() == "2026-10-15" and 14 * 60 <= dt.hour * 60 + dt.minute < 14 * 60 + 30
+
+
+def r_write_quotes(qdir, start=R_START, end=R_END, offset=10800):
+    os.makedirs(qdir, exist_ok=True)
+    by_day = {}
+    t = start
+    while t < end:
+        if not r_outage(t):
+            sp = r_spread(t)
+            frozen = r_closed(t) or r_stall(t)
+            row = {"ts_utc": t.strftime("%Y-%m-%d %H:%M:%S"), "bid": "4500.00", "ask": "%.2f" % (4500 + sp),
+                   "spread": "%.2f" % sp, "spread_min": "%.2f" % sp, "spread_max": "%.2f" % (sp + 0.05),
+                   "n_ok": 6, "n_bad": 0, "tick_age_s": "900.0" if frozen else "0.6",
+                   "srv_offset_s": offset, "flags": "STALE" if frozen else ""}
+            by_day.setdefault(t.strftime("%Y-%m-%d"), []).append(row)
+        t += timedelta(seconds=R_STEP)
+    for day, rows in by_day.items():
+        with open(os.path.join(qdir, f"quotes-{day}.csv"), "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=R_FIELDS, lineterminator="\n")
+            w.writeheader()
+            w.writerows(rows)
+
+
+LEDGER_HEAD = ["Trade_Num", "Trade_Type", "Entry_Time", "Exit_Time", "Entry_Price", "Stop_Loss", "Take_Profit",
+               "Exit_Price", "Exit_Reason", "Profit", "Balance_After", "RSI_At_Entry", "ATR_At_Entry",
+               "Wick_Ratio_At_Entry", "EMA50_At_Entry", "EMA200_At_Entry"]
+
+
+def r_write_ledger(root, spec_rows):
+    """spec_rows: (entry, exit, pnl). Entry 4500.00, stop 4497.00, TP 4504.50 -> 1R = $3.00 for every trade."""
+    with open(os.path.join(root, "trades.csv"), "w", newline="") as f:
+        w = csv.writer(f, lineterminator="\r\n")
+        w.writerow(LEDGER_HEAD)
+        for i, (et, xt, pnl) in enumerate(spec_rows, 1):
+            w.writerow([i, "BUY", et, xt, "4500.00", "4497.00", "4504.50", "%.2f" % (4500 + pnl),
+                        "TP" if pnl > 0 else "SL", "%.2f" % pnl, "500.00", "50.0", "1.50", "50.0%", "4499.00", "4490.00"])
+
+
+def r_main(root, *argv, now=None):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = XR.main(["--root", root, *argv] + (["--now", str(now)] if now is not None else []))
+    return rc, buf.getvalue()
+
+
+R_LAST_ROW = R_END.timestamp() - R_STEP
+R_NOW = R_LAST_ROW + 600                      # 10 min after the newest row
+NY_PNL = [3.0, -2.0, 3.0, -2.0, 0.0, 3.0, -2.0, -2.0, 3.0, 0.0, -2.0, 3.0]        # sum +5.00
+trade_rows = [("2026-10-04 12:00:02", "2026-10-04 12:05:01", 3.0)]                 # before the logger: no quote
+for day in ("2026-10-07", "2026-10-08", "2026-10-09"):                             # 12 NY trades (spread 0.22)
+    for hh in (13, 14, 15, 16):
+        trade_rows.append((f"{day} {hh}:00:02", f"{day} {hh}:05:01", NY_PNL[len(trade_rows) - 1]))
+for day in ("2026-10-12", "2026-10-13", "2026-10-14"):                             # 3 trades that ENTER at 0.22 and
+    trade_rows.append((f"{day} 21:40:01", f"{day} 21:50:01", -2.0))                # EXIT in the 0.60 rollover spike
+trade_rows.append(("2026-10-14 10:10:01", "2026-10-14 10:20:01", 3.0))             # inside the feed stall: stale quotes
+trade_rows.append(("2026-10-15 13:55:01", "2026-10-15 14:10:01", -2.0))            # exit inside the logger outage
+
+root_r = tempfile.mkdtemp()
+try:
+    r_write_quotes(os.path.join(root_r, "xm_data"))
+    r_write_ledger(root_r, trade_rows)
+    clk_r = QClock(Q_T0)
+    spec_r = MQ.build_spec(QMT5(clk_r), "GOLD", "XM Standard demo", Q_T0)
+    with open(os.path.join(root_r, "xm_data", "symbol_spec.json"), "w") as fh_r:
+        json.dump(spec_r, fh_r)
+    with open(os.path.join(root_r, "xm_data", "symbol_spec_history.jsonl"), "w") as fh_r:
+        fh_r.write(json.dumps(spec_r) + "\n")
+
+    rc, out = r_main(root_r, now=R_NOW)
+    check("R: the full report runs and has all five sections",
+          rc == 0 and all(h in out for h in ("== 1. LOGGER", "== 2. SPREAD", "== 3. COST", "== 4. SERVER TIME",
+                                            "== 5. SPEC")), out[:200])
+    check("R: 16 complete days and 2 complete weekends meet the sample target (a closed day still has its rows)",
+          "complete UTC days (>= 80% of rows): 16 / 14" in out and "complete weekends (Sat+Sun): 2 / 2" in out
+          and "sample target: MET" in out)
+    check("R: a logger outage is reported as an outage with its length (35 min between rows)",
+          "1 gaps > 5 min" in out and "longest gaps: 2026-10-15 13:55:00 UTC for 35 min" in out,
+          out[out.find("rows "):][:300])
+    check("R: scheduled closures (4 daily breaks + 1 weekend per week) are NOT outages: 12 scheduled runs",
+          "12 scheduled runs (daily break / weekend)" in out, [ln for ln in out.splitlines() if "scheduled runs" in ln])
+    check("R: a frozen feed while the market should be open IS reported as a stall, with its time and length",
+          "FEED STALLS while the market should be open" in out and "2026-10-14 10:00:00 UTC (Wed) 40 min" in out
+          and "1, 0.7 h in total" in out, [ln for ln in out.splitlines() if "STALL" in ln])
+    check("R: the newest row is fresh and the market is shown as open",
+          "newest row 10 min ago (market OPEN - fresh tick)" in out)
+
+    def row_of(label):
+        return next((ln for ln in out.splitlines() if ln.strip().startswith(label)), "")
+
+    check("R: spread by session reproduces the synthetic schedule (LONDON 0.20, NY 0.22, ASIA 0.30)",
+          re.search(r"LONDON 07-12\s+\d+\s+\$\s+0\.20", row_of("LONDON 07-12"))
+          and re.search(r"NY 12-21\s+\d+\s+\$\s+0\.22", row_of("NY 12-21"))
+          and re.search(r"ASIA 23-07\s+\d+\s+\$\s+0\.30", row_of("ASIA 23-07")),
+          [row_of("LONDON 07-12"), row_of("NY 12-21"), row_of("ASIA 23-07")])
+    check("R: the engine's own blackout windows are tabulated, and the rollover window shows its spread spike",
+          re.search(r"21:45-22:30 Daily Market R\s+\d+\s+\$\s+0\.60", out) is not None
+          and re.search(r"13:25-15:15 NY Open & US H\s+\d+\s+\$\s+0\.22", out) is not None
+          and "outside every blackout" in out)
+    check("R: the weekly re-open (Sunday evening -> Monday 01:00) has its own row",
+          "WEEKLY OPEN (Sun-Mon 01h)" in out)
+    usable_n = rows_n = 0
+    t_r = R_START
+    while t_r < R_END:
+        if not r_outage(t_r):
+            rows_n += 1
+            usable_n += not (r_closed(t_r) or r_stall(t_r))
+        t_r += timedelta(seconds=R_STEP)
+    check("R: exactly the usable rows enter the spread tables (%d of %d rows; closed-market and stalled rows are "
+          "excluded)" % (usable_n, rows_n),
+          f"usable {usable_n} of {rows_n} rows" in out, out.split("== 2. SPREAD")[1].split("\n")[0])
+    check("R: the assumed $0.40 is compared with 1R ($3.00 here) and with the measured median",
+          "the assumed $0.40 is 13.3% of 1R" in out and re.search(r"median spread = \d+\.\d% of 1R", out) is not None,
+          [ln for ln in out.splitlines() if "of 1R" in ln])
+    check("R: cost section joins the ledger to the quotes: 15 trades have a usable quote at entry and exit "
+          "(not the pre-logger, stalled or outage ones)",
+          "15 trades with a usable quote at entry and exit" in out, [ln for ln in out.splitlines() if "usable quote at entry" in ln])
+    check("R: measured round trip = the MEAN of the entry and exit spread (3 trades: (0.22+0.60)/2 = 0.41) "
+          "-> mean 0.26, median 0.22, vs the assumed 0.40",
+          "measured round trip: mean $0.26  median $0.22" in out and "(assumed $0.40)" in out,
+          [ln for ln in out.splitlines() if "measured round trip" in ln])
+    check("R: same trades: gross -1.00 | net at 0.40 flat -7.00 | net at the MEASURED cost -4.87",
+          "gross -1.00 | net at $0.40 flat -7.00 | net at the MEASURED cost -4.87" in out,
+          [ln for ln in out.splitlines() if "same trades" in ln])
+    check("R: it tells the operator the exact flags that re-cost the ledger at the measured median",
+          "win_rate_report.py --spread 0.22" in out and "strategy_lab.py --cost 0.11" in out)
+    check("R: the sample is flagged as a plumbing check below n=30", "far too small to conclude anything" in out)
+    check("R: one offset in the data -> the DST rule is reported UNVERIFIED with both next-change dates",
+          "verdict [UNVERIFIED]" in out and "2026-10-25 01:00" in out and "2026-11-01 06:00" in out, out[out.find("verdict"):][:200])
+    check("R: spec section: 0.01 lot x $1 = $1.00 and 100 oz contract are confirmed, DEMO account noted",
+          "0.01 lot x $1 move = $1.00 (order_calc_profit) OK" in out and "contract size 100 oz (0.01 lot = 1 oz) OK" in out
+          and "DEMO" in out and "XM Standard demo" in out)
+
+    # --quiet: the autosync digest line
+    rc, q_ok = r_main(root_r, "--quiet", now=R_NOW)
+    check("R: --quiet is ONE line starting 'xm logger: OK'",
+          rc == 0 and q_ok.startswith("xm logger: OK |") and len(q_ok.strip().splitlines()) == 1
+          and "16/14 complete days, 2/2 weekends" in q_ok and "spread median $0.22" in q_ok, q_ok.strip())
+    rc, q_stale = r_main(root_r, "--quiet", now=R_LAST_ROW + 3 * 3600)
+    check("R: a logger whose newest row is hours old reads STALE (so autosync raises its warning)",
+          q_stale.startswith("xm logger: STALE (newest row 3.0 h old - is mt5quotes-gold running?)"), q_stale.strip())
+    rc, q_none = r_main(tempfile.mkdtemp(), "--quiet", now=R_NOW)
+    check("R: no data yet -> 'not collecting yet' (never an error, never STALE)",
+          q_none.startswith("xm logger: not collecting yet") and rc == 0, q_none.strip())
+    rc, q_dir = r_main(root_r, "--quiet", "--dir", "no_such_dir", now=R_NOW)
+    check("R: --quiet never fails, even on a missing directory", rc == 0 and q_dir.startswith("xm logger:"), q_dir.strip())
+
+    # --days: only the newest N UTC days
+    rc, out2 = r_main(root_r, "--days", "2", now=R_NOW)
+    nrows = int(re.search(r"(\d+) quote files, (\d+) rows", out2).group(2))
+    check("R: --days 2 reads only the newest two days (about 2 x 288 rows)", rc == 0 and 570 <= nrows <= 580, f"{nrows}")
+
+    # a torn line and a foreign header are skipped and counted, never fatal
+    qd = os.path.join(root_r, "xm_data")
+    with open(os.path.join(qd, "quotes-2026-10-20.csv"), "ab") as fh_r:
+        fh_r.write(b"2026-10-20 23:59:00,4500.0")
+    with open(os.path.join(qd, "quotes-2026-10-19.csv"), "w") as fh_r:
+        fh_r.write("some,other,header\n1,2,3\n")
+    rc, out3 = r_main(root_r, now=R_NOW)
+    check("R: malformed lines and files are skipped and counted, the report still runs",
+          rc == 0 and "malformed lines skipped" in out3, out3.splitlines()[0])
+finally:
+    shutil.rmtree(root_r, ignore_errors=True)
+
+# R2: the market is CLOSED right now -> --quiet says so, and still reads OK (the logger is alive)
+root_r = tempfile.mkdtemp()
+try:
+    r_write_quotes(os.path.join(root_r, "xm_data"), end=datetime(2026, 10, 10, 12, 0, tzinfo=timezone.utc))   # Sat noon
+    rc, q_closed = r_main(root_r, "--quiet", now=datetime(2026, 10, 10, 12, 4, tzinfo=timezone.utc).timestamp())
+    check("R: on a Saturday the report reads OK with 'market closed or feed frozen' (a closed market is not a dead logger)",
+          q_closed.startswith("xm logger: OK") and "market closed or feed frozen" in q_closed, q_closed.strip())
+    rc, out4 = r_main(root_r, now=datetime(2026, 10, 10, 12, 4, tzinfo=timezone.utc).timestamp())
+    check("R: ... and the full report shows 'market CLOSED or feed frozen' and no stall",
+          "market CLOSED or feed frozen" in out4 and "FEED STALLS" not in out4
+          and "feed stalls outside the scheduled closures: none" in out4, out4[out4.find("newest row"):][:160])
+    rc, out5 = r_main(root_r, now=datetime(2026, 10, 10, 12, 4, tzinfo=timezone.utc).timestamp())
+    check("R: with only 5 days of data the sample target is NOT met and says how much is missing",
+          "sample target: NOT YET" in out5)
+finally:
+    shutil.rmtree(root_r, ignore_errors=True)
+
+# R3: scheduled-closure classification and the session helpers (UTC)
+def r_t(s):
+    return datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc).timestamp()
+
+
+check("R: closed windows - Fri evening, all Saturday, Sunday until 23:10 and the daily break are scheduled",
+      all(XR.in_closed_window(r_t(s)) for s in ("2026-10-09 21:00", "2026-10-09 23:30", "2026-10-10 12:00",
+                                                "2026-10-11 22:00", "2026-10-12 21:30", "2026-10-13 22:30")))
+check("R: ... and ordinary trading hours are not (Mon 10:00, Wed 13:00, Sun 23:11, Fri 20:00)",
+      not any(XR.in_closed_window(r_t(s)) for s in ("2026-10-12 10:00", "2026-10-14 13:00", "2026-10-11 23:11",
+                                                    "2026-10-09 20:00")))
+runs_r = [(r_t("2026-10-09 21:55"), 49 * 3600 + 10 * 60),        # the weekend: scheduled
+          (r_t("2026-10-13 21:55"), 70 * 60),                   # a daily break: scheduled
+          (r_t("2026-10-12 21:55"), 5 * 3600),                  # a 'break' that does not end by 23:10: a stall
+          (r_t("2026-10-14 10:00"), 40 * 60),                   # mid-session: a stall
+          (r_t("2026-10-14 11:00"), 5 * 60)]                    # a 5 min blip: below the stall threshold
+sched_r, stall_r = XR.classify_runs(runs_r)
+check("R: classify_runs separates scheduled closures from stalls (and ignores blips under 10 min)",
+      len(sched_r) == 2 and [t for t, _ in stall_r] == [r_t("2026-10-12 21:55"), r_t("2026-10-14 10:00")],
+      f"{len(sched_r)} {stall_r}")
+check("R: session buckets are exhaustive and ordered (ASIA 23-07, LONDON 07-12, NY 12-21, ROLLOVER 21-23)",
+      [XR.session_of(r_t(f"2026-10-14 {h:02d}:30")) for h in (0, 6, 7, 11, 12, 20, 21, 22, 23)] ==
+      ["ASIA", "ASIA", "LONDON", "LONDON", "NY", "NY", "ROLLOVER", "ROLLOVER", "ASIA"])
+check("R: the weekly open is Sunday plus Monday before 01:00 (and nothing else)",
+      XR.week_open_of(r_t("2026-10-11 23:30")) and XR.week_open_of(r_t("2026-10-12 00:30"))
+      and not XR.week_open_of(r_t("2026-10-12 01:00")) and not XR.week_open_of(r_t("2026-10-10 23:30")))
+check("R: the assumed cost mirrors strategy_lab's --cost default ($0.20 per side) and 1R uses the 1:1.5 geometry",
+      XR.ASSUMED_SIDE_USD == 0.20 and 'default=0.20' in open(os.path.join(HERE, "strategy_lab.py")).read()
+      and XR.RR == 1.5 and XR.ASSUMED_USD_PER_TRADE == 0.40)
+
+# R4: the DST verdict (what the converter's rule choice rests on) - synthetic offsets around the 2026 changes
+def r_samples(rule=None, fixed=None, start="2026-10-24 00:00", end="2026-11-02 12:00", step=600, stale=False):
+    out, t, end_t = [], r_t(start), r_t(end)
+    while t < end_t:
+        off = fixed if fixed is not None else BT.server_offset_s(datetime.fromtimestamp(t, tz=timezone.utc).replace(tzinfo=None), rule)
+        out.append(XR.Sample(t, 0.25, 0.25, 0.30, frozenset({"STALE"}) if stale else frozenset(), 0.5, 6, 0, off))
+        t += step
+    return out
+
+
+check("R: offsets that follow the EU rule through the change -> verdict EU",
+      XR.server_time_verdict(r_samples("eu"))[0] == "EU", XR.server_time_verdict(r_samples("eu"))[1])
+check("R: offsets that follow the US rule -> verdict US (the window 10-25..11-01 tells them apart)",
+      XR.server_time_verdict(r_samples("us"))[0] == "US", XR.server_time_verdict(r_samples("us"))[1])
+check("R: a +4 h server that neither rule explains -> NEITHER, with the advice to use --offset-hours",
+      XR.server_time_verdict(r_samples(fixed=14400))[0] == "NEITHER"
+      and "--offset-hours" in XR.server_time_verdict(r_samples(fixed=14400))[1])
+check("R: offsets seen only on STALE rows are not evidence -> NONE",
+      XR.server_time_verdict(r_samples("eu", stale=True))[0] == "NONE")
+one = r_samples(fixed=10800, start="2026-10-13 00:00", end="2026-10-20 00:00")
+check("R: a single offset -> UNVERIFIED and it names the next EU and US change",
+      XR.server_time_verdict(one)[0] == "UNVERIFIED" and "2026-10-25 01:00" in XR.server_time_verdict(one)[1])
+
+# R5: broker_time (the one place the DST rule lives)
+check("R: EU summer time 2026 = 2026-03-29 01:00 .. 2026-10-25 01:00 UTC; US = 03-08 07:00 .. 11-01 06:00",
+      BT.eu_transitions(2026) == (datetime(2026, 3, 29, 1), datetime(2026, 10, 25, 1))
+      and BT.us_transitions(2026) == (datetime(2026, 3, 8, 7), datetime(2026, 11, 1, 6)))
+check("R: server offset is +3 h in summer and +2 h in winter, switching at 01:00 UTC",
+      BT.server_offset_s(datetime(2026, 7, 1, 12)) == 10800 and BT.server_offset_s(datetime(2026, 12, 1, 12)) == 7200
+      and BT.server_offset_s(datetime(2026, 10, 25, 0, 59)) == 10800 and BT.server_offset_s(datetime(2026, 10, 25, 1, 0)) == 7200)
+rt_bad, t_bt = 0, datetime(2025, 1, 1)
+REPEATED = (datetime(2025, 10, 26, 1), datetime(2026, 10, 25, 1))        # 01:00-01:59 UTC: server 03:xx happens twice
+while t_bt < datetime(2027, 1, 1):
+    sv = t_bt + timedelta(seconds=BT.server_offset_s(t_bt))
+    if not any(h <= t_bt < h + timedelta(hours=1) for h in REPEATED) and BT.server_to_utc(sv) != t_bt:
+        rt_bad += 1
+    t_bt += timedelta(minutes=30)
+check("R: server_to_utc inverts server_offset_s for every half hour of 2025-2026 (except the one repeated fall-back hour)",
+      rt_bad == 0, f"{rt_bad} mismatches")
+check("R: a fixed offset and a bad rule name behave", BT.server_offset_s(datetime(2026, 7, 1), "fixed:3") == 10800
+      and BT.server_to_utc(datetime(2026, 1, 1, 12), "fixed:2") == datetime(2026, 1, 1, 10))
+try:
+    BT.server_offset_s(datetime(2026, 1, 1), "zz")
+    bad_rule_ok = False
+except ValueError:
+    bad_rule_ok = True
+check("R: an unknown DST rule raises instead of silently guessing", bad_rule_ok)
+
+
+# R6: the report reads the LOGGER'S OWN output (not a hand-written fixture): open -> frozen -> open
+root_r = tempfile.mkdtemp()
+try:
+    clk = QClock(Q_T0 + 1)
+    fm = QMT5(clk)
+    lg = MQ.XmLogger(fm, "GOLD", os.path.join(root_r, "xm_data"), log=lambda m: None, sleep=clk.sleep)
+    lg.start(clk(), clock=clk)
+    q_run(lg, clk, 20 * 60)
+    fm.mode = "stale"                                   # the feed freezes mid-session (Tue 12:20 UTC, not a scheduled break)
+    q_run(lg, clk, 20 * 60)
+    fm.mode = "ok"
+    q_run(lg, clk, 20 * 60)
+    lg.flush_window(clk.t)
+    got, bad_n, nf = XR.load_quotes(os.path.join(root_r, "xm_data"))
+    runs_l = XR.unusable_runs(got, 30)
+    sched_l, stalls_l = XR.classify_runs(runs_l)
+    check("R: the report parses every row the logger wrote (no malformed line, 30 s cadence)",
+          len(got) >= 115 and bad_n == 0 and XR.coverage(got)["interval"] == 30, f"{len(got)} rows, {bad_n} bad")
+    check("R: a mid-session freeze in the logger's real output is ONE feed stall of about 18 minutes "
+          "(the first ~2 min of a frozen tick are not yet old enough to be flagged)",
+          len(stalls_l) == 1 and len(sched_l) == 0 and 15 * 60 <= stalls_l[0][1] <= 20 * 60,
+          f"stalls {stalls_l} sched {sched_l}")
+    check("R: the logger's rows around the freeze are usable again afterwards, with the learned offset",
+          XR.usable(got[-1]) and got[-1].off == 10800 and all(XR.usable(x) for x in got[-10:]))
+    rc, out6 = r_main(root_r, now=clk.t + 60)
+    check("R: the full report runs on the logger's own files (spec snapshot included) and sees the stall",
+          rc == 0 and "FEED STALLS while the market should be open" in out6
+          and "0.01 lot x $1 move = $1.00 (order_calc_profit) OK" in out6 and "DEMO" in out6
+          and "verdict [UNVERIFIED]" in out6, out6[:160])
+    rc, q6 = r_main(root_r, "--quiet", now=clk.t + 60)
+    check("R: --quiet on the logger's own files is OK and one line", q6.startswith("xm logger: OK") and len(q6.splitlines()) == 1,
+          q6.strip())
+finally:
+    shutil.rmtree(root_r, ignore_errors=True)
 
 
 print()
