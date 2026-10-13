@@ -30,6 +30,7 @@ produces. Everything else in this file holds if these are true:
 | cron user is **root** | `systemctl stop/start` the engine | `crontab -l` (root's crontab) |
 | `python3` works from that cwd | smoke gate + `check_data.py` + `handoff_check.py` | `cd /opt/gold && python3 tools/check_data.py` |
 | `docs/HANDOFF.md` has its snapshot block | the advisory freshness check reads it | `cd /opt/gold && python3 tools/handoff_check.py --quiet` |
+| *(optional)* the quote logger `mt5quotes-gold` is running | autosync commits its `xm_data/` and reports its liveness; without it the digest just says `not collecting yet` | `systemctl status mt5quotes-gold` (install: `docs/XM-LOGGER.md` §3) |
 | No **uncommitted hand-edits** in `engine.py` / `trade_filter.py` / `dashboard.py` / `tools/` | the script refuses to deploy over them | `cd /opt/gold && git status --short` |
 
 `/opt/gold/.env` is read for the Telegram token / chat id but is never committed or required —
@@ -92,10 +93,12 @@ a trading day's log (which `handoff_check.py` reports as "snapshot AHEAD of the 
 🩺 integrity: 0 fail, 8 warn ==
 📈 candles: ok (12 open min since last candle)
 📝 handoff: fresh, 2 advisory drift (data moved since the snapshot)
+📡 xm logger: OK | 6/14 complete days, 0/2 weekends | rows 17210, outage 0.1 h | spread median $0.25 p95 $0.41 /oz ($0.25/trade median)
 💰 equity 197.46 | 110W/248L | daily SLs 5/10 | open trade: yes | updated 2026-10-13 12:00:09 UTC
 ```
 
-(`committed 0 new trade rows` = only the bar log / status changed, no trade closed in this window.)
+(`committed 0 new trade rows` = only the bar log / status / `xm_data/` changed, no trade closed in this window. Since
+the quote logger exists, `xm_data/` is part of every data commit.)
 
 - **📦 data** — `no new data` is the normal weekend / daily-break case; during market hours the 1-minute
   log changes every run, so a data line is expected.
@@ -117,6 +120,19 @@ a trading day's log (which `handoff_check.py` reports as "snapshot AHEAD of the 
   **Advisory by design:** it never blocks a deploy, never rolls anything back and never adds a
   🚨/⚠️/🛑 line — a doc that is a dozen trades behind is not an incident, and nagging eight times a
   day would get the digest muted. (Gold's §1 was 8 days and 82 trades behind when this was added.)
+- **📡 xm logger** — `tools/xm_quote_report.py --quiet`: is the read-only quote/spec logger
+  (`docs/XM-LOGGER.md`) writing, and what is gold costing?
+
+  | Text | Meaning | Action |
+  |---|---|---|
+  | `xm logger: OK \| N/14 complete days, M/2 weekends \| rows …, outage … h \| spread median $… p95 $… /oz ($…/trade median)` | rows are arriving (newest ≤ 15 min old); the counts are progress towards a decision-grade sample | none |
+  | `… \| market closed or feed frozen` appended | the newest row's tick is stale: gold is shut (weekend / daily break) or the feed froze. The **logger is alive** (it keeps writing `STALE` rows) | none, unless it persists through a weekday — then the feed, not the logger, is down (the 🛑 candles line says so too) |
+  | `STALE (newest row 3.1 h old - is mt5quotes-gold running?)` + a ⚠️ line | the **logger** stopped: no row for 15+ min. The only case that adds a ⚠️ line (its text carries no changing numbers) | `systemctl status mt5quotes-gold`, `journalctl -u mt5quotes-gold -n 50`; trading is unaffected |
+  | `not collecting yet (no quote rows in xm_data)` | not installed, or just started | install per `docs/XM-LOGGER.md` §3 |
+  | `report failed to run (<last line>)` | `xm_quote_report.py` crashed (an import error, say) | run it by hand; advisory, the sync is unaffected |
+
+  Advisory by design, like the handoff line: it never blocks a deploy, and the phase runs *after* the deploy
+  decision and assigns no deploy variable.
 - **💰 stats** — straight from `status.json`.
 
 ### Deploy states and what they mean
@@ -133,8 +149,14 @@ a trading day's log (which `handoff_check.py` reports as "snapshot AHEAD of the 
 | `engine active but status.json looks STALE` | the unit is up but has not written state for 3+ minutes | check `journalctl -u goldbot` |
 
 Machine-readable history: `/var/log/gold_autosync.log` (each run's `done.` line ends with
-`handoff=[…]`). Per-run detail: `/tmp/autosync_smoke.log`, `/tmp/autosync_check.log`,
-`/tmp/autosync_handoff.log`.
+`handoff=[…] xm=[…]`). Per-run detail: `/tmp/autosync_smoke.log`, `/tmp/autosync_check.log`,
+`/tmp/autosync_handoff.log`, `/tmp/autosync_xm.log`.
+
+**Deploying a change to `autosync.sh` itself is safe.** The running bash holds the old file open and `git merge`
+replaces files by unlinking and re-creating them, so the in-flight run keeps reading the *old* copy to the end and
+the *next* cron run uses the new one. Checked in a sandbox on 2026-10-13 (a bare origin plus a server clone, stubbed
+`curl`/`systemctl`): the old script merged a new `autosync.sh` mid-run, ran the smoke gate and finished cleanly. The
+consequence for reading logs: the run that deploys a new phase does **not** run it; the next one does.
 
 ---
 
@@ -177,5 +199,9 @@ consequences for anyone adding a scenario:
 At eight messages a day the digest is chatty but not the flood BTC had (its 15-minute cron sent ~96 a
 day, which is why BTC's autosync grew `NOTIFY=alerts`: deploys and *changes* of incident state
 immediately, one `(daily)` summary per UTC day, identical repeats suppressed). That policy is **not**
-ported here — it changes what reaches the owner's phone, so it is the owner's call
-(`docs/ANALYSIS-2026-10-13-btc-port-assessment.md` §3, item 4).
+ported here: the owner decided on 2026-10-13 to leave notifications as they are
+(`docs/ANALYSIS-2026-10-13-btc-port-assessment.md` §3, item 4). If it is ever wanted, port BTC's `alert_once` +
+daily stamp and keep `always` as the one-line revert.
+
+One thing to know before ever setting `NOTIFY=quiet`: with the quote logger installed `xm_data/` changes on every
+run, so `no new data` is never true and quiet mode stops going quiet. `always` is unaffected.

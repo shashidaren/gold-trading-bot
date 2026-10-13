@@ -40,7 +40,7 @@ recomputes every key from `trades.csv` / `forward_test_log.csv` / `status.json` 
 §1/§4/§6 still have to be rewritten by hand (§11). **Numbers convention:** the ledger and every
 P/L in the prose are **gross of costs** unless the line says `net` — the paper engine books no
 spread. `net_pnl_usd_at_cost` charges the assumed `cost_usd_per_side` on every trade, scratches
-included (the same model as `strategy_lab.py`); that cost is **assumed, never measured** (§6).
+included (the same model as `strategy_lab.py`); that cost is **assumed, not yet measured** — the quote logger (`docs/XM-LOGGER.md`, install pending) measures it (§6).
 `cutover_utc` must equal `strategy_lab.LIVE_CUTOVER` — the check fails if the doc and the tool
 disagree about when the structural stop went live.
 
@@ -57,7 +57,9 @@ disagree about when the structural stop went live.
    ```
    **Read the 2026-10-13 block at the top of §1 first:** the struct-stop cutover was *corrected* to
    **2026-10-06 03:00 UTC** (n=78, not 82) and the guard is green; the BTC-port verdicts are in
-   `docs/ANALYSIS-2026-10-13-btc-port-assessment.md` §3.
+   `docs/ANALYSIS-2026-10-13-btc-port-assessment.md` §3. The quote logger and the large-N history path are **built
+   but not yet installed/run on the box** — `docs/XM-LOGGER.md` §3 (before Sunday 2026-10-25),
+   `docs/ACCELERATE-TESTING.md` §2.
 3. **10-05 re-review is DONE:** `docs/REVIEW-2026-10-05.md`. Max-hold isolation
    closed (n=209, 1 TIME exit, cap never bound in-session); fallback step-2
    trigger **MET** (−$0.570/trade at n=209) → ratchet-off is **eligible to be
@@ -80,6 +82,9 @@ disagree about when the structural stop went live.
 | Replay-vs-production recall | `python3 tools/strategy_lab.py --calib-only` |
 | Stop-vs-level invariant (+ deploy-boundary evidence) | `python3 tools/check_structural_stop.py` |
 | **Is this handoff stale?** | `python3 tools/handoff_check.py` (`--update` rewrites only the snapshot block) |
+| Net-of-cost view of the ledger | `python3 tools/win_rate_report.py --spread 0.40` (round-trip $; the default output is unchanged without it) |
+| **Measured spreads / cost / server clock / contract spec** (once `mt5quotes-gold` runs) | `python3 tools/xm_quote_report.py` (`--quiet` = the digest line) |
+| **Large-N replay over broker M1 history** | `python3 tools/history_to_log.py mt5_history.csv --out history_utc.csv`, then `python3 tools/strategy_lab.py --bars history_utc.csv` |
 | Loser features | `python3 tools/analyze_losers.py` |
 | Engine regression | `python3 tools/smoke_test.py` |
 | Force autosync now | `sudo /opt/gold/tools/autosync.sh` |
@@ -104,6 +109,10 @@ disagree about when the structural stop went live.
   `autosync: merge upstream` commit time (`docs/AUTOSYNC.md` §2) and confirm it from the ledger —
   the struct-stop cutover was dated 6 h early and only a failing guard exposed it.
 - Hand-edit code on `/opt/gold` (autosync will refuse deploy).
+- Feed a raw `mt5_history_dump.py` file to anything UTC-aware: its `Timestamp` is **broker-server time labelled
+  UTC** (+3 h now) stamped at bar *open*, and its last row is the still-forming bar. Convert with
+  `tools/history_to_log.py`, which proves the clock against the live log and refuses rather than guesses
+  (`strategy_lab --bars` refuses a raw dump). Never write history pulls into `xm_data/` (autosync commits it).
 - Ship param/strategy changes without a pre-registered bar + REVIEW/ANALYSIS doc.
 - Treat the bot as income, or go LIVE without broker-side BE + a costs model.
 - Read falling-vs-rising (or "gold is down") stats pooled across sides — split
@@ -127,7 +136,7 @@ disagree about when the structural stop went live.
 | 2026-09-21 ~06:00 | `MAX_HOLD_MINUTES=240` live (PR #15); **no era counter reset** |
 | 2026-10-05 (1st) | Scheduled max-hold re-review (`docs/REVIEW-2026-10-05.md`): isolation closed at n=209, fallback step-2 trigger met, `H-side-awareness` dropped, session-band candidate named. **No runtime change** |
 | 2026-10-05 21:00 (planned) → **2026-10-06 03:00:04 (actual)** | **STRUCTURAL STOP live**: `SL_CLEAR_ATR = 0.5` + TP = 1.5 × actual risk (`engine.py`). One variable; **new isolation window** (entries ≥ **2026-10-06 03:00 UTC**). PR #28 merged 10-06 00:31:53; autosync deployed it at 03:00:04 (`2f4f4c6`); #495–#498 ran the old rule. Evidence + pre-registered bar: `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` (erratum at the top) |
-| 2026-10-13 | **Tooling/docs session (no runtime change):** cutover corrected, replay level window 19→20 bars, `handoff_check.py` + `docs/AUTOSYNC.md` added, BTC-port assessment (`docs/ANALYSIS-2026-10-13-btc-port-assessment.md`). On a branch, **no PR yet** (owner asked to finalise first) |
+| 2026-10-13 | **Tooling/docs session (no runtime change):** cutover corrected, replay level window 19→20 bars, `handoff_check.py` + `docs/AUTOSYNC.md`, `win_rate_report.py --spread`, the **GOLD quote + contract-spec logger** (`docs/XM-LOGGER.md`, install pending) and the **large-N history path** (`docs/ACCELERATE-TESTING.md`, first dump pending), BTC-port assessment (`docs/ANALYSIS-2026-10-13-btc-port-assessment.md`). On a branch, **no PR yet** (owner asked to finalise first) |
 
 ## 1. Where things stand (as of **2026-10-13, ~14:20 UTC — data collection 226**)
 
@@ -135,7 +144,7 @@ disagree about when the structural stop went live.
 
 - **What this session did.** Branch `arena/3f12a4a6-gold-trading-bot`, **no PR yet** (the owner asked to
   finalise first). Compared gold with `bitcoin-trading-bot`'s improvements and changed **only** `tools/`,
-  `docs/`, `README.md`, `archive/PROJECT_LOG.md`. `engine.py`, `trade_filter.py`, `dashboard.py` and every
+  `deploy/` (one new unit file), `docs/`, `.gitignore`, `README.md`, `archive/PROJECT_LOG.md`. `engine.py`, `trade_filter.py`, `dashboard.py` and every
   parameter, gate and exit: **untouched**; the struct-stop window is undisturbed. Verdict per BTC item (done /
   queued / not for gold, with evidence): `docs/ANALYSIS-2026-10-13-btc-port-assessment.md` §3.
 - **The struct-stop cutover is 2026-10-06 03:00 UTC, not 10-05 21:00.** PR #28 merged 10-06 00:31:53 and autosync
@@ -163,9 +172,34 @@ disagree about when the structural stop went live.
   trades/day, so n = 100 lands ~10-15 and the **10-19 21:00 review comes first at n ≈ 130** (weekends are thin).
 - **Latent, not bitten:** the daily-loss breaker counts SLs among the last 30 ledger rows (34 entries under-counted,
   never silently off) — queued for the post-window runtime PR (assessment F3).
-- **Waiting on the owner** (assessment §4): the `NOTIFY` policy, a `win_rate_report.py --spread` net view, a go for the
-  GOLD spread/contract-spec logger (the cost model is still a guess: −$319.51 gross vs −$549.51 at $0.20/side), and one
-  `mt5_history_dump.py` run for the large-N path — note its timestamps are **broker-server time labelled UTC** (+3 h now).
+- **Built after the first review — all tooling, deployable by autosync with no engine restart:**
+  - `win_rate_report.py --spread X`: the net-of-cost view (ties to the snapshot, −$549.51 at $0.40 a round trip).
+  - **The GOLD quote + contract-spec logger** — `tools/mt5_quotes.py`, `deploy/mt5quotes.service` (installs as
+    `mt5quotes-gold`), `tools/xm_quote_report.py`, `tools/broker_time.py`, `docs/XM-LOGGER.md`. Read-only, privacy
+    allow-lists (the repo is public), gold's closures handled (a frozen tick is a `STALE` row, never an outage, and
+    never moves the learned server offset). Autosync now commits `xm_data/` and the digest has a `📡 xm logger:`
+    line; a ⚠️ is raised only when the *logger* stops (newest row > 15 min old), never because gold is shut.
+  - **The large-N path** — `tools/history_to_log.py` (proves the server-time → UTC conversion against the live log's
+    MT5 era, **observes** a DST change inside the overlap, refuses rather than guesses), `strategy_lab --bars` /
+    `--ratchet`, `docs/ACCELERATE-TESTING.md`. **Calibration, like for like** (the live struct-stop era, same window,
+    zero cost): the replay gives **+0.066 R/trade** (n=77), the ledger **+0.007** (n=78) — the replay is ≈ **0.06 R/trade
+    more generous than live**: inside the noise at this n (SE ≈ 0.1) but in the direction its caveats predict, so read
+    absolute replay P&L as optimistic and trust only differences between rows.
+  - Smoke is now **A–T, 315 checks, ~10 s, hermetic**; 62 mutations of the new code were all killed; the autosync
+    wiring was exercised in a sandbox (bare origin, stubbed `curl`/`systemctl`): fresh / stale / frozen-feed /
+    crashed-report / not-installed / `xm_data`-conflict cases, and — the one that matters for this very deploy — the
+    **old `autosync.sh` merging its own new version mid-run finishes cleanly** (git replaces files, the running bash
+    keeps the old inode). **Neither the logger nor the dump has run against a real terminal** (none exists in the
+    sandbox): the first run on the box is their real validation.
+- **Decided by the owner (2026-10-13):** leave `NOTIFY` as is (not ported); the `--spread` view, the logger and the
+  large-N path: **build** (done above).
+- **On the box, in this order — tooling-only, safe inside the window:** (1) after the merge autosync deploys
+  everything (no engine restart: `CORE_CHANGED` stays 0); (2) **install `mt5quotes-gold`** (`docs/XM-LOGGER.md` §3)
+  **before Sunday 2026-10-25** — the server clock changes that day and the logger's offset column is the evidence
+  for the DST rule, and the cost model is still a guess (−$319.51 gross vs −$549.51 at $0.20/side) until it has
+  14 days incl. 2 weekends; (3) one `mt5_history_dump.py --bars 100000 --timeframe M1`, then `history_to_log.py` and
+  `strategy_lab --bars` (`docs/ACCELERATE-TESTING.md` §2) — its output shows the proof, and anything under a 90%
+  exact-OHLC match is refused.
 
 ### 2026-10-05 state (second session; kept as history — numbers in it are as of 10-05 unless restated above)
 
@@ -186,7 +220,7 @@ disagree about when the structural stop went live.
   stuck), 110W / 248L / 215BE / **2 TIME** → **30.7% decisive** [26.2–35.7], paper P&L from $500
   **−$319.51 → $180.49** (engine ledger $197.46, drift +$16.97), **−0.136R/trade** (avg 1R $4.08), payoff 1.54,
   scratch rate 37.4%. **At the assumed $0.20/side the same ledger is −$549.51 (−$0.956/trade, −0.253R)** — scratches
-  pay a spread the paper engine never books. Integrity **0 fail / 8 warn**; synthetic smoke **A–P passed**.
+  pay a spread the paper engine never books. Integrity **0 fail / 8 warn**; synthetic smoke **A–T passed** (315 checks).
   The 10-05 figures this replaces: 493 closed, 28.8% decisive, −$308.91 → $208.05, −0.163R.
   - **0.75R master book** (entries ≥09-15 06:00; **now includes the struct-stop era**): **n=400**,
     92W/189L/117BE/2TIME, **32.7% decisive** [27.5–38.4], **−$195.31 = −$0.488/trade**; the part *before* the
@@ -668,13 +702,16 @@ that doc):
      n=318 master). Max-hold fallback delivered **no** improvement to blame or
      credit (§1). Step 2 (ratchet-off) measured 10-05 and **rejected** — see above.
 
-4. Historical research (optional, later): use `tools/mt5_history_dump.py`
-   once you want to stress-test candidate filters on multi-year data. A
-   replay-driven change of this size is exactly what multi-year data is for.
-   **Two traps found 10-13:** its `Timestamp` is the **broker-server epoch labelled UTC** (+3 h today, flips at
-   the broker's DST) — convert to UTC before any replay or every blackout/day boundary is 2–3 h off — and
-   `strategy_lab` needs `--bars`, a ratchet default for pre-09-10 history and a whole-history window first
-   (assessment §3 item 8). Do **not** port BTC's UTC `ts` change into the live `mt5_feed.py`: the persisted
+4. Historical research — **path BUILT 2026-10-13, first run on the box pending** (`docs/ACCELERATE-TESTING.md`):
+   dump M1 with `tools/mt5_history_dump.py`, convert with `tools/history_to_log.py` (it **proves** the
+   server-time → UTC conversion against the live log's MT5 era, picks the DST rule from the data, drops the
+   forming bar and refuses rather than guesses), then `python3 tools/strategy_lab.py --bars history_utc.csv`
+   (today's rules, constant 0.75R ratchet by default, OOS vs in-sample split at 2026-09-04, monthly windows, cost
+   sensitivity). It buys ~14.5 weeks of replay (100k bars), ~9 of them out-of-sample for the rules. A result there is
+   a **hypothesis to pre-register**, never a reason to change anything inside an open window; the live forward
+   test stays the authority. **Two traps, both handled by the converter:** the dump's `Timestamp` is the broker-server
+   epoch labelled UTC (+3 h today, flips on the broker's DST — Sunday 2026-10-25) and its last row is the
+   still-forming bar. Do **not** port BTC's UTC `ts` change into the live `mt5_feed.py`: the persisted
    `mt5_last_candle_ts` watermark would make the engine's dedup drop ~3 h of candles (assessment F4).
 
 5. LIVE-mode broker-side BE modify — only if/when switching to real orders.
@@ -682,13 +719,17 @@ that doc):
    applies.
 
 6. **BTC-port queue (assessed 2026-10-13, `docs/ANALYSIS-2026-10-13-btc-port-assessment.md` §3–§4).**
-   *Done:* machine-checked handoff + digest line, `docs/AUTOSYNC.md`, the guard/harness fixes.
-   *Needs the owner's go (tools/ops only, safe inside the window):* `NOTIFY=alerts` policy (autosync,
-   8 digests/day today), `win_rate_report.py --spread` net view, the GOLD XM quote + contract-spec logger
-   (**measure the cost**: it is the gap between −$319.51 gross and −$549.51 at the assumed $0.20/side), the
-   large-N history path. *After the struct-stop judgement, one runtime PR with its own pre-registration:*
-   gap-aware stop fills (BTC PR #14: fill at the candle open if the bar opens through the stop), whole-day
-   daily-breaker window (`load_recent_trades(n=400)`; latent, never bitten), the pre-close guard (item 3(h)).
+   *Done (on the branch):* machine-checked handoff + digest line, `docs/AUTOSYNC.md`, the guard/harness fixes,
+   `win_rate_report.py --spread`, the GOLD quote + spec logger and report, the large-N history path.
+   *Owner decided:* leave `NOTIFY` as it is.
+   *Pending a box action (tooling only):* install `mt5quotes-gold` before 2026-10-25 and let it collect 14 days incl.
+   2 weekends — then `python3 tools/xm_quote_report.py` §3 replaces the assumed $0.40 with a measured round trip
+   (re-cost with `win_rate_report.py --spread` / `strategy_lab.py --cost`; adopting a new repo-wide constant is a
+   decision to record here with the evidence); one history dump → convert → replay.
+   *After the struct-stop judgement, one runtime PR with its own pre-registration:* gap-aware stop fills (BTC PR #14:
+   fill at the candle open if the bar opens through the stop), whole-day daily-breaker window
+   (`load_recent_trades(n=400)`; latent, never bitten), the pre-close guard (item 3(h)) — measure each on the
+   large-N path first.
    *Not for gold now:* `live_readiness` / `live_path_probe` / order executor / GO-LIVE window (no positive point
    estimate to stage), `reconcile_stale_trade` (no stuck trade; #577 verified).
 
@@ -704,6 +745,8 @@ python3 tools/momentum_regime.py     # same, plus prints the registered bar
 python3 tools/strategy_lab.py --calib-only        # funnel recall must stay ~100% per era
 python3 tools/check_structural_stop.py            # stop-vs-level invariant (post-cutover: 0, PASS) + boundary evidence
 python3 tools/handoff_check.py                    # this file vs the data (FRESH); --update after a refresh
+python3 tools/xm_quote_report.py --quiet          # "not collecting yet" until mt5quotes-gold is installed; never errors
+python3 tools/strategy_lab.py --bars forward_test_log.csv > /dev/null   # history mode still runs end to end on real bars
 ```
 
 Note: `tools/` scripts are NOT covered by smoke_test.py and several of them
@@ -788,6 +831,10 @@ dashboard.py       Flask status page (read-only)
 tools/strategy_lab.py   canonical costed/stateful/era-matched replay (exit+gate decisions)
 tools/check_structural_stop.py  ledger-side invariant guard for the 2026-10-05 change (+ deploy-boundary evidence)
 tools/handoff_check.py  machine-checks the snapshot block at the top of THIS file (autosync digest: 📝 handoff)
+tools/mt5_quotes.py     read-only Wine sidecar: 30 s XM quotes + contract spec -> xm_data/ (deploy/mt5quotes.service)
+tools/xm_quote_report.py  what the logger measured: spreads, cost vs the assumed $0.40, server clock, spec (digest: 📡)
+tools/broker_time.py    the EU/US DST rule for XM's server clock (verified only by observed offsets)
+tools/history_to_log.py broker-history (server time) -> validated UTC bars for `strategy_lab --bars`
 tools/             other analysis / integrity / report scripts (not on the hot path)
 /opt/gold/         live deploy root (autosync from main; never hand-edit)
 ```
@@ -806,7 +853,9 @@ tools/             other analysis / integrity / report scripts (not on the hot p
   (phase 4b, added 2026-09-29): open-market minutes since the last logged candle,
   weekend/daily break excluded, shouts at > 90. A green digest with `no new
   data` no longer means "all fine" on its own.
-- Services: `goldbot.service` (engine), `mt5feed.service` (Wine MT5 sidecar).
+- Services: `goldbot.service` (engine), `mt5feed.service` (Wine MT5 sidecar), and — once installed per
+  `docs/XM-LOGGER.md` — `mt5quotes-gold.service` (read-only quote/spec logger; autosync commits its `xm_data/` and
+  the digest shows `📡 xm logger: …`; a ⚠️ means the logger is down, not that gold is shut).
 - Logs: `journalctl -u goldbot -f`; autosync log `/var/log/gold_autosync.log`.
 
 ## 11. How to keep this file honest

@@ -110,10 +110,14 @@ DST change inside the overlap, a transition neither rule explains, flat tapes an
 (none before 2026-09-10 12:34); `off` disables it. The live-era replay is untouched by all of this: without `--bars`
 every output is byte-identical to before (checked on six invocations when this was added).
 
-**A calibration to keep in mind.** On the live MT5-era log, `structstop` replayed at zero cost gives **+0.005 R/trade**;
-the live struct-stop era's *gross* result is **+0.007 R/trade** (n = 78). They cover different windows, but the
-replay is not wildly more generous than reality, which is the property a sieve needs. The same replay at the
-assumed $0.20/side is **−0.068 R/trade**: the cost, not the geometry, is the story.
+**A calibration to keep in mind — the replay is optimistic.** The only window where the replay and the live ledger
+both exist is the struct-stop era (entries ≥ 2026-10-06 03:00 UTC). Replayed at zero cost (`strategy_lab.py --table
+--only structstop`, row `post-cutover`) it gives **+0.066 R/trade** (n = 77); the live ledger gives **+0.007 R/trade**
+(n = 78). So the replay is about **0.06 R/trade (~$0.37/trade) more generous than reality** there. That is inside the
+noise at this n (the standard error of a per-trade R is ~0.1) but it points the way the caveats below predict (the
+engine's intra-bar convention, a perfect cascade). Treat **absolute** replay P&L as an upper-ish bound and trust only
+**differences between rows**; recheck the gap when the era is larger, and if it persists, say so in whatever you
+pre-register.
 
 **Discipline.**
 
