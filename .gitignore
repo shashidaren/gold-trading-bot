@@ -34,3 +34,7 @@ Thumbs.db
 # === Wine / MT5 Local Data (if any symlinks exist here) ===
 drive_c/
 *.tmp
+
+# === Research history pulls (tools/mt5_history_dump.py -> tools/history_to_log.py): large, derived, never committed ===
+mt5_history*.csv
+history_*.csv

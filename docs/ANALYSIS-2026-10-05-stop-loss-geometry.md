@@ -8,9 +8,32 @@ if necessary and update handoff with details."*
 | **Data** | `forward_test_log.csv` 31,222 M1 bars 2026-09-01 14:25 → 2026-10-05 20:58 UTC; `trades.csv` **493** closed trades |
 | **Ledger at judgement time** | 84W/208L/200BE/1TIME → **28.8% decisive** [23.9–34.2], **−$308.91** net, **−0.163R/trade** (1R = the trade's own 2·ATR risk ≈ $3.84), payoff 1.51, uncosted breakeven decisive WR at 1:1.5 = **40.0%** |
 | **Shipped** | **one** runtime change in `engine.py`: the stop must clear the 20-bar level (`SL_CLEAR_ATR = 0.5`), TP keeps 1:1.5 against the **actual** risk (`RR_TARGET`). Entries, gates, ratchet, max-hold, lot, sizing: **untouched** |
-| **Cutover** | **2026-10-05 21:00 UTC** (next autosync). New isolation window = entries ≥ cutover. Nothing was judged on post-cutover data before this file was written — §7 is the contract |
+| **Cutover** | **2026-10-05 21:00 UTC** (next autosync) **[CORRECTED 2026-10-13: 2026-10-06 03:00 UTC — see the erratum below]**. New isolation window = entries ≥ cutover. Nothing was judged on post-cutover data before this file was written — §7 is the contract |
 | **Rejected** | the level-test re-scale, the session-band gate, ratchet-off, and **every** stop-widening arm that trades expectancy for win rate (§8) |
 | **Not claimed** | this is **not** a demonstrated edge. Costed replay is still negative at every cost tested (−0.106R to −0.179R). It is a defect fix that halves the bleed and makes the stop mean what the docs already said it meant |
+
+> **ERRATUM 2026-10-13 — dates and harness fidelity only. The pre-registered bar in §7 (every threshold,
+> the n = 100 / 150 gates, the revert triggers) is unchanged.**
+>
+> 1. **The cutover was 2026-10-06 03:00 UTC, not 2026-10-05 21:00.** PR #28 merged 2026-10-06 00:31:53 UTC and
+>    autosync (HH:00 every 3 h) deployed it with the `autosync: merge upstream` commit `2f4f4c6` at
+>    **03:00:04 UTC**. Trades #495–#498 (entered 10-06 00:11–02:39; 1 win, 3 losses, −$9.90) ran the **old**
+>    rule — #495/#497/#498 carry exactly 2.00 ATR of risk with the level 2.3–2.9 ATR away; #499 (03:33:05) is the
+>    first new-rule trade — and are **not** in the struct-stop era. Read every "≥ 2026-10-05 21:00 UTC" in this
+>    document (the §7 window, the A1 command's cutover row) as **≥ 2026-10-06 03:00 UTC**. At data collection 226
+>    the era is **n = 78** (not 82); A1 (stop inside level) **= 0**. Moving the four trades out flatters the era
+>    by $9.90 — disclosed with before/after numbers in the ANALYSIS-2026-10-13 assessment (F1).
+> 2. **Every replay figure here used a 19-bar level window; the engine uses 20** (`strategy_lab.Lab` kept the
+>    current bar in a 20-bar window and sliced it off). Fixed 2026-10-13 (the lab's floor now equals the engine's
+>    logged `Dynamic_Floor` on 99.81% of bars, was 85.97%). Effect on the figures quoted here: stop-inside-level
+>    63.8% → **66.4%**, median entry-to-level 2.42 → **2.53 ATR**, funnel recall 99.7–99.8% → **100%**. Re-running
+>    the replay on today's data at $0.20/side (same data, only the window differs): master-era structstop
+>    −0.101R → **−0.076R**, baseline −0.202R → −0.209R; "better in 3 of 4 parameter eras" is unchanged. The
+>    figures in §3–§8 were produced at the then-current n and cost, so they are not restated — read them as
+>    approximate, direction unchanged, and no conclusion of this analysis reverses. Full table: `docs/ANALYSIS-2026-10-13-btc-port-assessment.md` F2.
+> 3. **A1 is now `python3 tools/check_structural_stop.py`** — its last row ("struct-stop cutover") is the binding
+>    one, and it prints the boundary evidence (last OLD-rule / first NEW-rule trade) so a mis-dated cutover is
+>    diagnosed as a BOUNDARY ERROR instead of reading as a code regression.
 
 ---
 
@@ -218,7 +241,7 @@ band for 0.01-lot gold.
 
 ## 7. PRE-REGISTERED BAR — written 2026-10-05, before any post-cutover trade existed
 
-**Window:** entries with `Entry_Time ≥ 2026-10-05 21:00 UTC` ("struct-stop era"). One variable:
+**Window:** entries with `Entry_Time ≥ 2026-10-05 21:00 UTC` **[read as ≥ 2026-10-06 03:00 UTC, see the erratum]** ("struct-stop era"). One variable:
 the stop/TP geometry. Nothing else may be changed inside this window; no re-slicing of eras to
 find a better cut. First judgement (**screen**) at **n = 100** closed trades (~8 trading days at 12/day),
 confirmatory (**pass/fail**) at **n = 150** or **2026-10-19 21:00 UTC**, whichever comes first. **n < 60 is not
@@ -230,7 +253,7 @@ a result** — not in either direction.
 
 | # | metric | requirement |
 |---|---|---|
-| A1 | `tools/check_structural_stop.py --since 2026-10-05` → stop INSIDE level | **must be 0** (was 63.8% pre-change) |
+| A1 | `tools/check_structural_stop.py` (last row, "struct-stop cutover"; `--since 2026-10-05` still works) → stop INSIDE level | **must be 0** (was 63.8% pre-change, 66.4% with the 20-bar level) |
 | A2 | same tool → median clearance | ≥ 0 ATR for every trade, ≥ 0.5 ATR on level-bound ones |
 | A3 | `python3 tools/strategy_lab.py --calib-only` (funnel is untouched, so it must not move) | recall still 99.6–100% on the 0.75R-master / max-hold rows; if it drifts the harness and the engine disagree — fix that **before** reading any P&L row |
 | A4 | level-bound share | 70–90% (replay 80.2%); outside that, tape structure changed and the comparison is not like-for-like |

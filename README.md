@@ -11,9 +11,13 @@ changelog.
 | Path | What it is |
 |---|---|
 | `docs/HANDOFF.md` | **Start here for any new session** — current state, definitions, next steps, ops. |
-| `engine.py` | Data ingestion, indicators (EMA/RSI/ATR), the Buy/Sell signal funnel, trade execution. Includes `migrate_trades_csv()` — self-healing schema fix (see 09-10 review) — the **structural stop** (`SL_CLEAR_ATR = 0.5` + `RR_TARGET`, live 2026-10-05: risk = `max(2·ATR, |entry − level| + 0.5·ATR)`, TP = 1.5 × that risk — see `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md`), and the breakeven stop ratchet (`BE_TRIGGER_R`: 0.30R since the 09-10 losing-trade analysis, **raised to 0.75R on 09-15** — the tight trigger was scratching 77% of trades; see `docs/REVIEW-2026-09-15.md`). |
-| `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` | **Why the stop-loss rate is high, and the change that shipped for it** (structural stop, live 2026-10-05 21:00 UTC): the inert `FLOOR_BUFFER_PCT` level test, the 63.8% of trades whose stop sat *inside* the 20-bar level, the costed/stateful era-matched evidence, everything rejected, and the **pre-registered forward bar** (§7) that must be judged at n≥100 before anything else changes. |
-| `tools/strategy_lab.py` | Canonical **costed, stateful, era-matched** full-strategy replay (funnel + exits + cooldown/breaker/blackouts). Read-only. This is what an exit or gate idea must be measured with; `exit_sims.py` / `pathwalk_sims.py` / `phantom_trades.py` predate it and are cascade-ignorant. |
+| `engine.py` | Data ingestion, indicators (EMA/RSI/ATR), the Buy/Sell signal funnel, trade execution. Includes `migrate_trades_csv()` — self-healing schema fix (see 09-10 review) — the **structural stop** (`SL_CLEAR_ATR = 0.5` + `RR_TARGET`, live **2026-10-06 03:00 UTC** — planned for 10-05 21:00, deployed by the 03:00 autosync: risk = `max(2·ATR, |entry − level| + 0.5·ATR)`, TP = 1.5 × that risk — see `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md`), and the breakeven stop ratchet (`BE_TRIGGER_R`: 0.30R since the 09-10 losing-trade analysis, **raised to 0.75R on 09-15** — the tight trigger was scratching 77% of trades; see `docs/REVIEW-2026-09-15.md`). |
+| `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` | **Why the stop-loss rate is high, and the change that shipped for it** (structural stop, live 2026-10-06 03:00 UTC; the doc's own 10-05 21:00 cutover is corrected in its erratum): the inert `FLOOR_BUFFER_PCT` level test, the ~64–66% of trades whose stop sat *inside* the 20-bar level, the costed/stateful era-matched evidence, everything rejected, and the **pre-registered forward bar** (§7) that must be judged at n≥100 before anything else changes. |
+| `docs/AUTOSYNC.md` | How the unattended data sync + auto-deploy works, how to read the Telegram digest, and **why the deploy time (not the plan) is the era cutover**. |
+| `docs/ANALYSIS-2026-10-13-btc-port-assessment.md` | Which of the `bitcoin-trading-bot` improvements transfer to gold, which were ported, which were rejected and why, and what is queued behind the open struct-stop window. |
+| `docs/XM-LOGGER.md` | The **GOLD quote + contract-spec logger** (`tools/mt5_quotes.py`, `deploy/mt5quotes.service`, `tools/xm_quote_report.py`): install checklist (do it before the 2026-10-25 server-clock change), what it writes to `xm_data/`, how closed markets and DST show up, and what the measured costs may and may not be used for. |
+| `docs/ACCELERATE-TESTING.md` | The **large-N history path**: dump M1 history → `tools/history_to_log.py` (proves the broker-server → UTC conversion against the live log, refuses rather than guesses) → `strategy_lab.py --bars`. How to read it, and why a result there is a hypothesis to pre-register, never a reason to change a rule. |
+| `tools/strategy_lab.py` | Canonical **costed, stateful, era-matched** full-strategy replay (funnel + exits + cooldown/breaker/blackouts). Read-only. This is what an exit or gate idea must be measured with; `exit_sims.py` / `pathwalk_sims.py` / `phantom_trades.py` predate it and are cascade-ignorant. `--bars FILE` replays today's rules over converted broker history (large-N mode; `docs/ACCELERATE-TESTING.md`). |
 | `trade_filter.py` | Risk gatekeeper: direction-aware session blackouts (London blocks BUYs, allows SELLs), SL cooldowns, momentum-gated daily-loss breaker (trend-side-only after limit), ATR bounds. |
 | `dashboard.py` | Web dashboard (funnel telemetry, equity, active trade). |
 | `trades.csv` | **The ledger** — one row per closed trade (16-field schema with `Trade_Type`). |
@@ -39,7 +43,13 @@ python3 tools/momentum_regime.py  # 9. falling-gold / side regime + the 09-28 re
 python3 tools/strategy_lab.py --calib-only  # 10. CANONICAL replay (costed, stateful, era-matched) —
                                             #     required before any exit/gate/param idea is judged
 python3 tools/strategy_lab.py --table --only baseline,structstop  # 11. era x cost counterfactual grid
-python3 tools/check_structural_stop.py      # 12. is the stop really beyond the tested level? (2026-10-05 rule)
+python3 tools/check_structural_stop.py      # 12. is the stop really beyond the tested level? (2026-10-05 rule;
+                                            #     also proves WHEN the deploy happened from the ledger itself)
+python3 tools/handoff_check.py              # 13. is docs/HANDOFF.md still telling the truth? (--update refreshes the block)
+python3 tools/win_rate_report.py --spread 0.40   # 14. the same report net of the assumed round-trip cost (default output unchanged)
+python3 tools/xm_quote_report.py            # 15. what the quote logger measured: spreads, cost vs the assumed $0.40, server clock, spec
+python3 tools/history_to_log.py mt5_history.csv --out history_utc.csv && python3 tools/strategy_lab.py --bars history_utc.csv
+                                            # 16. large-N: broker history -> validated UTC -> replay (docs/ACCELERATE-TESTING.md)
 ```
 
 All tools are read-only except the engine's own self-healing migration. Every
@@ -60,7 +70,7 @@ Production files live at `/opt/gold/` (paths hardcoded in `engine.py` /
 `trade_filter.py`). Normal deploy is **unattended**: merge to `main` → next
 `tools/autosync.sh` cron cycle (every 3h) pulls, smoke-tests on code changes,
 and restarts the engine only if `engine.py` / `trade_filter.py` changed.
-See `docs/HANDOFF.md` §10. Manual path: `git pull` on the server + restart the
+See `docs/HANDOFF.md` §10 and `docs/AUTOSYNC.md`. Manual path: `git pull` on the server + restart the
 engine. On restart the engine auto-migrates `trades.csv` if needed (keeps a
 `.bak-pre-migration` backup) and resyncs `status.json`.
 
@@ -83,6 +93,10 @@ Run the sidecar as a service: `sudo cp deploy/mt5feed.service /etc/systemd/syste
 && sudo systemctl daemon-reload && sudo systemctl enable --now mt5feed`.
 Trading stays simulated either way. The engine auto-reconnects stale feeds and
 alerts on Telegram (10-min silence threshold, muted during the daily break).
+
+A second, **read-only** sidecar, `tools/mt5_quotes.py` (`deploy/mt5quotes.service`, installed as
+`mt5quotes-gold`), logs the XM bid/ask spread every 30 s and the contract spec to `xm_data/`, so the assumed
+$0.20/side cost can be measured; it never touches orders or the engine. See `docs/XM-LOGGER.md`.
 
 ## 🆕 Starting a new session / handing off to a new agent
 
