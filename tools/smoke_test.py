@@ -55,6 +55,14 @@ Scenarios:
      before the first new-rule trade: exit 1 'BOUNDARY ERROR') from a REGRESSION (old-rule trade
      after the first new-rule trade) while passing a clean deploy (exit 0). Synthetic data only.
 
+  P) HANDOFF freshness gate (2026-10-13, port of bitcoin-trading-bot's handoff_check) ->
+     tools/handoff_check.py MUST treat normal drift (new bars, a few closed trades, a new open trade,
+     up to 30 trades / 48 h) as fresh so the autosync digest never cries wolf, and MUST flag STALE:
+     >30 trades or >48 h behind, outcomes/money changed with an unchanged trade count (ledger edited),
+     a snapshot AHEAD of the data, a different cost assumption, a cutover that disagrees with
+     strategy_lab.LIVE_CUTOVER, a missing key, a missing block (exit 2). `--update` rewrites only
+     the marked block. Synthetic data only; the verdict is advisory in autosync (never blocks).
+
 Usage: python3 tools/smoke_test.py
 """
 import os
@@ -1097,6 +1105,139 @@ rc_, out_ = _o_run([(2, 30, "OLD"), (2, 40, "OLD"), (3, 25, "NEW"), (3, 35, "NEW
 check("O: a cutover constant earlier than the last old-rule trade is flagged EARLY (exit 1)",
       rc_ == 1 and "too EARLY" in out_, f"rc={rc_}")
 SL.LIVE_CUTOVER = _live_cutover_saved
+
+# --- Scenario P ---
+print("\nScenario P: handoff_check tolerance policy (30 trades / 48 h, no crying wolf)")
+import handoff_check as HC  # noqa: E402
+
+P_DOC = {
+    "as_of_utc": "2026-10-13 11:59", "data_collection": "226", "closed_trades": "575",
+    "outcomes": "110W/248L/215BE/2TIME", "decisive_wr_pct": "30.7", "engine_ledger_usd": "197.46",
+    "true_equity_usd": "180.49", "cost_usd_per_side": "0.20", "net_pnl_usd_at_cost": "-549.51",
+    "cutover_utc": SL.LIVE_CUTOVER.strftime("%Y-%m-%d %H:%M"), "structstop_era_trades": "78",
+    "structstop_era_outcomes": "25W/37L/15BE/1TIME", "log_bars": "38954",
+    "log_last_bar_utc": "2026-10-13 11:59", "skip_rows": "1307", "open_trade": "SELL #577 @ 4182.61",
+}
+
+
+def p_stale(doc=None, **live_over):
+    """Keys HC.compare() calls STALE when the live data differs by live_over."""
+    live = dict(P_DOC)
+    live.update(live_over)
+    rows = HC.compare(doc or P_DOC, live)
+    return sorted(k for k, _d, _l, verdict, _n in rows if verdict == "STALE")
+
+
+def p_after(n_trades, **kw):
+    """Live values n_trades closed trades after P_DOC (a small, plausible P/L move)."""
+    base = dict(closed_trades=str(575 + n_trades), structstop_era_trades=str(78 + n_trades),
+                outcomes="%dW/%dL/215BE/2TIME" % (110 + n_trades // 3, 248 + n_trades - n_trades // 3),
+                decisive_wr_pct="30.9", structstop_era_outcomes="26W/38L/15BE/1TIME",
+                engine_ledger_usd="%.2f" % (197.46 - 2.0 * n_trades),
+                true_equity_usd="%.2f" % (180.49 - 2.0 * n_trades),
+                net_pnl_usd_at_cost="%+.2f" % (-549.51 - 2.4 * n_trades), open_trade="none")
+    base.update(kw)
+    return base
+
+
+# normal drift: the box trades and logs while the doc sleeps -> never STALE
+check("P: identical snapshot is fresh", p_stale() == [])
+check("P: a few new M1 bars are normal drift",
+      p_stale(as_of_utc="2026-10-13 12:03", data_collection="227", log_bars="38958",
+              log_last_bar_utc="2026-10-13 12:03") == [])
+check("P: one closed trade + a new open trade is normal drift",
+      p_stale(**p_after(1, open_trade="BUY #578 @ 4190.10")) == [])
+check("P: an open-trade change alone is normal drift", p_stale(open_trade="none") == [])
+check("P: 47 h of log is still fresh",
+      p_stale(log_bars=str(38954 + 47 * 60), log_last_bar_utc="2026-10-15 10:59") == [])
+check("P: 30 closed trades behind is still fresh (the documented tolerance, ~2 trading days)",
+      p_stale(**p_after(30)) == [])
+
+# genuinely behind or contradictory -> STALE
+st31 = p_stale(**p_after(31))
+check("P: 31 closed trades behind is STALE (count and outcomes both flagged)",
+      "closed_trades" in st31 and "outcomes" in st31, f"stale={st31}")
+check("P: 49 h of log is STALE",
+      "log_last_bar_utc" in p_stale(log_bars=str(38954 + 49 * 60), log_last_bar_utc="2026-10-15 12:59"))
+check("P: changed outcomes with an unchanged trade count are STALE (ledger edited?)",
+      p_stale(outcomes="111W/247L/215BE/2TIME", decisive_wr_pct="31.0") == ["decisive_wr_pct", "outcomes"])
+check("P: money moved with an unchanged trade count is STALE",
+      p_stale(engine_ledger_usd="199.00") == ["engine_ledger_usd"])
+check("P: money moved by more than N trades could explain is STALE",
+      "engine_ledger_usd" in p_stale(**p_after(2, engine_ledger_usd="150.00")))
+check("P: a snapshot NEWER than the log is STALE (lost data / stale checkout)",
+      p_stale(log_last_bar_utc="2026-10-13 10:00") == ["log_last_bar_utc"])
+check("P: a snapshot AHEAD of the ledger is STALE (lost trades)",
+      "closed_trades" in p_stale(closed_trades="570", structstop_era_trades="73"))
+check("P: a different cost assumption is STALE (config must match exactly)",
+      p_stale(cost_usd_per_side="0.35") == ["cost_usd_per_side"])
+check("P: a cutover that disagrees with strategy_lab.LIVE_CUTOVER is STALE",
+      p_stale(cutover_utc="2026-10-05 21:00") == ["cutover_utc"])
+check("P: a key missing from the doc is STALE",
+      p_stale(doc={k: v for k, v in P_DOC.items() if k != "skip_rows"}) == ["skip_rows"])
+check("P: tolerances stay tied to the documented 30 trades / 48 h",
+      HC.TRADE_TOLERANCE == 30 and HC.MAX_AGE_HOURS == 48 and HC.BAR_TOLERANCE == HC.MAX_AGE_HOURS * 60,
+      f"{HC.TRADE_TOLERANCE} trades, {HC.MAX_AGE_HOURS} h, {HC.BAR_TOLERANCE} rows")
+
+# the doc must agree with itself: --cost commands vs the snapshot, and referenced files
+tmp_p = tempfile.mkdtemp(prefix="gold_smoke_p_")
+os.makedirs(os.path.join(tmp_p, "docs"))
+with open(os.path.join(tmp_p, "docs", "REAL.md"), "w") as fh_p:
+    fh_p.write("x")
+doc_text = ("Run:\n```bash\npython3 tools/strategy_lab.py --cost 0.35\n```\nsee `docs/REAL.md`, `docs/MISSING.md`, "
+            "`docs/REVIEW-YYYY-MM-DD.md` and `tools/*.py`\n")
+probs = HC.doc_consistency(tmp_p, P_DOC, doc_text)
+check("P: a --cost command that disagrees with the snapshot is flagged",
+      any("--cost 0.35" in x for x in probs), str(probs))
+check("P: a reference to a missing file is flagged; placeholders and globs are not",
+      any("docs/MISSING.md" in x for x in probs) and not any("YYYY" in x or "*" in x or "REAL" in x for x in probs),
+      str(probs))
+shutil.rmtree(tmp_p, ignore_errors=True)
+
+# end to end on a synthetic box: --update fills the block (and only the block), a doc that is
+# ahead of the data is STALE, a doc with no block is exit 2 - and none of it needs the wall clock
+root_p = _o_world([(2, 30, "OLD"), (3, 25, "NEW")])
+with open(os.path.join(root_p, "status.json"), "w") as fh_p:
+    json.dump({"equity": 480.12, "trade_active": False, "last_update": "2026-10-06 03:49:00"}, fh_p)
+with open(os.path.join(root_p, "skipped_trades.csv"), "w", newline="") as fh_p:
+    fh_p.write("Timestamp,Reason,Price,ATR\n2026-10-06 02:00:00,x,4100.00,2.00\n")
+os.makedirs(os.path.join(root_p, "docs"), exist_ok=True)
+doc_path = os.path.join(root_p, "docs", "HANDOFF.md")
+PROSE_BEFORE, PROSE_AFTER = "# prose above stays byte-for-byte\n\n", "\n## 1. prose below too: 999 closed\n"
+with open(doc_path, "w") as fh_p:
+    fh_p.write(PROSE_BEFORE + "<!-- HANDOFF-SNAPSHOT x -->\n| key | value |\n|---|---|\n| as_of_utc | ? |\n"
+               "<!-- /HANDOFF-SNAPSHOT -->\n" + PROSE_AFTER)
+
+
+def p_main(*argv):
+    buf_p = io.StringIO()
+    with contextlib.redirect_stdout(buf_p):
+        rc_p = HC.main([root_p, *argv])
+    return rc_p, buf_p.getvalue()
+
+
+rc_p, out_p = p_main("--update")
+with open(doc_path) as fh_p:
+    doc_after = fh_p.read()
+check("P: --update fills the block and leaves every prose byte alone",
+      rc_p == 0 and doc_after.startswith(PROSE_BEFORE) and doc_after.endswith(PROSE_AFTER)
+      and "| closed_trades | 2 |" in doc_after and "| outcomes | 0W/2L/0BE/0TIME |" in doc_after
+      and "| log_last_bar_utc | 2026-10-06 03:49 |" in doc_after, f"rc={rc_p}")
+rc_p, out_p = p_main("--quiet")
+check("P: a freshly updated doc is FRESH (exit 0, one line)",
+      rc_p == 0 and out_p.strip().startswith("fresh") and len(out_p.strip().splitlines()) == 1, out_p.strip()[:80])
+with open(doc_path, "w") as fh_p:
+    fh_p.write(doc_after.replace("| closed_trades | 2 |", "| closed_trades | 40 |"))
+rc_p, out_p = p_main("--quiet")
+check("P: a doc claiming more trades than the ledger holds is STALE (exit 1)",
+      rc_p == 1 and out_p.startswith("STALE"), out_p.strip()[:100])
+with open(doc_path, "w") as fh_p:
+    fh_p.write("# no snapshot block here\n")
+rc_p, out_p = p_main("--quiet")
+check("P: a doc with no snapshot block is exit 2, one line, no crash",
+      rc_p == 2 and out_p.startswith("not run"), out_p.strip()[:100])
+shutil.rmtree(root_p, ignore_errors=True)
+
 
 
 print()

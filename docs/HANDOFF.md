@@ -9,6 +9,41 @@ honest"). §11 also carries the **Session & Push Protocol** — push every commi
 immediately and keep the session PR open until the user signs off. Follow it
 from the first commit.
 
+### Snapshot (machine-checked)
+
+<!-- HANDOFF-SNAPSHOT machine-checked by tools/handoff_check.py; refresh with --update -->
+| key | value |
+|---|---|
+| as_of_utc | 2026-10-13 11:59 |
+| data_collection | 226 |
+| closed_trades | 575 |
+| outcomes | 110W/248L/215BE/2TIME |
+| decisive_wr_pct | 30.7 |
+| engine_ledger_usd | 197.46 |
+| true_equity_usd | 180.49 |
+| cost_usd_per_side | 0.20 |
+| net_pnl_usd_at_cost | -549.51 |
+| cutover_utc | 2026-10-06 03:00 |
+| structstop_era_trades | 78 |
+| structstop_era_outcomes | 25W/37L/15BE/1TIME |
+| log_bars | 38954 |
+| log_last_bar_utc | 2026-10-13 11:59 |
+| skip_rows | 1307 |
+| open_trade | SELL #577 @ 4182.61 |
+<!-- /HANDOFF-SNAPSHOT -->
+
+This block is the **only machine-checked part of the file**: `python3 tools/handoff_check.py`
+recomputes every key from `trades.csv` / `forward_test_log.csv` / `status.json` and says
+**FRESH** or **STALE** (tolerance 30 closed trades / 48 h — about two trading days at gold's
+10–18 trades a weekday). Autosync prints the verdict in every digest (`📝 handoff:`), advisory only.
+`python3 tools/handoff_check.py --update` rewrites the block and nothing else; the prose numbers in
+§1/§4/§6 still have to be rewritten by hand (§11). **Numbers convention:** the ledger and every
+P/L in the prose are **gross of costs** unless the line says `net` — the paper engine books no
+spread. `net_pnl_usd_at_cost` charges the assumed `cost_usd_per_side` on every trade, scratches
+included (the same model as `strategy_lab.py`); that cost is **assumed, never measured** (§6).
+`cutover_utc` must equal `strategy_lab.LIVE_CUTOVER` — the check fails if the doc and the tool
+disagree about when the structural stop went live.
+
 ### Start here (30 seconds)
 
 1. Read **§1** (stance + numbers) and **Definitions** below it.

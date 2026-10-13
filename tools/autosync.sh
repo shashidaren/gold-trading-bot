@@ -9,7 +9,8 @@
 #        stops the engine -> merges (conflicts: data files = server wins,
 #        everything else = remote wins) -> runs the smoke test -> rolls back
 #        on failure -> restarts the engine -> verifies status.json is fresh
-#   3. Runs tools/check_data.py (integrity gate)
+#   3. Runs tools/check_data.py (integrity gate) and tools/handoff_check.py (is docs/HANDOFF.md
+#      still telling the truth? ADVISORY: shown in the digest, never blocks a deploy)
 #   4. Sends a one-message digest to the Telegram chat configured in .env
 #
 # Safety model:
@@ -292,7 +293,23 @@ case "$FRESH_MSG" in
         ;;
 esac
 
-log "done. data=[$DATA_MSG] deploy=[$DEPLOY_MSG] check=[$CHECK_MSG]"
+# --- phase 4c: handoff freshness (ADVISORY - never blocks a deploy) -------------
+# docs/HANDOFF.md carries a machine-checked snapshot block; tools/handoff_check.py recomputes it
+# from the data files this script just committed. A stale handoff is how a new session ends up
+# retuning on a week-old picture (2026-10-13: §1 said 493 closed, the box had 575). The verdict
+# rides along in the digest. It deliberately does NOT touch $EXTRA: a doc that is a dozen trades
+# behind is not an incident, and shouting about it every 3 hours would get the digest muted.
+# The exit code is ignored on purpose; only the one-line verdict is used.
+# Fix it with: python3 tools/handoff_check.py --update   (then rewrite the prose, HANDOFF §11)
+HANDOFF_MSG="not run"
+if [ -f tools/handoff_check.py ] && [ -f docs/HANDOFF.md ]; then
+    python3 tools/handoff_check.py --quiet >/tmp/autosync_handoff.log 2>&1
+    HANDOFF_MSG=$(tail -n1 /tmp/autosync_handoff.log)
+    [ -z "$HANDOFF_MSG" ] && HANDOFF_MSG="handoff_check failed to run"
+    log "handoff: $HANDOFF_MSG"
+fi
+
+log "done. data=[$DATA_MSG] deploy=[$DEPLOY_MSG] check=[$CHECK_MSG] handoff=[$HANDOFF_MSG]"
 
 QUIET_SKIP=0
 if [ "$NOTIFY" = "quiet" ] && [ "$DATA_MSG" = "no new data" ] && [ "$DEPLOY_MSG" = "none" ] \
@@ -305,5 +322,6 @@ if [ "$QUIET_SKIP" = "0" ]; then
 🚀 deploy: $DEPLOY_MSG
 🩺 integrity: $CHECK_MSG
 📈 candles: $FRESH_MSG
+📝 handoff: $HANDOFF_MSG
 💰 $STATS$EXTRA"
 fi
