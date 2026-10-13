@@ -19,6 +19,7 @@ Pure stdlib, no I/O. `python3 tools/broker_time.py` prints the transitions for a
 """
 import sys
 from datetime import datetime, timedelta
+from functools import lru_cache
 
 HOUR = 3600
 WINTER_S, SUMMER_S = 2 * HOUR, 3 * HOUR     # server - UTC
@@ -35,11 +36,13 @@ def _nth_sunday(year, month, n):
     return d + timedelta(weeks=n - 1)
 
 
+@lru_cache(maxsize=64)
 def eu_transitions(year):
     """(start_utc, end_utc) of EU summer time: last Sunday of March / October, 01:00 UTC."""
     return (_last_sunday(year, 3).replace(hour=1), _last_sunday(year, 10).replace(hour=1))
 
 
+@lru_cache(maxsize=64)
 def us_transitions(year):
     """(start_utc, end_utc) of US summer time: 2nd Sunday of March 07:00 UTC / 1st Sunday of
     November 06:00 UTC (02:00 local). Offered because many brokers anchor the server to New York

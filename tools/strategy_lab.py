@@ -46,6 +46,11 @@ Usage
                                                    # docs/ANALYSIS-2026-10-05-stop-loss-geometry.md
                                                    # quotes, so the doc and the tool cannot drift)
     python3 tools/strategy_lab.py --json /tmp/lab.json
+    python3 tools/strategy_lab.py --bars history_utc.csv
+                                                   # LARGE-N mode: replay today's rules over broker M1
+                                                   # history (docs/ACCELERATE-TESTING.md). The file must come
+                                                   # from tools/history_to_log.py (UTC); the live ledger and
+                                                   # the calibration are skipped; --ratchet const|era|off
 
 Variant `baseline` (no cfg overrides) = the rules production used up to the structural-stop
 deploy, which is the correct replay of every historical era. `structstop` = the rule that is
@@ -523,7 +528,144 @@ VARIANTS = {
 }
 
 
-def main():
+# --------------------------------------------------------- large-N history mode
+# Everything the live rules were tuned on is at or after the first live trade (2026-09-04); history before
+# it is genuinely out-of-sample for them. (The gate stack itself settled on 2026-09-10; the structural stop is
+# live from LIVE_CUTOVER.) `baseline`/`structstop` are today's rules, so replaying them backwards is the
+# honest out-of-sample test - with the broker-history caveats printed below.
+TUNING_START = datetime(2026, 9, 4)
+HISTORY_COSTS = (0.0, 0.15, 0.20, 0.35)
+
+
+def _month_windows(first, last):
+    out, cur = [], datetime(first.year, first.month, 1)
+    while cur <= last:
+        nxt = datetime(cur.year + (cur.month == 12), 1 if cur.month == 12 else cur.month + 1, 1)
+        out.append((cur.strftime("%Y-%m"), cur, nxt))
+        cur = nxt
+    return out
+
+
+def _hist_line(label, name, trs, width=22):
+    """One replay row: the lab's own summary plus $/day, trades/day and the equity drawdown."""
+    if not trs:
+        return f"  {label:{width}s}{name:12s} (no trades)"
+    days = len({t["ts"].date() for t in trs}) or 1
+    eq = pk = dd = 0.0
+    for t in sorted(trs, key=lambda x: x["ts"]):
+        eq += t["net"]
+        pk = max(pk, eq)
+        dd = max(dd, pk - eq)
+    return (f"  {label:{width}s}{summarize(trs, name, width=12)} "
+            f"${statistics.mean(t['net'] for t in trs) * len(trs) / days:+7.2f}/day {len(trs) / days:4.1f}/day dd ${dd:6.1f}")
+
+
+def history_report(args):
+    """`--bars PATH`: replay today's rules over a UTC-normalised broker-history file. Read-only; no ledger."""
+    path = args.bars
+    try:
+        with open(path, newline="") as fh:
+            head = [h.strip() for h in (fh.readline().strip().split(","))]
+    except OSError as e:
+        sys.exit(f"--bars: cannot read {path}: {e}")
+    if "TickVolume" in head or "Spread" in head:
+        sys.exit(f"--bars: {path} looks like RAW mt5_history_dump output (TickVolume/Spread columns). Its timestamps are "
+                 f"BROKER SERVER time labelled UTC (+3 h in summer), so every UTC rule here - blackout windows, the "
+                 f"Asia/London/NY bands, the daily-loss day - would be hours off. Convert it first:\n"
+                 f"  python3 tools/history_to_log.py {path} --out history_utc.csv")
+    if not {"Timestamp", "Open", "High", "Low", "Close"} <= set(head):
+        sys.exit(f"--bars: {path} needs the columns Timestamp,Open,High,Low,Close (got {','.join(head[:8])})")
+    bars = load_bars(path)
+    if len(bars) < 1000:
+        sys.exit(f"--bars: only {len(bars)} usable bars in {path}; the EMA200/ATR warm-up alone needs ~200 and a replay "
+                 f"is meaningless below ~1000")
+    lab = Lab(bars)
+    if not lab.ready:
+        sys.exit("--bars: the file is too short for the indicators to warm up")
+    first = lab.ready[0]
+    names = [x.strip() for x in (args.only.split(",") if args.only else []) if x.strip()] or ["baseline", "structstop"]
+    unknown = [x for x in names if x not in VARIANTS]
+    if unknown:
+        sys.exit(f"unknown variant(s): {unknown}\nknown: {', '.join(VARIANTS)}")
+    ratchet = args.ratchet or "const"
+    rat_txt = {"const": f"constant {BE_TRIGGER_R:.2f}R (today's rule) on every bar",
+               "era": "the live-era schedule (none before 2026-09-10 12:34, so history before it runs WITHOUT a ratchet)",
+               "off": "OFF"}[ratchet]
+    t0, t1 = bars[0][0], bars[-1][0]
+    sessions = len({b[0].date() for b in bars})
+    print(f"strategy_lab HISTORY — {len(bars)} bars {t0} -> {t1} ({(t1 - t0).days + 1} calendar days, {sessions} dates with "
+          f"data) | first ready bar {lab.ts[first]}")
+    print(f"file: {path}\n"
+          f"mode: replay of TODAY's rules over broker M1 history. The live ledger and the calibration are skipped "
+          f"(--bars implies no ledger).\n"
+          f"cost ${args.cost:.2f}/side = ${2 * args.cost:.2f}/round trip | BE ratchet: {rat_txt}\n")
+    # ------------------------------------------------------------------ H1 data quality
+    gaps = defaultdict(int)
+    for a, b in zip(bars, bars[1:]):
+        m = (b[0] - a[0]).total_seconds() / 60.0
+        if m >= 30:
+            if m > 24 * 60:
+                gaps["weekend/holiday (> 24 h)"] += 1
+            elif 20 * 60 + 30 <= a[0].hour * 60 + a[0].minute <= 23 * 60 + 30 and m <= 150:
+                gaps["daily break (starts 20:30-23:30 UTC)"] += 1
+            else:
+                gaps["UNSCHEDULED hole (30 min .. 24 h)"] += 1
+    print("== H1. DATA ==")
+    print("    gaps >= 30 min: " + (", ".join(f"{v} x {k}" for k, v in sorted(gaps.items())) or "none"))
+    hl = [t for t in (b[0] for b in bars) if t < TUNING_START]
+    print(f"    {len(hl)} bars ({100 * len(hl) / len(bars):.0f}%) lie BEFORE {TUNING_START:%Y-%m-%d}, the first live trade: those are "
+          f"out-of-sample for the rules; later bars overlap the data they were tuned on."
+          if hl else f"    NO bar lies before {TUNING_START:%Y-%m-%d} (the first live trade): nothing here is out-of-sample "
+                     f"for the rules - this file only adds replay volume on the tuning period.")
+    # ------------------------------------------------------------------ H2 windows x variants
+    wins = [("ALL", None, None)]
+    if hl:
+        wins.append((f"OOS (< {TUNING_START:%m-%d})", None, TUNING_START))
+        if t1 >= TUNING_START:
+            wins.append((f"IN-SAMPLE (>= {TUNING_START:%m-%d})", TUNING_START, None))
+    print("\n== H2. REPLAY BY WINDOW (each row is a full independent cascade restarted at the window start) ==")
+    delta = {}
+    for label, frm, to in wins:
+        for nm in names:
+            trs, _ = lab.run(dict(VARIANTS[nm][1]), first_i=first, cost_per_side=args.cost, ratchet=ratchet, window=(frm, to))
+            print(_hist_line(label, nm, trs))
+            delta[(label, nm)] = trs
+        if "baseline" in names and "structstop" in names:
+            a_, b_ = delta[(label, "baseline")], delta[(label, "structstop")]
+            if a_ and b_:
+                print(f"  {'':22s}structstop - baseline: {statistics.mean(t['Rnet'] for t in b_) - statistics.mean(t['Rnet'] for t in a_):+.3f} R/trade, "
+                      f"{statistics.mean(t['net'] for t in b_) - statistics.mean(t['net'] for t in a_):+.3f} $/trade")
+    # ------------------------------------------------------------------ H3 by month
+    print("\n== H3. BY CALENDAR MONTH (each month is an independent cascade restarted at the month start) ==")
+    for label, frm, to in _month_windows(t0, t1):
+        for nm in names:
+            trs, _ = lab.run(dict(VARIANTS[nm][1]), first_i=first, cost_per_side=args.cost, ratchet=ratchet, window=(frm, to))
+            print(_hist_line(label + ("  (partial)" if (frm < t0 or to > t1 + timedelta(days=1)) else ""), nm, trs))
+    # ------------------------------------------------------------------ H4 cost sensitivity
+    print("\n== H4. COST SENSITIVITY on the ALL window (R/trade and $/trade, net) ==")
+    print(f"    {'cost/side':>10} " + " ".join(f"{nm:>26s}" for nm in names))
+    for c in HISTORY_COSTS:
+        cells = []
+        for nm in names:
+            trs, _ = lab.run(dict(VARIANTS[nm][1]), first_i=first, cost_per_side=c, ratchet=ratchet)
+            cells.append(f"n={len(trs):5d} {statistics.mean(t['Rnet'] for t in trs):+7.3f}R {statistics.mean(t['net'] for t in trs):+7.3f}$"
+                         if trs else "no trades")
+        print(f"    ${c:8.2f} " + " ".join(f"{x:>26s}" for x in cells))
+    print("""
+READ THIS BEFORE QUOTING ANYTHING ABOVE
+ - This is broker M1 HISTORY, replayed. The engine consumes the same terminal's closed M1 bars (tools/history_to_log.py
+   proves it bar-for-bar on the overlap with the live log), but spreads, gaps and the exact cascade are not the live
+   ones: the live ledger and forward test stay the authority (HANDOFF section 8).
+ - OOS rows are out-of-sample for the RULES (tuned on live data from 2026-09-04) but not for the idea: a result found here
+   is a hypothesis to PRE-REGISTER and forward-test, never a reason to change a parameter inside an open test window.
+ - Costs are the flat per-side charge. Real spreads widen in Asia/rollover and at news (tools/xm_quote_report.py measures
+   them); compare ROW-TO-ROW deltas, not absolute dollars.
+ - Intra-bar ordering is unknowable from OHLC (engine convention: arm-before-stop, stop-before-target), so every row
+   shares the same bias; a looser stop or ratchet always looks better under it.
+ - Months are independent cascades; a partial first/last month is small-n. Do not read a monthly row on its own.""")
+
+
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--cost", type=float, default=0.20, help="cost per side, $ (0 disables)")
     ap.add_argument("--calib-only", action="store_true")
@@ -537,7 +679,21 @@ def main():
                     help="run the variant pass on entries from this era only "
                          "(default 075 = the book where today's whole rule stack was live)")
     ap.add_argument("--json", default=None)
-    args = ap.parse_args()
+    ap.add_argument("--bars", default=None, metavar="PATH",
+                    help="LARGE-N mode: replay today's rules over a UTC bar file made by tools/history_to_log.py "
+                         "(broker M1 history). Skips the live ledger and the calibration.")
+    ap.add_argument("--ratchet", choices=["const", "era", "off"], default=None,
+                    help="with --bars only: BE ratchet for the whole history - const = 0.75R everywhere (default), "
+                         "era = the live schedule (none before 09-10), off")
+    args = ap.parse_args(argv)
+    if args.ratchet and not args.bars:
+        sys.exit("--ratchet only applies with --bars (the live-era replay always uses the era schedule)")
+    if args.bars:
+        for flag, bad in (("--table", args.table), ("--grid", args.grid), ("--calib-only", args.calib_only),
+                          ("--json", args.json), ("--era", args.era != "075")):
+            if bad:
+                sys.exit(f"{flag} is for the live-era replay and does not combine with --bars")
+        return history_report(args)
 
     bars = load_bars()
     ledger = load_ledger()

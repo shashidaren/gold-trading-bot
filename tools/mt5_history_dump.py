@@ -29,6 +29,18 @@ Notes
   Always treat live forward-test results as the final authority.
 - Prefer --bars over --days; copy_rates_from_pos is more reliable across brokers.
 - Output CSV columns: Timestamp,Open,High,Low,Close,TickVolume,Spread
+
+TIME - READ THIS BEFORE ANALYSING THE FILE
+------------------------------------------
+- The Timestamp column is BROKER SERVER time (XM: UTC+3 in summer, UTC+2 in winter) written under a UTC label
+  (MT5 hands back server time as epoch seconds; ts_to_str only formats it). It is also the bar's OPEN time, whereas
+  forward_test_log.csv is UTC and stamped at bar CLOSE. Do NOT feed this file to strategy_lab directly.
+- The LAST row is the bar still forming (the dump reads from position 0; the live feed reads position 1 = closed
+  bars), with partial OHLC.
+- Convert first - it proves the time basis against the live log and refuses if it cannot:
+    python3 tools/history_to_log.py /opt/gold/mt5_history.csv --out /opt/gold/history_utc.csv
+    python3 tools/strategy_lab.py --bars /opt/gold/history_utc.csv
+  (docs/ACCELERATE-TESTING.md.) The CSV format above is deliberately unchanged.
 """
 from __future__ import annotations
 
@@ -215,6 +227,9 @@ def main() -> None:
     last_ts = ts_to_str(int(rates[-1]["time"]))
     print(f"Wrote {len(rates)} bars → {out_path}")
     print(f"Range: {first_ts}  →  {last_ts}")
+    print("NOTE: these timestamps are BROKER SERVER time (XM: UTC+3 summer / UTC+2 winter) labelled UTC, and the last")
+    print("      row is the still-forming bar. Convert before analysis (it validates against the live log):")
+    print(f"        python3 tools/history_to_log.py {out_path} --out history_utc.csv")
     mt5.shutdown()
     print("Done.")
 

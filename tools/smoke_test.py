@@ -2118,6 +2118,371 @@ try:
 finally:
     shutil.rmtree(root_r, ignore_errors=True)
 
+# --- Scenario S ------------------------------------------------------------
+print("\nScenario S: history_to_log (broker server time -> UTC, proven against the MT5-era log; DST observed, not assumed)")
+import random as _rnd  # noqa: E402
+import history_to_log as H2L  # noqa: E402
+
+S_TS = "%Y-%m-%d %H:%M:%S"
+
+
+def syn_series(start, n, seed=9, sigma=0.9, wick=0.5, p0=4300.0, drift_amp=0.05):
+    """Deterministic synthetic M1 tape on gold's weekly schedule (closed Fri 20:57 -> Sun 22:00 UTC): a random walk with
+    alternating 3 h trend legs. -> [(close_utc, o, h, l, c, vol)], 2-digit prices. Hermetic: no live data, no wall clock."""
+    rnd, t, p, out, k = _rnd.Random(seed), start, p0, [], 0
+    while len(out) < n:
+        wd, m = t.weekday(), t.hour * 60 + t.minute
+        if (wd == 4 and m >= 20 * 60 + 57) or wd == 5 or (wd == 6 and m < 22 * 60):
+            t += timedelta(minutes=1)
+            continue
+        k += 1
+        o = p
+        c = o + drift_amp * (1 if (k // 180) % 2 == 0 else -1) + rnd.gauss(0, sigma)
+        h = max(o, c) + abs(rnd.gauss(0, wick))
+        l = min(o, c) - abs(rnd.gauss(0, wick))
+        out.append((t + timedelta(minutes=1), round(o, 2), round(h, 2), round(l, 2), round(c, 2),
+                    float(20 + int(abs(rnd.gauss(0, 15))))))
+        p, t = c, t + timedelta(minutes=1)
+    return out
+
+
+def s_px(x):                                           # mimic mt5_history_dump's price text (5 decimals, zeros stripped)
+    return f"{x:.5f}".rstrip("0").rstrip(".")
+
+
+def s_write_log(path, series, jitter=4):
+    """The live log's shape: stamped a few seconds AFTER the bar closes, CRLF like the real file."""
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f, lineterminator="\r\n")
+        w.writerow(["Timestamp", "Open", "High", "Low", "Close", "Volume"])
+        for t, o, h, l, c, v in series:
+            w.writerow([(t + timedelta(seconds=jitter)).strftime(S_TS), f"{o:.2f}", f"{h:.2f}", f"{l:.2f}", f"{c:.2f}", int(v)])
+
+
+def s_write_raw(path, bars, off_fn, forming=True, corrupt=0):
+    """mt5_history_dump's shape: stamped at bar OPEN, in SERVER time (open_utc + off_fn(open_utc) seconds). `bars` may be
+    several series (already ascending). The last row is a still-forming bar with partial OHLC, as the real dump has."""
+    rows = []
+    for t, o, h, l, c, v in bars:
+        u = t - timedelta(minutes=1)
+        rows.append([(u + timedelta(seconds=off_fn(u))).strftime(S_TS), o, h, l, c, int(v), 25])
+    if corrupt:
+        for i, r in enumerate(rows):
+            if i % 10 < corrupt:
+                r[1:5] = [x + 0.5 for x in r[1:5]]      # a valid bar, but not the live feed's bar
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["Timestamp", "Open", "High", "Low", "Close", "TickVolume", "Spread"])
+        for r in rows:
+            w.writerow([r[0]] + [s_px(x) for x in r[1:5]] + r[5:])
+        if forming:
+            last = datetime.strptime(rows[-1][0], S_TS) + timedelta(minutes=1)
+            w.writerow([last.strftime(S_TS), "1.0", "1.5", "0.5", "1.2", 3, 25])
+
+
+def s_run(argv):
+    buf = io.StringIO()
+    rc = H2L.main(argv, out=lambda m: buf.write(m + "\n"))
+    return rc, buf.getvalue()
+
+
+def s_read(path):
+    with open(path, newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def s_equal(out_path, series):
+    """True when the converted file holds EXACTLY the series: same UTC close stamps, same OHLC."""
+    rows = s_read(out_path)
+    if len(rows) != len(series):
+        return False
+    for r, (t, o, h, l, c, v) in zip(rows, series):
+        if r["Timestamp"] != t.strftime(S_TS) or int(r["Volume"]) != int(v):
+            return False
+        if any(abs(float(r[k]) - x) > 0.006 for k, x in zip(("Open", "High", "Low", "Close"), (o, h, l, c))):
+            return False
+    return True
+
+
+def eu_off(u):
+    return BT.server_offset_s(u, "eu")
+
+
+def us_off(u):
+    return BT.server_offset_s(u, "us")
+
+
+tmp_s = tempfile.mkdtemp()
+try:
+    P = lambda name: os.path.join(tmp_s, name)          # noqa: E731
+    ser = syn_series(datetime(2026, 9, 14, 0, 0), 3000)  # Mon-Wed, all inside one regime under both rules
+    s_write_log(P("log.csv"), ser)
+    s_write_raw(P("raw.csv"), ser, lambda u: 10800)
+
+    # S1: a summer pull (+3 h): proven, converted, last (forming) bar dropped
+    rc, out = s_run([P("raw.csv"), "--out", P("utc.csv"), "--log", P("log.csv")])
+    check("S: a +3 h summer history is accepted, with 100% exact OHLC match as the proof",
+          rc == 0 and "offset  +3h : 100.0% exact OHLC match" in out and s_equal(P("utc.csv"), ser), out[-400:])
+    check("S: output is UTC and stamped at bar CLOSE (open + 60 s), in the log's column order, never the server time",
+          open(P("utc.csv")).readline().strip() == "Timestamp,Open,High,Low,Close,Volume"
+          and s_read(P("utc.csv"))[0]["Timestamp"] == ser[0][0].strftime(S_TS))
+    check("S: the dump's last row (the still-forming bar) is dropped and says so",
+          "dropped the last bar" in out and len(s_read(P("utc.csv"))) == len(ser))
+    check("S: a span inside one regime under BOTH rules is reported as rule-independent",
+          "does not depend on which rule is right" in out)
+    check("S: the default scan covers -12h..+14h and every wrong offset scores 0% (the proof is sharp)",
+          len(H2L.CANDIDATES_H) == 27 and "offset -12h" in out + "offset -12h"   # printed only if among the top 3
+          and re.search(r"offset\s+[-+]\d+h : +0\.0% exact", out) is not None, out[-300:])
+    ALL_CANDIDATES = H2L.CANDIDATES_H
+    H2L.CANDIDATES_H = range(1, 5)          # keep the smoke fast: the full scan just ran; the rest need only +2/+3/+4 h
+    rc, out = s_run([P("raw.csv"), "--out", P("utc_keep.csv"), "--log", P("log.csv"), "--keep-last"])
+    check("S: --keep-last keeps the forming bar (and the proof still passes)",
+          rc == 0 and len(s_read(P("utc_keep.csv"))) == len(ser) + 1)
+    check("S: the atomic write leaves no .tmp behind", not [f for f in os.listdir(tmp_s) if f.endswith(".tmp")])
+    before_files = set(os.listdir(tmp_s))
+    rc, out = s_run([P("raw.csv"), "--check-only", "--log", P("log.csv")])
+    check("S: --check-only validates and writes nothing", rc == 0 and "nothing written" in out
+          and set(os.listdir(tmp_s)) == before_files)
+
+    # S2: a server that is NOT on the documented offset (+2 h in summer) is refused, not silently converted
+    s_write_raw(P("raw2.csv"), ser, lambda u: 7200)
+    rc, out = s_run([P("raw2.csv"), "--out", P("u2.csv"), "--log", P("log.csv")])
+    check("S: +2 h data in summer is REFUSED under the default rule (the EU rule predicts +3 h there)",
+          rc == 1 and "REFUSED" in out and "use --dst none" in out and not os.path.exists(P("u2.csv")), out[-300:])
+    rc, out = s_run([P("raw2.csv"), "--out", P("u2.csv"), "--log", P("log.csv"), "--dst", "none"])
+    check("S: ... and --dst none converts it with the fixed offset the overlap proved", rc == 0 and s_equal(P("u2.csv"), ser))
+    rc, out = s_run([P("raw2.csv"), "--out", P("u2b.csv"), "--log", P("log.csv"), "--dst", "eu"])
+    check("S: an explicit --dst eu that the data contradicts is refused", rc == 1 and "WRONG offset" in out, out[-200:])
+
+    # S3: an asserted offset is still validated
+    rc, out = s_run([P("raw.csv"), "--out", P("u3.csv"), "--log", P("log.csv"), "--offset-hours", "3"])
+    check("S: --offset-hours 3 passes validation", rc == 0 and "validated" in out and s_equal(P("u3.csv"), ser))
+    rc, out = s_run([P("raw.csv"), "--out", P("u3b.csv"), "--log", P("log.csv"), "--offset-hours", "2"])
+    check("S: --offset-hours 2 on +3 h data is REFUSED (a wrong assertion cannot ride through)",
+          rc == 1 and "explain only" in out and not os.path.exists(P("u3b.csv")), out[-200:])
+    rc, out = s_run([P("raw.csv"), "--out", P("u3c.csv"), "--log", P("log.csv"), "--offset-hours", "3", "--dst", "eu"])
+    check("S: --offset-hours together with --dst eu is a usage error (exit 2)", rc == 2)
+
+    # S9: a history whose bars differ from the live feed
+    s_write_raw(P("raw9.csv"), ser, lambda u: 10800, corrupt=3)
+    rc, out = s_run([P("raw9.csv"), "--out", P("u9.csv"), "--log", P("log.csv")])
+    check("S: bars that only 70% match the live feed are REFUSED at the 90% default", rc == 1 and "explain only" in out, out[-200:])
+    rc, out = s_run([P("raw9.csv"), "--out", P("u9.csv"), "--log", P("log.csv"), "--min-match", "0.6"])
+    check("S: ... and accepted when the operator lowers --min-match consciously", rc == 0 and os.path.exists(P("u9.csv")))
+
+    # S8: no overlap to prove anything against
+    rc, out = s_run([P("raw.csv"), "--out", P("u8.csv"), "--log", P("missing.csv")])
+    check("S: no log to prove against -> REFUSED with the way out", rc == 1 and "no MT5-era rows" in out
+          and "--no-validate" in out and not os.path.exists(P("u8.csv")), out[-200:])
+    rc, out = s_run([P("raw.csv"), "--out", P("u8.csv"), "--log", P("missing.csv"), "--no-validate"])
+    check("S: --no-validate alone is not enough (an assertion is required)", rc == 1)
+    rc, out = s_run([P("raw.csv"), "--out", P("u8.csv"), "--log", P("missing.csv"), "--no-validate", "--offset-hours", "3"])
+    check("S: --no-validate --offset-hours 3 converts but labels the result UNVALIDATED",
+          rc == 0 and "UNVALIDATED" in out and s_equal(P("u8.csv"), ser))
+    march = syn_series(datetime(2026, 3, 27, 12, 0), 1137, seed=4)     # Fri 12:00 -> Mon 08:00, across the EU spring change
+    s_write_raw(P("rawm.csv"), march, eu_off)
+    rc, out = s_run([P("rawm.csv"), "--out", P("um.csv"), "--log", P("log.csv")])
+    check("S: a pull that does not reach the log's period shares no minute -> REFUSED", rc == 1 and "share NO minute" in out, out[-200:])
+    s_write_log(P("old_log.csv"), syn_series(datetime(2026, 9, 1, 0, 0), 1500))
+    rc, out = s_run([P("raw.csv"), "--out", P("u8.csv"), "--log", P("old_log.csv")])
+    check("S: log rows before the MT5 feed started (Twelve Data era) are never used as proof",
+          rc == 1 and "no MT5-era rows" in out, out[-200:])
+
+    # S10/S11/S12: guards
+    rc, out = s_run([P("utc.csv"), "--out", P("u10.csv"), "--log", P("log.csv")])
+    check("S: an already-converted (log-format) file is refused - converting twice would shift it again",
+          rc == 1 and "already looks like a converted" in out, out[-200:])
+    open(P("junk.csv"), "w").write("a,b,c\n1,2,3\n")
+    rc, out = s_run([P("junk.csv"), "--out", P("u10.csv"), "--log", P("log.csv")])
+    check("S: a file that is not mt5_history_dump output is refused", rc == 1 and "not mt5_history_dump output" in out)
+    rc, out = s_run([P("nope.csv"), "--out", P("u10.csv"), "--log", P("log.csv")])
+    check("S: a missing input is a refusal, not a traceback", rc == 1 and "cannot read" in out)
+    rc, out = s_run([P("raw.csv"), "--out", P("log.csv"), "--log", P("log.csv")])
+    check("S: it refuses to write over the live log", rc == 1 and "refusing to write over" in out
+          and open(P("log.csv"), newline="").read().startswith("Timestamp,Open,High,Low,Close,Volume\r\n"))
+    rc, out = s_run([P("raw.csv"), "--log", P("log.csv")])
+    check("S: --out is required unless --check-only (usage error 2)", rc == 2)
+    with open(P("raw.csv")) as f:
+        txt = f.read().splitlines()
+    dirty = txt[:50] + ["garbage,row", "2026-09-14 03:00:00,100,90,95,98,5,5", txt[10]] + txt[50:]     # junk, a corrupt bar, a duplicate minute
+    open(P("rawd.csv"), "w").write("\n".join(dirty) + "\n")
+    rc, out = s_run([P("rawd.csv"), "--out", P("ud.csv"), "--log", P("log.csv")])
+    check("S: malformed rows, corrupt bars (high < low) and duplicate minutes are skipped and counted, not fatal",
+          rc == 0 and "2 malformed rows skipped" in out and s_equal(P("ud.csv"), ser), out[:200])
+
+    # S13: a flat tape matches at EVERY offset, so it proves nothing - refuse instead of picking one
+    flat = [(t, 4300.0, 4300.0, 4300.0, 4300.0, 10.0) for (t, *_rest) in ser]
+    s_write_log(P("log_flat.csv"), flat)
+    s_write_raw(P("raw_flat.csv"), flat, lambda u: 10800)
+    rc, out = s_run([P("raw_flat.csv"), "--out", P("u_flat.csv"), "--log", P("log_flat.csv")])
+    check("S: a flat tape (every offset matches equally) proves nothing -> REFUSED, not guessed",
+          rc == 1 and "no UTC day in the overlap has a clear winner" in out and not os.path.exists(P("u_flat.csv")), out[-250:])
+
+    # S4: a DST change INSIDE the overlap (EU rule): observed from the OHLC match, then the rule is chosen by the data
+    # Fri 2026-10-23 12:00 -> Mon 10-26 08:00 UTC (537 + 120 + 480 bars): one voting day each side of the EU change
+    dst = syn_series(datetime(2026, 10, 23, 12, 0), 1137, seed=5)
+    s_write_log(P("log_dst.csv"), dst)
+    s_write_raw(P("raw_eu.csv"), dst, eu_off)
+    rc, out = s_run([P("raw_eu.csv"), "--out", P("u_eu.csv"), "--log", P("log_dst.csv")])
+    check("S: a transition INSIDE the overlap is observed day by day (+3 h, then +2 h) and the EU rule is chosen by the data",
+          rc == 0 and "+3h 2026-10-23..2026-10-23 (1d), +2h 2026-10-26..2026-10-26 (1d)" in out
+          and "EU rule - the overlap OBSERVED a transition" in out, out[-700:])
+    check("S: ... every bar on both sides of the change converts exactly (no hour lost or duplicated)",
+          s_equal(P("u_eu.csv"), dst))
+    check("S: ... and the report calls the change OBSERVED, not assumed",
+          "the span crosses a DST change (+3h -> +2h)" in out and "OBSERVED in the overlap" in out)
+    rc, out = s_run([P("raw_eu.csv"), "--out", P("u_x.csv"), "--log", P("log_dst.csv"), "--dst", "us"])
+    check("S: forcing the US rule on EU-shaped data is refused", rc == 1 and "US DST rule predicts the WRONG offset" in out, out[-200:])
+    rc, out = s_run([P("raw_eu.csv"), "--out", P("u_x.csv"), "--log", P("log_dst.csv"), "--dst", "none"])
+    check("S: a fixed offset over an overlap that changes is refused", rc == 1 and "server clock changed" in out, out[-200:])
+
+    # S5: a server that follows NEW YORK time
+    usd = syn_series(datetime(2026, 10, 30, 12, 0), 1137, seed=6)      # Fri 10-30 -> Mon 11-02: across the US change
+    s_write_log(P("log_us.csv"), usd)
+    s_write_raw(P("raw_us.csv"), usd, us_off)
+    rc, out = s_run([P("raw_us.csv"), "--out", P("u_us.csv"), "--log", P("log_us.csv")])
+    check("S: US-rule data is recognised from the overlap and converts exactly",
+          rc == 0 and "US rule - the overlap OBSERVED a transition" in out and s_equal(P("u_us.csv"), usd), out[-500:])
+    rc, out = s_run([P("raw_us.csv"), "--out", P("u_x.csv"), "--log", P("log_us.csv"), "--dst", "eu"])
+    check("S: ... and the EU rule is refused on it", rc == 1 and "EU DST rule predicts the WRONG offset" in out, out[-200:])
+
+    # S6: a change that neither rule explains is never guessed at
+    def odd_off(u):
+        return 10800 if u < datetime(2026, 10, 25, 1) else 14400
+    s_write_raw(P("raw_odd.csv"), dst, odd_off)
+    rc, out = s_run([P("raw_odd.csv"), "--out", P("u_x.csv"), "--log", P("log_dst.csv")])
+    check("S: an offset change that neither DST rule explains is REFUSED (never guessed)",
+          rc == 1 and "neither" in out and not os.path.exists(P("u_x.csv")), out[-300:])
+
+    # S7: history that reaches BEFORE the overlap across a transition the overlap cannot confirm
+    s_write_raw(P("raw_long.csv"), march + ser, eu_off)
+    rc, out = s_run([P("raw_long.csv"), "--out", P("u_long.csv"), "--log", P("log.csv")])
+    check("S: bars before the overlap are converted by the rule and the crossing is flagged RULE ONLY / unconfirmed",
+          rc == 0 and "from the RULE ONLY" in out and "+2h 2026-03-27 .. 2026-03-27" in out
+          and "+3h 2026-03-30 .. 2026-09-16" in out, out[-600:])
+    check("S: ... both sides of the spring change convert to the right UTC (+2 h before it, +3 h after)",
+          s_equal(P("u_long.csv"), march + ser))
+finally:
+    H2L.CANDIDATES_H = ALL_CANDIDATES
+    shutil.rmtree(tmp_s, ignore_errors=True)
+
+# --- Scenario T ------------------------------------------------------------
+print("\nScenario T: strategy_lab --bars (large-N replay of today's rules over UTC broker history; default paths untouched)")
+import strategy_lab as SL  # noqa: E402,F811
+
+
+def t_run(argv, cwd):
+    """Run strategy_lab.main(argv) in-process inside `cwd` (its default paths are relative). -> (exit, stdout)."""
+    old, buf, code = os.getcwd(), io.StringIO(), None
+    os.chdir(cwd)
+    try:
+        with contextlib.redirect_stdout(buf):
+            try:
+                SL.main(argv)
+            except SystemExit as e:
+                code = e.code
+    finally:
+        os.chdir(old)
+    return code, buf.getvalue()
+
+
+tmp_t = tempfile.mkdtemp()
+try:
+    hist = syn_series(datetime(2026, 8, 31, 0, 0), 9000)         # Aug 31 -> Sep 8: straddles the 2026-09-04 tuning start
+    hist_path = os.path.join(tmp_t, "history_utc.csv")
+    s_write_log(hist_path, hist, jitter=0)                        # a history file is stamped exactly at bar close
+    empty = tempfile.mkdtemp()                                   # NO trades.csv, NO forward_test_log.csv here
+
+    code, out = t_run(["--bars", hist_path], empty)
+    out_main = out
+    check("T: --bars replays history with NO ledger and NO log in the working directory (it reads neither)",
+          code is None and "strategy_lab HISTORY" in out and "--bars implies no ledger" in out, out[:200])
+    check("T: banner states the cost model and the ratchet (constant 0.75R by default)",
+          "cost $0.20/side = $0.40/round trip" in out and "BE ratchet: constant 0.75R" in out)
+    check("T: out-of-sample and in-sample windows are separated at the first live trade (2026-09-04)",
+          "OOS (< 09-04)" in out and "IN-SAMPLE (>= 09-04)" in out and "lie BEFORE 2026-09-04" in out)
+    check("T: months are independent windows and partial months are marked",
+          "2026-08  (partial)" in out and "2026-09  (partial)" in out)
+    rows_all = {m.group(1): int(m.group(2)) for m in re.finditer(r"ALL\s+(baseline|structstop)\s+n=\s*(\d+)", out)}
+    check("T: the synthetic tape produces enough trades to read (>= 20 per variant)",
+          rows_all.get("baseline", 0) >= 20 and rows_all.get("structstop", 0) >= 20, f"{rows_all}")
+    check("T: the baseline - structstop delta line and the cost table are printed",
+          "structstop - baseline:" in out and all(f"${c:8.2f} " in out for c in (0.0, 0.15, 0.20, 0.35)))
+    costs_r = re.findall(r"\$\s+(\d\.\d\d)\s+n=\s*\d+\s+([+-]\d+\.\d+)R.*?n=\s*\d+\s+([+-]\d+\.\d+)R", out)
+    seq_b = [float(b) for _, b, _ in costs_r]
+    seq_s = [float(s_) for _, _, s_ in costs_r]
+    check("T: ... for both variants", len(costs_r) == 4 and seq_b == sorted(seq_b, reverse=True)
+          and seq_s == sorted(seq_s, reverse=True) and seq_b[0] > seq_b[-1], f"{costs_r}")
+    check("T: the honesty caveats are printed (broker history, hypothesis only, flat cost, intra-bar bias)",
+          all(x in out for x in ("READ THIS BEFORE QUOTING", "PRE-REGISTER", "Intra-bar ordering is unknowable",
+                                 "the live ledger and forward test stay the authority")))
+    code2, out2 = t_run(["--bars", hist_path], empty)
+    check("T: the replay is deterministic (same file, same bytes - no wall clock, no randomness)", out2 == out)
+
+    code, out_off = t_run(["--bars", hist_path, "--ratchet", "off"], empty)
+    code, out_era = t_run(["--bars", hist_path, "--ratchet", "era"], empty)
+    be_const = re.search(r"ALL\s+baseline\s+n=\s*\d+\s+\d+W/\s*\d+L/\s*(\d+)BE", out)
+    be_off = re.search(r"ALL\s+baseline\s+n=\s*\d+\s+\d+W/\s*\d+L/\s*(\d+)BE", out_off)
+    be_era = re.search(r"ALL\s+baseline\s+n=\s*\d+\s+\d+W/\s*\d+L/\s*(\d+)BE", out_era)
+    check("T: --ratchet const arms scratches, off arms none, and era (none before 2026-09-10 12:34) arms none on this "
+          "pre-09-10 tape", be_const and be_off and be_era and int(be_const.group(1)) > 0 and int(be_off.group(1)) == 0
+          and int(be_era.group(1)) == 0 and "live-era schedule" in out_era and "BE ratchet: OFF" in out_off,
+          f"const {be_const and be_const.group(1)} off {be_off and be_off.group(1)} era {be_era and be_era.group(1)}")
+    code, out_one = t_run(["--bars", hist_path, "--only", "baseline", "--cost", "0.35"], empty)
+    check("T: --only and --cost apply (one variant, $0.35/side in the banner, no delta line)",
+          code is None and "structstop" not in out_one.split("== H4")[0].split("== H2")[1] and "$0.35/side" in out_one
+          and "structstop - baseline" not in out_one)
+
+    # refusals
+    raw_path = os.path.join(tmp_t, "mt5_history.csv")
+    s_write_raw(raw_path, hist[:2000], lambda u: 10800)
+    code, out = t_run(["--bars", raw_path], empty)
+    check("T: RAW mt5_history_dump output is refused with the converter command (server time labelled UTC would silently "
+          "shift every blackout and session)", isinstance(code, str) and "history_to_log.py" in code and "BROKER SERVER time" in code,
+          str(code)[:120])
+    short_path = os.path.join(tmp_t, "short.csv")
+    s_write_log(short_path, hist[:600])
+    code, out = t_run(["--bars", short_path], empty)
+    check("T: a file too short to warm up is refused", isinstance(code, str) and "usable bars" in code, str(code)[:100])
+    code, out = t_run(["--bars", os.path.join(tmp_t, "nope.csv")], empty)
+    check("T: a missing file is a clean message", isinstance(code, str) and "cannot read" in code)
+    open(os.path.join(tmp_t, "bad.csv"), "w").write("Timestamp,Price\n1,2\n")
+    code, out = t_run(["--bars", os.path.join(tmp_t, "bad.csv")], empty)
+    check("T: a file without OHLC columns is a clean message", isinstance(code, str) and "needs the columns" in code)
+    code, out = t_run(["--bars", hist_path, "--only", "nonsense"], empty)
+    check("T: an unknown variant is a clean message", isinstance(code, str) and "unknown variant" in code)
+    code, out = t_run(["--bars", hist_path, "--table"], empty)
+    check("T: --table does not combine with --bars", isinstance(code, str) and "does not combine" in code)
+    code, out = t_run(["--ratchet", "off"], empty)
+    check("T: --ratchet without --bars is refused (the live-era replay always uses the era schedule)",
+          isinstance(code, str) and "only applies with --bars" in code)
+
+    # the converter's output feeds the lab end to end (the real chain: dump -> convert -> replay)
+    s_write_log(os.path.join(tmp_t, "log_chain.csv"), hist[3000:])
+    s_write_raw(os.path.join(tmp_t, "raw_chain.csv"), hist, lambda u: 10800)
+    rc, cout = s_run([os.path.join(tmp_t, "raw_chain.csv"), "--out", os.path.join(tmp_t, "history_utc2.csv"),
+                      "--log", os.path.join(tmp_t, "log_chain.csv"), "--overlap-from", "2026-08-31"])
+    code, out_chain = t_run(["--bars", os.path.join(tmp_t, "history_utc2.csv")], empty)
+    same = [ln for ln in out_chain.splitlines() if not ln.startswith("file:")]
+    base = [ln for ln in out_main.splitlines() if not ln.startswith("file:")]
+    check("T: dump -> history_to_log -> strategy_lab --bars works end to end and reports exactly what replaying the "
+          "source tape reports (the converter lost and shifted nothing)",
+          rc == 0 and code is None and same == base and len(same) > 20, cout[-200:])
+
+    # default path untouched: calibration still runs from the cwd's ledger and log
+    cwd_def = tempfile.mkdtemp()
+    s_write_log(os.path.join(cwd_def, "forward_test_log.csv"), hist)
+    r_write_ledger(cwd_def, [("2026-09-02 10:00:02", "2026-09-02 10:05:01", 3.0),
+                             ("2026-09-02 11:00:02", "2026-09-02 11:05:01", -2.0)])
+    code, out_def = t_run(["--calib-only"], cwd_def)
+    check("T: WITHOUT --bars the default path still reads the cwd's log + ledger and prints the calibration (unchanged)",
+          code is None and "== 1. CALIBRATION" in out_def and "HISTORY" not in out_def and "ledger: 2 closed trades" in out_def,
+          out_def[:160])
+    shutil.rmtree(cwd_def, ignore_errors=True)
+    shutil.rmtree(empty, ignore_errors=True)
+finally:
+    shutil.rmtree(tmp_t, ignore_errors=True)
+
 
 print()
 if FAILURES:
