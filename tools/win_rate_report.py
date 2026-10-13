@@ -4,7 +4,16 @@ Win-rate decomposition — the "why is the win rate what it is?" report.
 
 Read-only. Run after every data drop, next to the other analysis tools:
 
-    python3 tools/win_rate_report.py            # from the repo root
+    python3 tools/win_rate_report.py                  # from the repo root (gross, as always)
+    python3 tools/win_rate_report.py --spread 0.40    # net view: every ledger P/L minus a ROUND-TRIP
+                                                      # cost per trade, scratches included
+    python3 tools/win_rate_report.py ROOT --spread 0.40
+
+    --spread is the round-trip cost in $ per trade (0.40 = strategy_lab's assumed $0.20/side). It is
+    ASSUMED, never measured (HANDOFF §6: the quote logger is what will measure it). With it, sections
+    1-3 print NET P/L, and a cost view (1b) shows the book's R/trade at several costs and its
+    break-even spread. Default (no flag) output is byte-identical to before. Sections 5-6 are
+    counterfactual walks and stay gross - cost-aware counterfactuals live in tools/strategy_lab.py.
 
 Sections
   1. Baseline: W/L/BE/TIME, decisive win rate with a Wilson 95% CI, expectancy in $
@@ -30,6 +39,7 @@ Data gotchas this tool already handles (see docs/HANDOFF.md §8):
     allow +2 min at the far end.
 """
 import csv
+import os
 import math
 import statistics
 import sys
@@ -37,7 +47,19 @@ import bisect
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-ROOT = sys.argv[1] if len(sys.argv) > 1 else "."
+_ARGS = sys.argv[1:]
+SPREAD_GIVEN = "--spread" in _ARGS
+SPREAD = 0.0
+if SPREAD_GIVEN:
+    _i = _ARGS.index("--spread")
+    try:
+        SPREAD = float(_ARGS[_i + 1])
+    except (IndexError, ValueError):
+        sys.exit("--spread needs a number: the ROUND-TRIP cost in $ per trade (0.40 = $0.20/side)")
+    if SPREAD < 0:
+        sys.exit("--spread must be >= 0")
+    del _ARGS[_i:_i + 2]
+ROOT = _ARGS[0] if _ARGS else "."
 TRADES = f"{ROOT}/trades.csv"
 LOG = f"{ROOT}/forward_test_log.csv"
 
@@ -113,7 +135,7 @@ def stats(ts, label, width=34):
     l = sum(1 for t in ts if t["reason"] == "SL")
     b = sum(1 for t in ts if t["reason"] == "BE")
     tm = sum(1 for t in ts if t["reason"] == "TIME")
-    pnl = sum(t["profit"] for t in ts)
+    pnl = sum(t["profit"] for t in ts) - SPREAD * len(ts)     # SPREAD = 0 -> gross, as before
     dec = w + l
     rate = w / dec * 100 if dec else float("nan")
     lo, hi = wilson(w, dec)
@@ -121,7 +143,7 @@ def stats(ts, label, width=34):
     ci = f"[{lo:4.1f},{hi:4.1f}]" if dec else ""
     res = f"{w:2d}W/{l:2d}L/{b:2d}BE" + (f"/{tm}TIME" if tm else "")
     print(f"  {label:{width}s} n={len(ts):3d}  {res}  "
-          f"{rate_str} {ci}  P/L {pnl:+8.2f}  /trade {pnl/len(ts) if ts else 0:+.3f}")
+          f"{rate_str} {ci}  {'net' if SPREAD else 'P/L'} {pnl:+8.2f}  /trade {pnl/len(ts) if ts else 0:+.3f}")
     return w, l, b, tm, pnl
 
 
@@ -159,6 +181,9 @@ def counterfactual_no_ratchet(t, cap_min=WALK_CAP_MIN):
 
 print(f"Win-rate report — {len(TRADES_L)} trades, {len(BARS)} bars "
       f"({BTS[0]} -> {BTS[-1]}), walk cap {WALK_CAP_MIN} min\n")
+if SPREAD_GIVEN:
+    print(f"NET VIEW: ${SPREAD:.2f} round trip charged on EVERY trade (scratches included) — an ASSUMED cost, not a\n"
+          f"measurement. Sections 1-3 are net; sections 5-6 are counterfactual walks and stay gross.\n")
 
 # ---------------------------------------------------------------- 1. baseline
 print("== 1. BASELINE ==")
@@ -169,13 +194,41 @@ print(f"  all-in win rate {w/len(TRADES_L)*100:.1f}% ({w}/{len(TRADES_L)}) | "
       f"scratch rate {b/len(TRADES_L)*100:.1f}% ({b}/{len(TRADES_L)})" +
       (f" | TIME exits {tm} ({sum(t['profit'] for t in TRADES_L if t['reason'] == 'TIME'):+.2f})" if tm else ""))
 print(f"  net P/L {pnl:+.2f}  =  {pnl/len(TRADES_L)/one_r:+.3f}R per trade "
-      f"(avg 1R ${one_r:.2f})")
+      f"(avg 1R ${one_r:.2f})" + (f"  [after ${SPREAD:.2f}/trade]" if SPREAD else ""))
 gross_w = sum(t["profit"] for t in TRADES_L if t["reason"] == "TP")
 gross_l = sum(t["profit"] for t in TRADES_L if t["reason"] == "SL")
 print(f"  gross {gross_w:+.2f} / {gross_l:+.2f}  payoff ratio "
       f"{abs(gross_w/gross_l)/(w/max(l,1)):.2f} per-win vs per-loss")
 print(f"  breakeven decisive WR at 1:{ATR_TP_MULT/ATR_SL_MULT:.1f} RR = "
       f"{1/(1+ATR_TP_MULT/ATR_SL_MULT)*100:.1f}%\n")
+
+if SPREAD_GIVEN:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import strategy_lab as _SL   # era boundary of the structural stop (the deploy time, not the plan)
+    print("== 1b. COST VIEW — what the paper engine hides (round trip is ASSUMED, not measured) ==")
+    print("  The ledger books no spread. A round trip pays one spread whatever the exit, so BE scratches pay it too\n"
+          "  (215 of 575 trades are scratches). 'break-even' = the round-trip cost at which the book nets exactly $0.")
+    costs = sorted({0.0, 0.20, 0.40, 0.60, SPREAD})
+    books = [("all trades", TRADES_L),
+             ("0.75R master (>=09-15)", [t for t in TRADES_L if t["et"] >= BE_075_DEPLOY]),
+             (f"struct-stop era (>={_SL.LIVE_CUTOVER:%m-%d %H:%M})",
+              [t for t in TRADES_L if t["et"] >= _SL.LIVE_CUTOVER])]
+    print(f"  {'book':32s}{'n':>5}{'gross $/t':>10}{'1R $':>7}  " +
+          "".join(f"{'net R/t @'+format(c, '.2f'):>16}" for c in costs) + f"{'break-even':>12}")
+    for label, ts in books:
+        if not ts:
+            print(f"  {label:32s}{0:5d}  (no trades)")
+            continue
+        g = sum(t["profit"] for t in ts) / len(ts)
+        r = statistics.mean(abs(t["entry"] - t["sl"]) for t in ts)
+        be = f"${g:.2f}" if g > 0 else "none (<0)"
+        print(f"  {label:32s}{len(ts):5d}{g:+10.3f}{r:7.2f}  " +
+              "".join(f"{(g - c) / r:+16.3f}" for c in costs) + f"{be:>12}")
+    print(f"  cost drag at ${SPREAD:.2f}: " + " | ".join(
+        f"{label.split(' (')[0]} {SPREAD / statistics.mean(abs(t['entry'] - t['sl']) for t in ts) * 100:.0f}% of 1R"
+        for label, ts in books if ts))
+    print("  (tools/strategy_lab.py charges $0.20/side = $0.40 round trip on every exit incl. BE and is the costed\n"
+          "   counterfactual tool; real XM GOLD spreads widen in Asia/rollover and at news — measure them before trusting a flat $.)\n")
 
 # ------------------------------------------------------------------- 2. eras
 print(f"== 2. ERAS (split at {BE_DEPLOY} = BE ratchet deploy) ==")
@@ -196,7 +249,7 @@ stats(MAXHOLD, "max-hold era (>=09-21, isolated)")
 for name, ts in (("pre-ratchet", PRE), ("new regime", NEW)):
     if ts:
         r = statistics.mean(abs(t["entry"] - t["sl"]) for t in ts)
-        print(f"    {name}: expectancy {sum(t['profit'] for t in ts)/len(ts)/r:+.3f}R/trade")
+        print(f"    {name}: expectancy {(sum(t['profit'] for t in ts)/len(ts) - SPREAD)/r:+.3f}R/trade")
 print()
 
 # ------------------------------------------------------------- 3. side/day
@@ -232,6 +285,9 @@ print("  (a scratch decided in ~1-2 min means the ratchet trigger is inside the 
 print()
 
 # ------------------------------------------------------- 5. BE counterfactual
+if SPREAD_GIVEN:
+    print("(sections 5-6 below are counterfactual walks with their own haircut: --spread does NOT apply to them;\n"
+          " use tools/strategy_lab.py for costed counterfactuals)\n")
 print(f"== 5. BE-RATCHET COUNTERFACTUAL ({WALK_CAP_MIN}min cap, original stops, "
       "SL-first, cascade-ignorant) ==")
 scr = [t for t in TRADES_L if t["reason"] == "BE"]

@@ -9,7 +9,9 @@
 #        stops the engine -> merges (conflicts: data files = server wins,
 #        everything else = remote wins) -> runs the smoke test -> rolls back
 #        on failure -> restarts the engine -> verifies status.json is fresh
-#   3. Runs tools/check_data.py (integrity gate)
+#   3. Runs tools/check_data.py (integrity gate), tools/handoff_check.py (is docs/HANDOFF.md
+#      still telling the truth?) and tools/xm_quote_report.py --quiet (is the quote logger
+#      writing?). The last two are ADVISORY: shown in the digest, never block a deploy
 #   4. Sends a one-message digest to the Telegram chat configured in .env
 #
 # Safety model:
@@ -30,7 +32,9 @@ SMOKE_GATE="${SMOKE_GATE:-1}"         # 0 = deploy without the smoke test
 ENGINE_SERVICE="${ENGINE_SERVICE:-}" # empty = auto-detect the unit running engine.py
 DASHBOARD_SERVICE="${DASHBOARD_SERVICE:-}" # empty = auto-detect the unit running dashboard.py
 NOTIFY="${NOTIFY:-always}"            # always | quiet (quiet = only on events)
-DATA_FILES=(trades.csv forward_test_log.csv skipped_trades.csv status.json)
+# xm_data/ = the read-only quote + contract-spec logger (docs/XM-LOGGER.md); `git add` of a directory that
+# does not exist yet fails quietly (|| true below), so this is safe before the logger is installed.
+DATA_FILES=(trades.csv forward_test_log.csv skipped_trades.csv status.json xm_data)
 
 log() { echo "[$(date -u '+%Y-%m-%d %H:%M:%S')] $*"; }
 
@@ -142,7 +146,7 @@ if [ "$NEED_MERGE" = "1" ]; then
             log "merge conflict - resolving: data files=ours, everything else=theirs"
             for f in $(git diff --name-only --diff-filter=U); do
                 case "$f" in
-                    trades.csv|forward_test_log.csv|skipped_trades.csv|status.json)
+                    trades.csv|forward_test_log.csv|skipped_trades.csv|status.json|xm_data/*)
                         git checkout --ours -- "$f" ;;
                     *) git checkout --theirs -- "$f" ;;
                 esac
@@ -292,7 +296,49 @@ case "$FRESH_MSG" in
         ;;
 esac
 
-log "done. data=[$DATA_MSG] deploy=[$DEPLOY_MSG] check=[$CHECK_MSG]"
+# --- phase 4c: handoff freshness (ADVISORY - never blocks a deploy) -------------
+# docs/HANDOFF.md carries a machine-checked snapshot block; tools/handoff_check.py recomputes it
+# from the data files this script just committed. A stale handoff is how a new session ends up
+# retuning on a week-old picture (2026-10-13: §1 said 493 closed, the box had 575). The verdict
+# rides along in the digest. It deliberately does NOT touch $EXTRA: a doc that is a dozen trades
+# behind is not an incident, and shouting about it every 3 hours would get the digest muted.
+# The exit code is ignored on purpose; only the one-line verdict is used.
+# Fix it with: python3 tools/handoff_check.py --update   (then rewrite the prose, HANDOFF §11)
+HANDOFF_MSG="not run"
+if [ -f tools/handoff_check.py ] && [ -f docs/HANDOFF.md ]; then
+    python3 tools/handoff_check.py --quiet >/tmp/autosync_handoff.log 2>&1
+    HANDOFF_MSG=$(tail -n1 /tmp/autosync_handoff.log)
+    [ -z "$HANDOFF_MSG" ] && HANDOFF_MSG="handoff_check failed to run"
+    log "handoff: $HANDOFF_MSG"
+fi
+
+# --- phase 4d: quote-logger liveness (ADVISORY - never blocks a deploy) ------------
+# mt5quotes-gold (docs/XM-LOGGER.md) writes a row every 30 s even while gold is shut (weekend, daily
+# break: the tick is frozen and the row is flagged STALE), so "the newest row is older than 15 min"
+# means the LOGGER is down, not that the market is closed. A dead logger would otherwise fail silently:
+# the engine does not depend on it and nothing else notices. Only that one case raises a line in $EXTRA;
+# the routine summary rides in the digest. The STALE text carries no changing numbers on purpose.
+# The exit code is ignored; only the one-line verdict is used (xm_quote_report --quiet never fails).
+XM_MSG="xm logger: report not installed"
+if [ -f tools/xm_quote_report.py ]; then
+    python3 tools/xm_quote_report.py --quiet >/tmp/autosync_xm.log 2>&1
+    XM_MSG=$(tail -n1 /tmp/autosync_xm.log)
+    # --quiet never fails and always prints "xm logger: ..."; anything else means the script itself
+    # crashed (an import error prints a traceback), so say so instead of pasting a traceback line
+    case "$XM_MSG" in
+        "xm logger:"*) ;;
+        *) XM_MSG="xm logger: report failed to run (${XM_MSG:-no output})" ;;
+    esac
+    log "$XM_MSG"
+    case "$XM_MSG" in
+        "xm logger: STALE"*)
+            EXTRA="$EXTRA
+⚠️ XM quote logger has stopped writing rows - check: systemctl status mt5quotes-gold (advisory: trading is unaffected)"
+            ;;
+    esac
+fi
+
+log "done. data=[$DATA_MSG] deploy=[$DEPLOY_MSG] check=[$CHECK_MSG] handoff=[$HANDOFF_MSG] xm=[$XM_MSG]"
 
 QUIET_SKIP=0
 if [ "$NOTIFY" = "quiet" ] && [ "$DATA_MSG" = "no new data" ] && [ "$DEPLOY_MSG" = "none" ] \
@@ -305,5 +351,7 @@ if [ "$QUIET_SKIP" = "0" ]; then
 🚀 deploy: $DEPLOY_MSG
 🩺 integrity: $CHECK_MSG
 📈 candles: $FRESH_MSG
+📝 handoff: $HANDOFF_MSG
+📡 $XM_MSG
 💰 $STATS$EXTRA"
 fi
