@@ -50,9 +50,14 @@ disagree about when the structural stop went live.
 2. Run integrity + era report:
    ```bash
    python3 tools/check_data.py          # expect "0 fail"
+   python3 tools/handoff_check.py       # is THIS file still true? STALE -> `--update`, then rewrite §1/§4/§6 (§11)
    python3 tools/win_rate_report.py
    python3 tools/momentum_regime.py     # regime/side + the 09-28 hypothesis & its bar
+   python3 tools/check_structural_stop.py   # struct-stop guard: must PASS (it also proves the deploy boundary)
    ```
+   **Read the 2026-10-13 block at the top of §1 first:** the struct-stop cutover was *corrected* to
+   **2026-10-06 03:00 UTC** (n=78, not 82) and the guard is green; the BTC-port verdicts are in
+   `docs/ANALYSIS-2026-10-13-btc-port-assessment.md` §3.
 3. **10-05 re-review is DONE:** `docs/REVIEW-2026-10-05.md`. Max-hold isolation
    closed (n=209, 1 TIME exit, cap never bound in-session); fallback step-2
    trigger **MET** (−$0.570/trade at n=209) → ratchet-off is **eligible to be
@@ -73,7 +78,8 @@ disagree about when the structural stop went live.
 | Gate replay (ledger-side, cascade-ignorant — descriptive only) | `python3 tools/validate_gates.py` |
 | **Any exit/gate/param counterfactual** | `python3 tools/strategy_lab.py --table --only baseline,<variant>` |
 | Replay-vs-production recall | `python3 tools/strategy_lab.py --calib-only` |
-| Stop-vs-level invariant | `python3 tools/check_structural_stop.py` |
+| Stop-vs-level invariant (+ deploy-boundary evidence) | `python3 tools/check_structural_stop.py` |
+| **Is this handoff stale?** | `python3 tools/handoff_check.py` (`--update` rewrites only the snapshot block) |
 | Loser features | `python3 tools/analyze_losers.py` |
 | Engine regression | `python3 tools/smoke_test.py` |
 | Force autosync now | `sudo /opt/gold/tools/autosync.sh` |
@@ -91,8 +97,12 @@ disagree about when the structural stop went live.
 - Decide an exit/ratchet/stop change from `exit_sims.py`, `pathwalk_sims.py` or
   `phantom_trades.py` — they are **cascade-ignorant** (one position,
   cooldown and breaker state are not modelled). Use `tools/strategy_lab.py` (§7).
-- Stack a second runtime change on the open **struct-stop window** (entries ≥ 2026-10-05
-  21:00 UTC): one variable at a time, and its bar is already written (§6 item 1).
+- Stack a second runtime change on the open **struct-stop window** (entries ≥ **2026-10-06
+  03:00 UTC**, the deploy time — planned 10-05 21:00): one variable at a time, and its bar is
+  already written (§6 item 1).
+- Date a cutover from the **plan** or the **PR merge**. Take it from the host's
+  `autosync: merge upstream` commit time (`docs/AUTOSYNC.md` §2) and confirm it from the ledger —
+  the struct-stop cutover was dated 6 h early and only a failing guard exposed it.
 - Hand-edit code on `/opt/gold` (autosync will refuse deploy).
 - Ship param/strategy changes without a pre-registered bar + REVIEW/ANALYSIS doc.
 - Treat the bot as income, or go LIVE without broker-side BE + a costs model.
@@ -116,12 +126,51 @@ disagree about when the structural stop went live.
 | 2026-09-17 | Falsification bar tripped (−$0.40/trade at n≥60) |
 | 2026-09-21 ~06:00 | `MAX_HOLD_MINUTES=240` live (PR #15); **no era counter reset** |
 | 2026-10-05 (1st) | Scheduled max-hold re-review (`docs/REVIEW-2026-10-05.md`): isolation closed at n=209, fallback step-2 trigger met, `H-side-awareness` dropped, session-band candidate named. **No runtime change** |
-| 2026-10-05 ~21:00 | **STRUCTURAL STOP live**: `SL_CLEAR_ATR = 0.5` + TP = 1.5 × actual risk (`engine.py`). One variable; **new isolation window** (entries ≥ cutover). Evidence + pre-registered bar: `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` |
+| 2026-10-05 21:00 (planned) → **2026-10-06 03:00:04 (actual)** | **STRUCTURAL STOP live**: `SL_CLEAR_ATR = 0.5` + TP = 1.5 × actual risk (`engine.py`). One variable; **new isolation window** (entries ≥ **2026-10-06 03:00 UTC**). PR #28 merged 10-06 00:31:53; autosync deployed it at 03:00:04 (`2f4f4c6`); #495–#498 ran the old rule. Evidence + pre-registered bar: `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` (erratum at the top) |
+| 2026-10-13 | **Tooling/docs session (no runtime change):** cutover corrected, replay level window 19→20 bars, `handoff_check.py` + `docs/AUTOSYNC.md` added, BTC-port assessment (`docs/ANALYSIS-2026-10-13-btc-port-assessment.md`). On a branch, **no PR yet** (owner asked to finalise first) |
 
-## 1. Where things stand (as of **2026-10-05, 21:15 UTC — second session today**)
+## 1. Where things stand (as of **2026-10-13, ~14:20 UTC — data collection 226**)
 
-- Repo: `shashidaren/gold-trading-bot`, default branch `main`. This session is on
-  `arena/bf9e984a-gold-trading-bot` and **it ships one runtime change**: the
+### 2026-10-13 update — tooling and docs only, **no runtime change**
+
+- **What this session did.** Branch `arena/3f12a4a6-gold-trading-bot`, **no PR yet** (the owner asked to
+  finalise first). Compared gold with `bitcoin-trading-bot`'s improvements and changed **only** `tools/`,
+  `docs/`, `README.md`, `archive/PROJECT_LOG.md`. `engine.py`, `trade_filter.py`, `dashboard.py` and every
+  parameter, gate and exit: **untouched**; the struct-stop window is undisturbed. Verdict per BTC item (done /
+  queued / not for gold, with evidence): `docs/ANALYSIS-2026-10-13-btc-port-assessment.md` §3.
+- **The struct-stop cutover is 2026-10-06 03:00 UTC, not 10-05 21:00.** PR #28 merged 10-06 00:31:53 and autosync
+  deployed it at 03:00:04. #495–#498 (1W/3L, −$9.90) ran the **old** rule and are **not** in the era, so the era is
+  **n = 78**. The guard had been red on this: `check_structural_stop.py` now **PASSES** (A1 stop-inside-level **= 0**;
+  min clearance +0.36 ATR, level-bound median +0.50; level-bound share 82.1%; median risk 3.23 ATR — all inside the
+  A2/A4/A5 bars; the one level-bound trade under 0.5 ATR, #550, is a duplicated log candle, not an engine fault) and
+  it now **proves the deploy boundary from the ledger** (last OLD-rule #498 02:39:09 → first NEW-rule #499 03:33:05).
+  Erratum at the top of `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md`; thresholds in its §7 unchanged.
+- **Replay-harness fix.** `strategy_lab` took the 20-bar level over 19 prior bars; the engine uses 20 (the lab now
+  equals the engine's logged `Dynamic_Floor` on 99.81% of bars, was 85.97%). Funnel recall 99.8/99.7 → **100.0/100.0**;
+  quoted replay figures move the way the design argued (stop-inside-level 63.8% → 66.4%; master-era replay
+  structstop −0.101R → −0.076R at $0.20/side; "better in 3 of 4 eras" unchanged). No conclusion reverses.
+- **This file is now machine-checked.** The snapshot block at the top is recomputed by `tools/handoff_check.py`
+  and every autosync digest carries `📝 handoff: fresh|STALE` (advisory). §1 had been **8 days / 82 trades stale**
+  (it said 493 closed; the box had 575) and the "daily job" last refreshed it on 09-25 (PR #22).
+- **Struct-stop era, first look — DESCRIPTIVE ONLY. n = 78 is below the pre-registered n = 100 screen; this is NOT a
+  result, in either direction, and the bar is unchanged.** 25W/37L/15BE/1TIME; decisive WR **40.3%** [29.0–52.7];
+  gross **−$0.70** (−$0.009/trade, **+0.007R**); **−$31.90 = −$0.409/trade at the assumed $0.40 round trip**;
+  SL events **5.1/calendar day** (bar ≤ 6.5); SL share **47.4%** (bar ≤ 47% — marginal); BE share **19.2%** (≤ 35%);
+  avg SL loss $5.57 vs $3.91 on the pre-change 0.75R book = **1.42×** (revert > 2.2×); era drawdown below start
+  **$13.77** (revert > $250; peak-to-trough $59.67); trades open across a price-log gap **0** (revert at 2+); longest
+  hold 240.1 min (the one TIME exit, #526, in-session). **Moving the four old-rule trades out flatters the era by
+  $9.90 (−$10.60 → −$0.70 gross)** — disclosed with before/after numbers in the assessment, F1. Pace is ~10.7
+  trades/day, so n = 100 lands ~10-15 and the **10-19 21:00 review comes first at n ≈ 130** (weekends are thin).
+- **Latent, not bitten:** the daily-loss breaker counts SLs among the last 30 ledger rows (34 entries under-counted,
+  never silently off) — queued for the post-window runtime PR (assessment F3).
+- **Waiting on the owner** (assessment §4): the `NOTIFY` policy, a `win_rate_report.py --spread` net view, a go for the
+  GOLD spread/contract-spec logger (the cost model is still a guess: −$319.51 gross vs −$549.51 at $0.20/side), and one
+  `mt5_history_dump.py` run for the large-N path — note its timestamps are **broker-server time labelled UTC** (+3 h now).
+
+### 2026-10-05 state (second session; kept as history — numbers in it are as of 10-05 unless restated above)
+
+- Repo: `shashidaren/gold-trading-bot`, default branch `main`. The 10-05 second session (branch
+  `arena/bf9e984a-gold-trading-bot`, PR #28) **shipped one runtime change**: the
   **structural stop** (`SL_CLEAR_ATR`/`RR_TARGET` in `engine.py`, §4) plus the
   costed/stateful replay harness that was the stated blocker for judging exit
   changes (`tools/strategy_lab.py`) and a geometry guard (`tools/check_structural_stop.py`).
@@ -132,26 +181,22 @@ disagree about when the structural stop went live.
   240` live ~06:00); **PR #9** (09-15) BE 0.30→0.75R; **PR #7** (09-10) ratchet
   + BUY-only London blackout + trend-side daily breaker. Production-host
   hardening/verification still **not performed** (§6 item 0).
-- Current ledger (data collection 181, commit `d8f8905`; **not frozen**, §1a):
-  **493 closed / 0 active**, 84W / 208L / 200BE / **1 TIME** → **28.8% decisive**
-  [23.9–34.2], paper P&L from $500 **−$308.91 → $208.05**, **−0.163R/trade**
-  (avg 1R $3.84), payoff 1.51, scratch rate 40.6%. Integrity **0 fail / 8 warn**;
-  synthetic smoke **A–N passed** (Scenario L also fixed: it read the real wall clock and went
-  red between 21:00–01:59 UTC). October 5 is a **partial day**; the last trade (#494) exited
-  10-05 18:34 under the OLD geometry.
-  - **0.75R master book** (entries ≥09-15 06:00): **n=318**, 66W/149L/102BE/1TIME,
-    **30.7% decisive** [24.9–37.2], **−$0.581/trade = −0.155R**, −$10.26/calendar day,
-    17.7 entries/day; original −$0.40 falsification bar remains tripped (formally since 09-17).
-  - **Max-hold era** (entries ≥09-21 06:00, re-reviewed 10-05): **n=223**,
-    46W/108L/68BE/**1TIME**, **29.9% decisive** [23.2–37.5],
-    **−$0.646/trade = −$11.08/calendar day**, 17.2 entries/day.
-    **Isolation closed; the 240-min cap never bound an in-session trade**
-    (longest non-TIME hold **68.0 min**). The single TIME exit is the
-    **weekend-gap hold #476** (SELL Fri 10-02 20:56 → Sun 10-04 22:00, 49.1 h
-    wall-clock, −$1.52) — the cap cannot fire while the market is closed, so
-    positions can ride a daily/weekly closure with an unenforceable stop
-    (LIVE risk). Keep the cap; it is inert on this sample, not the cause of the
-    SL cluster.
+- Current ledger (**data collection 226**, last bar 2026-10-13 11:59 UTC; **not frozen**, §1a):
+  **575 closed / 1 active** (SELL #577 since 10:30, SL 4189.49 / TP 4172.28, ratchet not armed — verified not
+  stuck), 110W / 248L / 215BE / **2 TIME** → **30.7% decisive** [26.2–35.7], paper P&L from $500
+  **−$319.51 → $180.49** (engine ledger $197.46, drift +$16.97), **−0.136R/trade** (avg 1R $4.08), payoff 1.54,
+  scratch rate 37.4%. **At the assumed $0.20/side the same ledger is −$549.51 (−$0.956/trade, −0.253R)** — scratches
+  pay a spread the paper engine never books. Integrity **0 fail / 8 warn**; synthetic smoke **A–P passed**.
+  The 10-05 figures this replaces: 493 closed, 28.8% decisive, −$308.91 → $208.05, −0.163R.
+  - **0.75R master book** (entries ≥09-15 06:00; **now includes the struct-stop era**): **n=400**,
+    92W/189L/117BE/2TIME, **32.7% decisive** [27.5–38.4], **−$195.31 = −$0.488/trade**; the part *before* the
+    deploy (n=322): 67W/152L/102BE/1TIME, 30.6% [24.9–37.0], −$0.604/trade = −0.162R, 8.0 SL/trading day.
+    The original −$0.40 falsification bar remains tripped (formally since 09-17).
+  - **Max-hold era** (entries ≥09-21 06:00, re-reviewed 10-05, isolation closed): **n=305**,
+    72W/148L/83BE/**2TIME**, **32.7% decisive** [26.9–39.2], **−$154.70 = −$0.507/trade**. The 240-min cap bound in-session
+    exactly once, **#526** (10-08 BUY, ratchet armed, closed at the cap after 240.1 min, +$0.48); the other TIME exit is
+    the **weekend-gap hold #476** (49.1 h, −$1.52) — the cap cannot fire while the market is closed, so positions can ride a
+    daily/weekly closure with an unenforceable stop (LIVE risk).
   - 0.30R era unchanged: n=130, 10W/22L/98BE, 31.2% decisive, −$0.321/trade.
     Pre-ratchet: n=45, 17.8%, −$1.834/trade. 0.75R pre-maxhold: n=95, 32.8%,
     −$0.427/trade.
@@ -239,7 +284,14 @@ disagree about when the structural stop went live.
   §7 of the review, and treat the Wine MT5 terminal as the least reliable
   component (the 08:29 reboot cause is still unexplained).
 
-**Current stance (2026-10-05, end of day):** Edge is **not confirmed** — and today's
+**Current stance (2026-10-13):** unchanged and still **paper-only**. Edge is **not confirmed** and nothing in the
+10-13 session claims one — it fixed the guard, not the strategy. The struct-stop era is at n=78 with its mechanical
+invariant **passing**; the pre-registered read is at n≥100 / **2026-10-19 21:00 UTC**, with the thresholds exactly as
+written on 10-05. The honest one-line summary of the book: gross **−0.136R/trade** over 575 trades, **−0.253R at the
+assumed cost**, with the new stop's era sitting near gross break-even on 78 trades — which is a reason to keep
+measuring (and to measure the cost for real), not a reason to size up.
+
+**Prior stance (2026-10-05, end of day):** Edge is **not confirmed** — and today's
 change does not claim one. The pre-change book (0.75R master −$0.581/trade, max-hold
 −$0.646) still loses before realistic costs, and the costed replay of the new geometry is
 still negative (−0.106R at $0.30 round trip); it halves the bleed and removes a mechanical
@@ -273,7 +325,7 @@ calendar timeline (§11).
 | **Structural stop / level-bound** | The stop is set by the 20-bar level rather than by `ATR_SL_MULT·ATR` (replay share under the new rule: **80.2%**). Checkable on any era with `tools/check_structural_stop.py`. |
 | **Clearance** | ATR by which the stop sits BEYOND the tested level (positive = the level must break for the stop to print). Pre-2026-10-05 median was **−0.42 ATR** (i.e. inside, stop fires on a retest); the rule requires ≥ 0 always and ≥ `SL_CLEAR_ATR` when level-bound. |
 | **Session band** | Entry hour in UTC: "Asia/rollover" = 23:00–06:59; "London/NY" = 07:00–22:59. Named 2026-10-05 §5a; **downgraded later the same day** — costed/cascade-aware replay shows the gap collapses from 0.268R to 0.085R once the stop is structural (it was a proxy for stop geometry). Never a live gate. |
-| **Struct-stop era** | Entries ≥ **2026-10-05 21:00 UTC**. A real isolation window (the rule changed), unlike the max-hold deploy which did not reset the counter. Judge per `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` §7 at n≥100; n<60 is not a result in either direction. |
+| **Struct-stop era** | Entries ≥ **2026-10-06 03:00 UTC** (`strategy_lab.LIVE_CUTOVER` — the autosync deploy time; the 10-05 21:00 in older text was the plan, corrected 10-13). A real isolation window (the rule changed), unlike the max-hold deploy which did not reset the counter. Judge per `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` §7 at n≥100; n<60 is not a result in either direction. |
 
 ## 2. Bot in one paragraph
 
@@ -330,7 +382,7 @@ feed** (~4.4k), not spot XAUUSD.
 | `BE_TRIGGER_R` | 0.75 | `engine.py` |
 | `MAX_HOLD_MINUTES` | 240 | `engine.py` |
 | `ATR_SL_MULT` / `ATR_TP_MULT` | 2.0 / 3.0 (TP = `RR_TARGET` × **actual** risk) | `engine.py` |
-| `SL_CLEAR_ATR` / `RR_TARGET` | **0.5 / 1.5** (live 2026-10-05 21:00; pre-cutover books have neither) | `engine.py` |
+| `SL_CLEAR_ATR` / `RR_TARGET` | **0.5 / 1.5** (live **2026-10-06 03:00** UTC — planned 10-05 21:00; pre-cutover books have neither) | `engine.py` |
 | `RSI_MIN` / `RSI_MAX` | BUY 30 / 68; SELL mirrored 32 / 70 | `engine.py` |
 | `MIN_ATR` (engine) | 1.10 | `engine.py` |
 | `MIN_ATR_TO_TRADE` / `MAX_ATR_TO_TRADE` | 1.10 / 4.50 | `trade_filter.py` |
@@ -360,7 +412,7 @@ after the previous exit). Both are open items in §6. Note the counterweight
 that FOMC day surfaced: escalating cooldown is what kept 17:28–18:28 UTC dark
 on 09-16, so it is no longer an unambiguous leak.
 
-Engine: **structural stop** (live 2026-10-05 21:00, `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md`).
+Engine: **structural stop** (live **2026-10-06 03:00 UTC**, planned 10-05 21:00 — `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md`, erratum at its top).
 `risk = max(ATR_SL_MULT·ATR, |entry − level| + SL_CLEAR_ATR·ATR)` where `level` is the same
 20-bar floor/ceiling the rejection gate was measured against; `take_profit = RR_TARGET·risk`.
 Why: the level test's tolerance is price-% (`FLOOR_BUFFER_PCT = 0.0020` ≈ $8.30 ≈ **4.5×** the
@@ -368,8 +420,9 @@ median ATR) so it passes on 86.9% of bars, entries fill a median **2.42 ATR** fr
 and a plain 2·ATR stop therefore sat **inside** the range on **63.8%** of the 0.75R master book
 — 63.8% of SL exits needed no structural break at all (median SL lifetime 7.2 min). Guarded by
 `tools/smoke_test.py` Scenario N and checkable on any era with
-`python3 tools/check_structural_stop.py` (**post-cutover it must print 0**). Costed, era-matched
-replay: master era n 326→217, 32.1→37.4% decisive, −0.217→−0.106R/trade, −$13.90→−$5.83/day at
+`python3 tools/check_structural_stop.py` (**post-cutover it must print 0** — and it now prints the boundary evidence that dates
+the deploy from the ledger). Costed, era-matched
+replay (10-05 figures, harness since corrected to the 20-bar level — see the erratum): master era n 326→217, 32.1→37.4% decisive, −0.217→−0.106R/trade, −$13.90→−$5.83/day at
 $0.15/side, SL/day 8.2→5.4, maxDD $255→$175; **better in 3 of 4 eras** (worse pre-ratchet — it
 needs the ratchet), and **still negative at every cost tested**. §7 of that doc is the
 pre-registered bar (judge at n≥100, ~2026-10-19).
@@ -544,11 +597,14 @@ that doc):
    Calibrate each era's actual rule before trusting any hypothetical P&L.
    Tools-only validation does not authorise runtime/strategy changes.
 1. **🔒 STRUCT-STOP WINDOW IS OPEN — do not touch exits until it is judged.** The only live
-   experiment: entries ≥ 2026-10-05 21:00 UTC use `SL_CLEAR_ATR = 0.5` + `RR_TARGET` TP.
-   Sequence (from `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` §7): **(a)** after the first
-   ~10–20 trades run `python3 tools/check_structural_stop.py --since 2026-10-05` — the
+   experiment: entries ≥ **2026-10-06 03:00 UTC** (the deploy; planned 10-05 21:00) use
+   `SL_CLEAR_ATR = 0.5` + `RR_TARGET` TP.
+   Sequence (from `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` §7): **(a)** *(done 10-13 on n=78:
+   `python3 tools/check_structural_stop.py` PASS, `--calib-only` recall 100.0/100.0 — re-run both at the
+   review)* the
    "stop inside level" count **must be 0** and `--calib-only` must still show ~100% recall
-   (if either fails it is a code/harness bug, not a strategy result); **(b)** judge expectancy
+   (if either fails it is a code/harness bug, not a strategy result — and read the boundary evidence the
+   check prints before suspecting the engine); **(b)** judge expectancy
    only at **n ≥ 100** (≈8 trading days at the expected 12 trades/day; **n < 60 is not a result**);
    **SCREEN** = R/trade ≥ −0.10R **and** decisive WR ≥ 36% **and** SL/day ≤ 6.5 **and** scratch share
    ≤ 35%. **PASS** additionally needs **n ≥ 150 with the WR's Wilson 95% LB > 32.1%** (≈40% WR — the
@@ -615,10 +671,26 @@ that doc):
 4. Historical research (optional, later): use `tools/mt5_history_dump.py`
    once you want to stress-test candidate filters on multi-year data. A
    replay-driven change of this size is exactly what multi-year data is for.
+   **Two traps found 10-13:** its `Timestamp` is the **broker-server epoch labelled UTC** (+3 h today, flips at
+   the broker's DST) — convert to UTC before any replay or every blackout/day boundary is 2–3 h off — and
+   `strategy_lab` needs `--bars`, a ratchet default for pre-09-10 history and a whole-history window first
+   (assessment §3 item 8). Do **not** port BTC's UTC `ts` change into the live `mt5_feed.py`: the persisted
+   `mt5_last_candle_ts` watermark would make the engine's dedup drop ~3 h of candles (assessment F4).
 
 5. LIVE-mode broker-side BE modify — only if/when switching to real orders.
    Note the ratchet level is now +0.75R, and the engine-side-only caveat still
    applies.
+
+6. **BTC-port queue (assessed 2026-10-13, `docs/ANALYSIS-2026-10-13-btc-port-assessment.md` §3–§4).**
+   *Done:* machine-checked handoff + digest line, `docs/AUTOSYNC.md`, the guard/harness fixes.
+   *Needs the owner's go (tools/ops only, safe inside the window):* `NOTIFY=alerts` policy (autosync,
+   8 digests/day today), `win_rate_report.py --spread` net view, the GOLD XM quote + contract-spec logger
+   (**measure the cost**: it is the gap between −$319.51 gross and −$549.51 at the assumed $0.20/side), the
+   large-N history path. *After the struct-stop judgement, one runtime PR with its own pre-registration:*
+   gap-aware stop fills (BTC PR #14: fill at the candle open if the bar opens through the stop), whole-day
+   daily-breaker window (`load_recent_trades(n=400)`; latent, never bitten), the pre-close guard (item 3(h)).
+   *Not for gold now:* `live_readiness` / `live_path_probe` / order executor / GO-LIVE window (no positive point
+   estimate to stage), `reconcile_stale_trade` (no stuck trade; #577 verified).
 
 ## 7. How to verify code changes (always)
 
@@ -630,7 +702,8 @@ python3 -m py_compile tools/*.py     # analysis tools must at least import
 python3 tools/win_rate_report.py     # must run end-to-end on current data
 python3 tools/momentum_regime.py     # same, plus prints the registered bar
 python3 tools/strategy_lab.py --calib-only        # funnel recall must stay ~100% per era
-python3 tools/check_structural_stop.py            # stop-vs-level invariant (post-10-05: 0)
+python3 tools/check_structural_stop.py            # stop-vs-level invariant (post-cutover: 0, PASS) + boundary evidence
+python3 tools/handoff_check.py                    # this file vs the data (FRESH); --update after a refresh
 ```
 
 Note: `tools/` scripts are NOT covered by smoke_test.py and several of them
@@ -646,6 +719,14 @@ data drop, not just after code changes.
   (`tools/check_structural_stop.py` for stop-vs-level) — a code fact is a far stronger early
   signal than expectancy at n=20; and (c) be mirrored in a smoke Scenario. Bar shape:
   `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` §7.
+- **A runtime change's cutover is its deploy time, not its plan.** Read it from the host's
+  `autosync: merge upstream` commit (`git log --grep 'autosync: merge upstream' --format='%H %cI'`;
+  `docs/AUTOSYNC.md` §2), set the era constant from that, and let the invariant check confirm it from the
+  ledger *before* anyone reads a P&L row (10-13: the struct-stop cutover was dated 6 h early). Build the
+  boundary evidence into the invariant check of any new runtime change.
+- **Smoke scenarios are the deploy gate (autosync rolls back on a red one) — keep them hermetic.** Synthetic data
+  in a temp dir, never the live CSVs (they change every 3 h), no wall clock, no dependence on a constant that a
+  later legitimate change will move (Scenario O pins `LIVE_CUTOVER` for this reason).
 - **Smoke tests must not read the wall clock.** Scenario L (`mt5_feed_problem` quiet-hours) did;
   it passed in market hours and failed at 00:09 UTC on 10-05 on a *clean* checkout. It is now
   pinned inside the scenario. If a scenario goes red only between 21:00–01:59 UTC or at a
@@ -705,7 +786,8 @@ engine.py          signals + structural stop + BE ratchet + max-hold TIME + stat
 trade_filter.py    portfolio gates (cooldown, daily breaker, blackouts, ATR)
 dashboard.py       Flask status page (read-only)
 tools/strategy_lab.py   canonical costed/stateful/era-matched replay (exit+gate decisions)
-tools/check_structural_stop.py  ledger-side invariant guard for the 2026-10-05 change
+tools/check_structural_stop.py  ledger-side invariant guard for the 2026-10-05 change (+ deploy-boundary evidence)
+tools/handoff_check.py  machine-checks the snapshot block at the top of THIS file (autosync digest: 📝 handoff)
 tools/             other analysis / integrity / report scripts (not on the hot path)
 /opt/gold/         live deploy root (autosync from main; never hand-edit)
 ```
@@ -715,7 +797,11 @@ tools/             other analysis / integrity / report scripts (not on the hot p
 - **Source of truth for live code:** `main` on GitHub.
 - Autosync: every 3 h from `/opt/gold` (`tools/autosync.sh`); refuses if local
   dirty. Force: `sudo /opt/gold/tools/autosync.sh`.
-- Daily Grok job refreshes `docs/HANDOFF.md` §1 from `status.json` + `trades.csv`.
+- A "daily Grok job" is documented to refresh `docs/HANDOFF.md` §1 from `status.json` + `trades.csv`; the last
+  refresh PR is **#22 (2026-09-25)** and §1 was 8 days stale on 10-13 — do not rely on it. The snapshot block
+  is machine-checked instead (`tools/handoff_check.py`; the digest line `📝 handoff:` is advisory and never
+  blocks a deploy), and `--update` is the deterministic way for any job or session to refresh it.
+- Full autosync runbook, digest legend and the "deploy time = cutover" rule: **`docs/AUTOSYNC.md`**.
 - Autosync digest now carries `📈 candles: ok (N open min) | STALE N open min`
   (phase 4b, added 2026-09-29): open-market minutes since the last logged candle,
   weekend/daily break excluded, shouts at > 90. A green digest with `no new
@@ -728,7 +814,8 @@ tools/             other analysis / integrity / report scripts (not on the hot p
 **Session & Push Protocol**
 1. Push every commit immediately (do not batch).
 2. Keep a session PR open until the user signs off.
-3. Before ending: update §1 numbers, §4/§5 if params/evidence moved, §6 next steps, the
+3. Before ending: run `python3 tools/handoff_check.py --update`, then update §1 numbers, §4/§5 if
+   params/evidence moved, §6 next steps, the
    era-timeline table (top of file) and `archive/PROJECT_LOG.md`. A runtime change is not
    "done" until its **pre-registered bar exists in a dated doc** — write the bar before any
    post-change trade can be judged, and never re-slice eras afterwards to rescue it.
@@ -741,7 +828,7 @@ tools/             other analysis / integrity / report scripts (not on the hot p
 | Now              | Edge not confirmed                | Paper-only |
 | ~~~2 weeks (10-05) / n≈200~~ | ~~Max-hold re-review~~ **DONE 10-05** | Isolation closed (n=209, cap inert); `H-side-awareness` dropped; step-2 trigger met but **not approved** |
 | ~~Next (gated)~~ | ~~Ratchet-off experiment approved?~~ **CLOSED 10-05** | Harness delivered (`tools/strategy_lab.py`); measured answer is **no** (≈breakeven gross, 61.7% full stop-outs, redundant next to the structural stop: −0.131R vs −0.124R). Session-band candidate downgraded in the same pass. Never back to 0.30R either way |
-| **2026-10-19 (or n=150)** | **Judge the structural stop** | `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` §7: invariant checks first (`tools/check_structural_stop.py` must print 0), then SCREEN at n≥100 (R/trade ≥ −0.10R + WR ≥ 36% + SL/day ≤ 6.5 + scratch ≤ 35%) and PASS only at n≥150 (Wilson LB of WR > 32.1%); REVERT triggers include R/trade ≤ −0.20R and era drawdown > $250. **No other exit/param change in this window** |
+| **2026-10-19 21:00 UTC (or n=150)** | **Judge the structural stop** (era = entries ≥ 2026-10-06 03:00 UTC; n=78 on 10-13) | `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` §7: invariant checks first (`tools/check_structural_stop.py` must PASS — it did on 10-13), then SCREEN at n≥100 (R/trade ≥ −0.10R + WR ≥ 36% + SL/day ≤ 6.5 + scratch ≤ 35%) and PASS only at n≥150 (Wilson LB of WR > 32.1%); REVERT triggers include R/trade ≤ −0.20R and era drawdown > $250. **No other exit/param change in this window** |
 | ~2–4 weeks       | Judge the new ratchet level       | Superseded 10-05: ratchet stays at 0.75R (step-2 experiment closed, §5.1 fallback); re-run the suite anyway — P&L/day + bleed/trade + R/trade, never WR alone |
 | ~2–4 months      | 100+ trades, multiple regimes     | First serious evaluation of edge            |
 | 6–12 months      | Durable positive expectancy?      | Decide if it deserves any real capital      |
