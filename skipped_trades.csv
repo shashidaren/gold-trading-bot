@@ -1393,3 +1393,9 @@ Timestamp,Reason,Price,ATR
 2026-10-15 08:52:02,Blackout: London Open & Early Session Kill-Zone,4153.57,1.58
 2026-10-15 08:53:03,Blackout: London Open & Early Session Kill-Zone,4152.51,1.58
 2026-10-15 08:54:04,Blackout: London Open & Early Session Kill-Zone,4152.71,1.45
+2026-10-15 12:08:08,SL Cooldown: 32 min remaining (2 consecutive SLs -> 60m cooldown),4147.90,1.93
+2026-10-15 12:09:09,SL Cooldown: 31 min remaining (2 consecutive SLs -> 60m cooldown),4148.15,1.95
+2026-10-15 12:27:05,Blackout: NY Early Pre-Market,4148.75,2.39
+2026-10-15 13:46:06,Blackout: NY Open & US High-Impact Macro Releases,4156.65,3.91
+2026-10-15 14:45:08,Blackout: NY Open & US High-Impact Macro Releases,4156.76,2.45
+2026-10-15 14:46:08,Blackout: NY Open & US High-Impact Macro Releases,4156.36,2.42
