@@ -30,8 +30,9 @@ Verdicts
   OK      doc value == live value
   DRIFT   doc value != live value, but inside tolerance (advisory only)
   STALE   outside tolerance: too many trades behind, snapshot too old, a referenced file
-          missing, the cutover/cost config disagrees with the tools, or the doc's own
-          `--cost` commands disagree with the snapshot's cost assumption
+          missing, the cutover/cost config disagrees with the tools, the doc's own `--cost`
+          commands disagree with the snapshot's cost assumption, or the doc is structurally
+          broken (a required §N missing, a placeholder marker, a dangling §N reference)
 
 Tolerance policy: 30 closed trades and 48 hours. Gold closes ~10-18 trades a weekday, so 30 is
 about two trading days of normal drift; BTC's 5 trades would be ~7 hours here and would make
@@ -54,6 +55,11 @@ is judged by what moves it, not by exact match:
                     commands); cutover_utc must equal strategy_lab.LIVE_CUTOVER exactly, so the
                     doc and the replay tools can never again disagree about the era boundary.
   as_of_utc, data_collection: advisory only (they move every 3 hours).
+
+Structure is checked too (added 2026-10-15 after the daily doc job truncated the file to its
+front matter and this gate still said FRESH): §1-§11 must all be present with their headings intact,
+no placeholder markers, no dangling §N references. `--update` refuses to rewrite the snapshot block
+of a structurally broken doc, so a truncation cannot be quietly stamped as verified.
 
 Exit code: 0 = fresh (OK/DRIFT), 1 = STALE, 2 = snapshot block missing or unparseable.
 tools/autosync.sh treats the exit code as ADVISORY: it prints the verdict in the Telegram
@@ -99,6 +105,70 @@ TRADE_COUNT_KEYS = {"closed_trades", "structstop_era_trades"}
 OUTCOME_KEYS = {"outcomes", "decisive_wr_pct", "structstop_era_outcomes"}   # change only if trades were added
 OPEN_TRADE_KEYS = {"open_trade"}                                          # changes on every open/close
 MONEY_KEYS = {"engine_ledger_usd", "true_equity_usd", "net_pnl_usd_at_cost"}
+
+# --------------------------------------------------------------------------- #
+# structure (2026-10-15)
+# --------------------------------------------------------------------------- #
+# Why this exists: on 2026-10-15 the daily doc job rewrote docs/HANDOFF.md twice - the first commit
+# replaced all 886 lines with the single line "PLACEHOLDER - will replace", the second put back the
+# front matter and §1 only. §2-§11 (the gates, the evidence base, next steps, the verification
+# ritual, the data gotchas, the deploy runbook and the §11 protocol itself) were gone, and this tool
+# said FRESH, because the snapshot block it reads was complete and current. A handoff can be
+# perfectly fresh and still be a corpse.
+#
+# The file is an operating manual, not a status page, so its SHAPE is part of the verdict:
+# every required section is present *and still says what it is*, no placeholder markers, and every
+# `§N` reference resolves. Each rule is a direct response to the observed failure; the byte size is
+# deliberately NOT checked (a floor would be arbitrary and would fire on honest edits).
+REQUIRED_SECTIONS = (
+    ("1", "Where things stand"),
+    ("2", "Bot in one paragraph"),
+    ("3", "Data feed"),
+    ("4", "Current risk gates"),
+    ("5", "Evidence base"),
+    ("6", "Next steps"),
+    ("7", "How to verify code changes"),
+    ("8", "Data gotchas"),
+    ("9", "Architecture quick map"),
+    ("10", "Deploy & ops"),
+    ("11", "How to keep this file honest"),
+)
+# Section titles must still contain these phrases - a renumbered or rewritten heading is how the
+# 10-15 restore smuggled §2-§11 out of the file while keeping a §1 that looked fine. If a rename is
+# intentional, update this table in the same commit.
+SECTION_KEYWORDS = {
+    "1": "where things stand",
+    "2": "bot in one paragraph",
+    "3": "data feed",
+    "4": "risk gates",
+    "5": "evidence base",
+    "6": "next steps",
+    "7": "verify code changes",
+    "8": "data gotchas",
+    "9": "architecture",
+    "10": "deploy",
+    "11": "keep this file honest",
+}
+# Bare-text markers of a machine-truncated or half-written file. Two rules keep this precise:
+#   * scanned OUTSIDE code spans, so the docs may still quote them while telling this story (as §1
+#     of HANDOFF.md does);
+#   * scanned CASE-SENSITIVELY - the all-caps spellings are the truncation's signature, while
+#     ordinary prose legitimately says "placeholder markers are flagged" in lower case (which is
+#     exactly the false positive this rule produced on its first run).
+PLACEHOLDER_MARKS = (
+    "PLACEHOLDER",
+    "[... rest of the",
+    "[...rest of the",
+    "rest of the original content",
+    "omitted for brevity",
+    "content omitted",
+    "TO BE WRITTEN",
+    "<full content",
+    "TODO:",
+    "FIXME",
+    "XXX:",
+)
+MAX_SECTION_REF = 11       # §1-§11 are this file's own sections; higher numbers belong to other docs
 
 # Order the block is written in. --update regenerates exactly these keys.
 KEY_ORDER = [
@@ -374,6 +444,47 @@ def compare(doc, facts):
     return rows
 
 
+def doc_structure(text):
+    """Is the handoff still WHOLE? (2026-10-15)
+
+    Three rules, all from the 10-15 truncation (see the constants above). Returns a list of
+    human-readable problems; an empty list means the file still has its shape.
+    """
+    problems = []
+
+    # 1. every required section exists, and its heading still says what it is
+    found = {}
+    for num, title in REQUIRED_SECTIONS:
+        m = re.search(rf"^##\s+{re.escape(num)}\.\s+(.+?)\s*$", text, flags=re.M)
+        if not m:
+            problems.append(f"missing §{num} ({title}) - the handoff is truncated, "
+                            f"rewritten, or the section was renamed")
+            continue
+        found[num] = m.group(1)
+        keyword = SECTION_KEYWORDS.get(num)
+        if keyword and keyword not in found[num].lower():
+            problems.append(f"§{num} now reads \"{found[num][:60]}\" and no longer mentions "
+                            f"'{keyword}' - if that rename is intentional, update "
+                            f"SECTION_KEYWORDS in tools/handoff_check.py")
+
+    # 2. no bare placeholder markers (code spans are excluded: the docs quote these on purpose)
+    scrubbed = re.sub(r"```.*?```", " ", text, flags=re.S)
+    scrubbed = re.sub(r"`[^`\n]*`", " ", scrubbed)
+    for mark in PLACEHOLDER_MARKS:
+        if mark in scrubbed:
+            problems.append(f"contains the placeholder marker \"{mark}\" - the file was "
+                            f"truncated or never finished")
+
+    # 3. every §N reference resolves to a section that exists
+    dangling = sorted({int(n) for n in re.findall(r"§(\d{1,2})\b", text)
+                       if int(n) <= MAX_SECTION_REF and str(int(n)) not in found})
+    if dangling:
+        problems.append("§" + ", §".join(str(n) for n in dangling) +
+                        " referenced but not present - dangling cross-references mean content "
+                        "was lost (a reader finds out the hard way)")
+    return problems
+
+
 def doc_consistency(root, doc, text):
     """Cross-checks that are about the doc agreeing with ITSELF.
 
@@ -456,6 +567,16 @@ def main(argv=None):
             pass
 
     if update:
+        # A refreshed snapshot on a truncated file just makes the corpse look verified (10-15).
+        broken = doc_structure(text)
+        if broken:
+            print("handoff_check: refusing to --update a structurally broken docs/HANDOFF.md:")
+            for prob in broken:
+                print(f"  [STALE] {prob}")
+            print("  restore the missing content first, e.g. "
+                  "git show <last-good-commit>:docs/HANDOFF.md")
+            return 1
+
         keep = {k: doc[k] for k in doc if k not in facts}
         new = dict(facts)
         new.update({k: v for k, v in keep.items()})
@@ -475,7 +596,7 @@ def main(argv=None):
         return 0
 
     rows = compare(doc, facts)
-    problems = doc_consistency(root, doc, text)
+    problems = doc_consistency(root, doc, text) + doc_structure(text)
 
     stale = [r for r in rows if r[3] == "STALE"] + [("doc", "", "", "STALE", p) for p in problems]
     drift = [r for r in rows if r[3] == "DRIFT"]
