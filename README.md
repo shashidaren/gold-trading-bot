@@ -10,7 +10,8 @@ changelog.
 
 | Path | What it is |
 |---|---|
-| `docs/HANDOFF.md` | **Start here for any new session** — current state, definitions, next steps, ops. |
+| `docs/HANDOFF.md` | **Start here for any new session** — current state, definitions, next steps, ops. §1 is current-state only. |
+| `docs/HANDOFF-HISTORY.md` | Dated session archaeology — the per-session state blocks §1 replaced (append-only, newest first). Read it for the *why* behind a rule or the full record of an incident, **never for current numbers**. |
 | `engine.py` | Data ingestion, indicators (EMA/RSI/ATR), the Buy/Sell signal funnel, trade execution. Includes `migrate_trades_csv()` — self-healing schema fix (see 09-10 review) — the **structural stop** (`SL_CLEAR_ATR = 0.5` + `RR_TARGET`, live **2026-10-06 03:00 UTC** — planned for 10-05 21:00, deployed by the 03:00 autosync: risk = `max(2·ATR, |entry − level| + 0.5·ATR)`, TP = 1.5 × that risk — see `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md`), and the breakeven stop ratchet (`BE_TRIGGER_R`: 0.30R since the 09-10 losing-trade analysis, **raised to 0.75R on 09-15** — the tight trigger was scratching 77% of trades; see `docs/REVIEW-2026-09-15.md`). |
 | `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` | **Why the stop-loss rate is high, and the change that shipped for it** (structural stop, live 2026-10-06 03:00 UTC; the doc's own 10-05 21:00 cutover is corrected in its erratum): the inert `FLOOR_BUFFER_PCT` level test, the ~64–66% of trades whose stop sat *inside* the 20-bar level, the costed/stateful era-matched evidence, everything rejected, and the **pre-registered forward bar** (§7) that must be judged at n≥100 before anything else changes. |
 | `docs/AUTOSYNC.md` | How the unattended data sync + auto-deploy works, how to read the Telegram digest, and **why the deploy time (not the plan) is the era cutover**. |
@@ -100,7 +101,8 @@ $0.20/side cost can be measured; it never touches orders or the engine. See `doc
 
 ## 🆕 Starting a new session / handing off to a new agent
 
-1. **`docs/HANDOFF.md` first** — current ledger, definitions, next steps, ops.
+1. **`docs/HANDOFF.md` first** — current ledger, definitions, next steps, ops
+   (`docs/HANDOFF-HISTORY.md` only if you need the history behind something).
 2. Latest `docs/REVIEW-*.md` / `docs/ANALYSIS-*.md` if the handoff points at them
    (most recent: `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` — the stop-loss-rate
    question, the structural stop that shipped for it, and its pre-registered bar; before that
@@ -115,3 +117,6 @@ $0.20/side cost can be measured; it never touches orders or the engine. See `doc
 
 Document each review cycle as a new `docs/REVIEW-YYYY-MM-DD.md`, update
 `docs/HANDOFF.md` §1/§4–§6, and add a changelog line to `archive/PROJECT_LOG.md`.
+**§1 is current-state only** — rewrite it in place and move the block it replaced to
+`docs/HANDOFF-HISTORY.md` (HANDOFF §11 rule 5; `handoff_check.py` fails on a truncated or
+renamed section).
