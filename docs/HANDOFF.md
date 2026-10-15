@@ -14,22 +14,22 @@ from the first commit.
 <!-- HANDOFF-SNAPSHOT machine-checked by tools/handoff_check.py; refresh with --update -->
 | key | value |
 |---|---|
-| as_of_utc | 2026-10-15 11:59 |
-| data_collection | 243 |
-| closed_trades | 606 |
-| outcomes | 119W/263L/222BE/2TIME |
-| decisive_wr_pct | 31.2 |
-| engine_ledger_usd | 167.93 |
-| true_equity_usd | 150.96 |
+| as_of_utc | 2026-10-15 20:58 |
+| data_collection | 246 |
+| closed_trades | 608 |
+| outcomes | 119W/264L/223BE/2TIME |
+| decisive_wr_pct | 31.1 |
+| engine_ledger_usd | 162.73 |
+| true_equity_usd | 145.76 |
 | cost_usd_per_side | 0.20 |
-| net_pnl_usd_at_cost | -591.44 |
+| net_pnl_usd_at_cost | -597.44 |
 | cutover_utc | 2026-10-06 03:00 |
-| structstop_era_trades | 109 |
-| structstop_era_outcomes | 34W/52L/22BE/1TIME |
-| log_bars | 41710 |
-| log_last_bar_utc | 2026-10-15 11:59 |
-| skip_rows | 1394 |
-| open_trade | none |
+| structstop_era_trades | 111 |
+| structstop_era_outcomes | 34W/53L/23BE/1TIME |
+| log_bars | 42246 |
+| log_last_bar_utc | 2026-10-15 20:58 |
+| skip_rows | 1409 |
+| open_trade | BUY #610 @ 4172.9 |
 <!-- /HANDOFF-SNAPSHOT -->
 
 This block is the **only machine-checked part of the file**: `python3 tools/handoff_check.py`
@@ -327,6 +327,10 @@ entry guard / flat-before-close policy is a named candidate (§5a/REVIEW-10-05
 ## 5. Evidence base (don't re-derive)
 
 Key documents:
+- `docs/ANALYSIS-2026-10-15-stop-loss-rate.md` (**latest analysis, no runtime change**): "too many stop losses" —
+  live struct-stop book 39.1% decisive vs 42.0% breakeven at the live payoff; replay-vs-live gap on the same era
+  (to close first); `tol0.25` level test is the strongest queued lever, draft pre-registration **not registered**
+  pending owner sign-off.
 - `docs/REVIEW-2026-10-05.md` (**latest, analysis-only — the scheduled formal
   re-review**): max-hold isolation closed (n=209, 1 TIME, cap never bound
   in-session, −$0.570/trade) → **fallback step-2 trigger MET** (eligible, not
@@ -533,7 +537,7 @@ that doc):
      entry candidate.** master −0.325R vs −0.104R (n=57); max-hold −0.389R vs
      −0.111R (n=36). Observational only: needs the stateful cascade replay and
      a pre-registered bar; separate from the SL-streak change.
-   - (i) **Level-test re-scale (`FLOOR_BUFFER_PCT` price-% → 0.15–0.25 ATR) — REGISTERED,
+   - (i) **Level-test re-scale (draft pre-registration in `docs/ANALYSIS-2026-10-15-stop-loss-rate.md` §6, unregistered) (`FLOOR_BUFFER_PCT` price-% → 0.15–0.25 ATR) — REGISTERED,
      NOT adopted.** It is the single largest replay lever found (pooled all-eras bleed
      −12.4 → −2.1 $/day at $0.30 rt, n 563 → 137; master-era `sweep` 45.3% dec +0.091R gross)
      but it is **era-unstable** (0 winners of 21 decisive in the 0.30R slice; −0.273R vs
