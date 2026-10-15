@@ -275,7 +275,10 @@ class Lab:
         mins = t.hour * 60 + t.minute
         for (sh, sm), (eh, em), sides in windows:
             s, e = sh * 60 + sm, eh * 60 + em
-            inside = (s <= mins <= e) if s <= e else (mins >= s or mins <= e)
+            # Live (trade_filter.is_in_blackout) is `start <= now.time() <= end` on the
+            # FULL timestamp; a bar stamped HH:MM is evaluated a few seconds after the
+            # minute opens, so the end minute is NOT blocked. Start inclusive, end exclusive.
+            inside = (s <= mins < e) if s <= e else (mins >= s or mins < e)
             if inside and side in sides:
                 return True
         return False
