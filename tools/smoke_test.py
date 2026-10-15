@@ -1220,7 +1220,11 @@ with open(os.path.join(root_p, "skipped_trades.csv"), "w", newline="") as fh_p:
     fh_p.write("Timestamp,Reason,Price,ATR\n2026-10-06 02:00:00,x,4100.00,2.00\n")
 os.makedirs(os.path.join(root_p, "docs"), exist_ok=True)
 doc_path = os.path.join(root_p, "docs", "HANDOFF.md")
-PROSE_BEFORE, PROSE_AFTER = "# prose above stays byte-for-byte\n\n", "\n## 1. prose below too: 999 closed\n"
+PROSE_BEFORE = ("# prose above stays byte-for-byte\n\n## 1. Where things stand\n\n")
+PROSE_AFTER = ("\n## 2. Bot in one paragraph\n## 3. Data feed\n## 4. Current risk gates\n"
+               "## 5. Evidence base\n## 6. Next steps\n## 7. How to verify code changes\n"
+               "## 8. Data gotchas\n## 9. Architecture quick map\n## 10. Deploy & ops\n"
+               "## 11. How to keep this file honest\n")
 with open(doc_path, "w") as fh_p:
     fh_p.write(PROSE_BEFORE + "<!-- HANDOFF-SNAPSHOT x -->\n| key | value |\n|---|---|\n| as_of_utc | ? |\n"
                "<!-- /HANDOFF-SNAPSHOT -->\n" + PROSE_AFTER)
@@ -1253,6 +1257,38 @@ with open(doc_path, "w") as fh_p:
 rc_p, out_p = p_main("--quiet")
 check("P: a doc with no snapshot block is exit 2, one line, no crash",
       rc_p == 2 and out_p.startswith("not run"), out_p.strip()[:100])
+
+# 2026-10-15: the daily doc job truncated HANDOFF.md down to its front matter + §1 ("PLACEHOLDER -
+# will replace", then a partial restore) and this gate said FRESH - it only ever read the snapshot
+# block. Structure is now part of the verdict, so the corpse cannot pass as fresh.
+# the block is the one --update just wrote (so every snapshot key is OK and current) - the ONLY
+# thing wrong with this file is that §2-§11 are gone, which is exactly the 10-15 state that the
+# freshness check called FRESH.
+BLOCK = doc_after[len(PROSE_BEFORE):doc_after.index(PROSE_AFTER)]
+TRUNC = (PROSE_BEFORE + BLOCK + "\n### 2026-10-13 update\n\n"
+         "[... rest of the original content preserved ...]\n\nsee §6 and §11\n")
+with open(doc_path, "w") as fh_p:
+    fh_p.write(TRUNC)
+rc_p, out_p = p_main("--quiet")
+check("P: a handoff truncated to its front matter + §1 is STALE, not fresh (the block is perfect)",
+      rc_p == 1 and out_p.startswith("STALE") and "missing §2" in out_p, out_p.strip()[:140])
+rc_p, out_p = p_main()
+check("P: the report names the lost sections, the placeholder and the dangling references",
+      rc_p == 1 and "missing §11" in out_p and "[... rest of the" in out_p
+      and "referenced but not present" in out_p, out_p.strip()[-220:])
+rc_p, out_p = p_main("--update")
+with open(doc_path) as fh_p:
+    posted = fh_p.read()
+check("P: --update refuses to stamp a truncated file (block bytes unchanged)",
+      rc_p == 1 and posted == TRUNC and "refusing to --update" in out_p, f"rc={rc_p}")
+with open(doc_path, "w") as fh_p:
+    fh_p.write(TRUNC.replace("## 1. Where things stand", "## 1. Status"))
+rc_p, out_p = p_main()
+check("P: a section heading that no longer says what it is gets flagged (a rename is a rewrite)",
+      rc_p == 1 and "no longer mentions" in out_p, out_p.strip()[-220:])
+check("P: the real repo's HANDOFF.md is structurally whole (this checkout, not the fixture)",
+      HC.doc_structure(open(os.path.join(HC.HERE, "..", "docs", "HANDOFF.md"), encoding="utf-8").read()) == [],
+      "run python3 tools/handoff_check.py to see the problems")
 shutil.rmtree(root_p, ignore_errors=True)
 
 # --- Scenario Q ------------------------------------------------------------
