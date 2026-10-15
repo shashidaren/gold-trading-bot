@@ -112,3 +112,9 @@ For a BUY signal to trigger, ALL of the following must be true:
 - [ ] Scheduled-news gate (optionally) — named candidate after the 09-16 FOMC passed without one; the MAX_ATR wall is what actually covered it.
 - [ ] Multi-Timeframe (15m/1h) higher-timeframe trend integration.
 - [ ] Live spread filter check before order dispatch.
+
+## 2026-10-15 — stop-loss rate: harness fix + pre-registration (no runtime change)
+- Question: "too many stop losses". Live struct-stop book (n=111): 39.1% decisive vs 42.0% breakeven at the live payoff; gross −$0.32/trade.
+- Found and fixed a replay bug: `strategy_lab.py` blackout end boundary was inclusive by minute; live is `<=` on the full timestamp. Replay now matches live on the struct-stop era (39.3% vs 39.1% decisive).
+- Level-test re-scale (0.25 ATR) is the strongest queued lever; pre-registered on paper in `docs/PREREG-2026-10-15-level-test-0.25.md`. Not deployed; judged only after the 10-19 review.
+- Docs: `docs/ANALYSIS-2026-10-15-stop-loss-rate.md`, `docs/HANDOFF.md` §1/§5/§6/§8.

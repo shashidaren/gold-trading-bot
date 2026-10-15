@@ -118,6 +118,7 @@ snapshot block, still said FRESH.
   `tools/history_to_log.py`, which proves the clock against the live log and refuses rather than guesses
   (`strategy_lab --bars` refuses a raw dump). Never write history pulls into `xm_data/` (autosync commits it).
 - Ship param/strategy changes without a pre-registered bar + REVIEW/ANALYSIS doc.
+- Quote replay numbers from before 2026-10-15 without noting the harness fix (blackout end boundary, §8).
 - Treat the bot as income, or go LIVE without broker-side BE + a costs model.
 - Read falling-vs-rising (or "gold is down") stats pooled across sides — split
   by BUY/SELL first (they are ~collinear with direction, §2).
@@ -142,6 +143,7 @@ snapshot block, still said FRESH.
 | 2026-10-05 21:00 (planned) → **2026-10-06 03:00:04 (actual)** | **STRUCTURAL STOP live**: `SL_CLEAR_ATR = 0.5` + TP = 1.5 × actual risk (`engine.py`). One variable; **new isolation window** (entries ≥ **2026-10-06 03:00 UTC**). PR #28 merged 10-06 00:31:53; autosync deployed it at 03:00:04 (`2f4f4c6`); #495–#498 ran the old rule. Evidence + pre-registered bar: `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` (erratum at the top) |
 | 2026-10-13 | **Tooling/docs session (no runtime change):** cutover corrected, replay level window 19→20 bars, `handoff_check.py` + `docs/AUTOSYNC.md`, `win_rate_report.py --spread`, the **GOLD quote + contract-spec logger** (`docs/XM-LOGGER.md`, install pending) and the **large-N history path** (`docs/ACCELERATE-TESTING.md`, first dump pending), BTC-port assessment (`docs/ANALYSIS-2026-10-13-btc-port-assessment.md`). On a branch, **no PR yet** (owner asked to finalise first) |
 | 2026-10-15 | **Data refresh (no runtime change):** struct-stop era n=109 (past n=100 screen); metrics still inside most bars (SL share marginal); quote logger collecting (median spread $0.55); handoff snapshot + §1 updated. Scheduled 10-19 review next. |
+| 2026-10-15 (tooling) | **Replay-vs-live gap fixed** (`strategy_lab.py` blackout end boundary, end exclusive; the live check is on the full timestamp). Struct-stop era: replay 39.3% decisive vs live 39.1%. Older replay numbers move by ~0.02–0.1R/trade. **Level-test 0.25 ATR pre-registered on paper** (`PREREG-2026-10-15-level-test-0.25.md`), not deployed. No runtime change |
 | 2026-10-15 (docs) | **HANDOFF restored + consolidated** (no runtime change): the daily doc job truncated the file at 14:06 UTC (`43884e1` wrote `PLACEHOLDER - will replace`), losing **§2–§11**; content recovered from `712d106`, §1 history split out to `docs/HANDOFF-HISTORY.md`, `handoff_check.py` now checks section structure, not just freshness. |
 
 ## 1. Where things stand (as of **2026-10-15, ~14:00 UTC — data collection 243**)
@@ -173,6 +175,9 @@ snapshot block, still said FRESH.
 - **Why it matters beyond tidiness:** the file is rewritten by an automated daily job, and an 886-line / 68 KB
   document is more than that job can reliably reproduce — the truncation is a symptom of the size. A smaller
   §1 (and a hard structural gate) is the mitigation.
+
+**Current stance (2026-10-15, later):** still **paper-only**, no runtime change. Stop-loss question answered in
+`docs/ANALYSIS-2026-10-15-stop-loss-rate.md`: the replay-vs-live gap is closed (tooling fix), and the next candidate, the 0.25 ATR level test, is **pre-registered on paper** (`docs/PREREG-2026-10-15-level-test-0.25.md`) to be deployed only after the 10-19 review.
 
 **Current stance (2026-10-15):** unchanged and still **paper-only**. Edge is **not confirmed**, and neither the
 10-15 data refresh nor this docs pass claims one. The struct-stop era has crossed its pre-registered n≥100
@@ -327,10 +332,10 @@ entry guard / flat-before-close policy is a named candidate (§5a/REVIEW-10-05
 ## 5. Evidence base (don't re-derive)
 
 Key documents:
+- `docs/PREREG-2026-10-15-level-test-0.25.md` (**pre-registration, not deployed**): the 0.25 ATR level test, its bars and REVERT rules. Binding only after the 10-19 judgement.
 - `docs/ANALYSIS-2026-10-15-stop-loss-rate.md` (**latest analysis, no runtime change**): "too many stop losses" —
-  live struct-stop book 39.1% decisive vs 42.0% breakeven at the live payoff; replay-vs-live gap on the same era
-  (to close first); `tol0.25` level test is the strongest queued lever, draft pre-registration **not registered**
-  pending owner sign-off.
+  live struct-stop book 39.1% decisive vs 42.0% breakeven at the live payoff; the replay-vs-live gap is **found and fixed**
+  (a blackout end-minute bug in `strategy_lab.py`, tooling only); `tol0.25` is still the strongest queued lever.
 - `docs/REVIEW-2026-10-05.md` (**latest, analysis-only — the scheduled formal
   re-review**): max-hold isolation closed (n=209, 1 TIME, cap never bound
   in-session, −$0.570/trade) → **fallback step-2 trigger MET** (eligible, not
@@ -537,7 +542,7 @@ that doc):
      entry candidate.** master −0.325R vs −0.104R (n=57); max-hold −0.389R vs
      −0.111R (n=36). Observational only: needs the stateful cascade replay and
      a pre-registered bar; separate from the SL-streak change.
-   - (i) **Level-test re-scale (draft pre-registration in `docs/ANALYSIS-2026-10-15-stop-loss-rate.md` §6, unregistered) (`FLOOR_BUFFER_PCT` price-% → 0.15–0.25 ATR) — REGISTERED,
+   - (i) **Level-test re-scale — PRE-REGISTERED 10-15 on paper, NOT deployed** (`docs/PREREG-2026-10-15-level-test-0.25.md`: deploy only after the 10-19 judgement; bars fixed; never stacked on the struct-stop window) (`FLOOR_BUFFER_PCT` price-% → 0.15–0.25 ATR) — REGISTERED,
      NOT adopted.** It is the single largest replay lever found (pooled all-eras bleed
      −12.4 → −2.1 $/day at $0.30 rt, n 563 → 137; master-era `sweep` 45.3% dec +0.091R gross)
      but it is **era-unstable** (0 winners of 21 decisive in the 0.30R slice; −0.273R vs
@@ -672,6 +677,11 @@ data drop, not just after code changes.
 - `tools/analyze_losers.py` prints "Skip 23:00-06:59 UTC (Asia/rollover)" with
   keep = the **London/NY** book. Read keep/skip labels carefully — the *skipped*
   199-trade bucket was the better one (10-05 §5a).
+
+- **Blackout end boundary (fixed in the replay 2026-10-15).** `trade_filter.is_in_blackout` is `start <= now.time() <= end`
+  on the full timestamp. A bar stamped HH:MM is evaluated seconds after the minute opens, so the end minute is **not**
+  blocked. `strategy_lab.py` used an inclusive minute and blocked 09:00 and 15:15 wrongly; that alone made the
+  struct-stop era look 4–5 pp too good. Replays from before 10-15 carry that error.
 
 ## 9. Architecture quick map
 

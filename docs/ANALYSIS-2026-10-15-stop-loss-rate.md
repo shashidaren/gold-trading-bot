@@ -32,79 +32,77 @@ bad entries, or fewer SLs that were never going to be winners), not just reduce 
 - The BE ratchet at 0.75R is redundant next to the structural stop (`structstop+nord`, −0.052R vs
   −0.073R master; 54.8% of post-cutover trades become full stop-outs). Ratchet-off is not a fix.
 
-## 3. The replay does NOT yet reproduce the live book
+## 3. Replay-vs-live gap — FOUND and FIXED (harness only, no runtime change)
 
-Before trusting any counterfactual, this gap matters:
+Trade-by-trade matching (`tools/strategy_lab.py` replay vs `trades.csv`, struct-stop era) found:
 
-| Struct-stop era (≥ 10-06 03:00) | Live ledger | `strategy_lab` `structstop` replay |
+- **Stop geometry is identical.** Every matched entry has the same entry price and the same pre-ratchet
+  stop; the ledger stores the post-ratchet stop (= entry) on BE/TP rows, which is why it looks like zero risk.
+  Exit reason agrees on **94 of 94** matched entries.
+- The whole gap is **which trades get taken**. 17 live trades had no replay entry, and 16 replay trades
+  had no live entry.
+- The largest single cause was a **blackout boundary bug in the replay**. `trade_filter.is_in_blackout`
+  tests `start <= now.time() <= end` on the full timestamp; a bar stamped 09:00 is evaluated at ~09:00:04
+  and is **not** blocked, but the replay blocked the whole 09:00 minute (inclusive end). Live entries at
+  09:00:04 and 15:15:03 were therefore "replay-blocked". Fixed in `strategy_lab.py` (end exclusive, minute resolution).
+  This removed 10 of the 33 mismatches (live-only 17 → 7, replay-only 16 → 9).
+- The remaining 16 mismatches are cascade (BE scratches and the cooldown/occupancy they change).
+
+| Struct-stop era (≥ 10-06 03:00) | Live ledger | Replay, fixed harness |
 |---|---|---|
-| n | 111 | 110 |
-| Decisive WR | **39.1%** | 43.2% |
-| SL share | **47.7%** | 41.8% |
-| Avg TP / avg SL | +$8.14 / −$5.90 | +$8.24 / −$5.99 (similar) |
-| Gross $/trade | **−$0.319** | +$0.092 (at $0 cost) |
+| n | 111 | 113 |
+| Decisive WR | 39.1% | 39.3% |
+| SL share | 47.7% | 45.1% |
+| Gross $/trade | −$0.319 | −$0.276 |
 
-The replay has fewer SLs and more wins than the live book on the same window. The `--calib-only`
-entry recall is 100%, so the difference is in exits and cascade (the replay takes 744 trades vs 608 live;
-cooldown shifts with the exit bar). Until this is explained, the replay should be read as
-**directionally useful but optimistic by roughly 4–5 pp of decisive WR** in this era.
-This is a tooling item and is not a strategy result. It should be closed before any candidate is judged.
+The replay now reproduces the live book for this era within about 2 pp. The earlier 43.2% decisive WR was
+an artifact of the blackout bug. **Replay figures in older docs (incl. ANALYSIS-2026-10-05) were produced
+before this fix and move by roughly 0.02–0.1R/trade; they are history, not re-cut.**
 
-## 4. Candidates (costed replay, $0.20/side, 0.75R master book, R/trade)
+## 4. Candidates (costed replay, $0.20/side, R/trade; fixed harness)
 
-| Variant | What it changes | Master R/t | Post-cutover R/t (n) | Note |
+| Variant | Master (0.75R, ≥09-15) | Max-hold era | Post-cutover (n) | Note |
 |---|---|---|---|---|
-| baseline (pre-cutover geometry) | — | −0.194 | −0.078 (180) | counterfactual only |
-| `structstop` (**live now**) | stop 0.5 ATR beyond level, TP 1.5R | −0.073 | −0.025 (110) | the live experiment |
-| `structstop+nord` | + ratchet off | −0.052 | +0.015 (93) | 0% BE; SL share 55%; redundant (§2) |
-| `tol0.25` | level test 0.25 ATR (replaces the price-% tolerance) | **−0.062** | **+0.025 (45)** | cuts flow to ~6/day |
-| `tol0.50+pause` | level test 0.50 ATR + 15-min post-BE pause | −0.065 | +0.061 (52) | pause is a second variable |
-| `tol1.00` | level test 1.00 ATR | −0.085 | +0.013 (93) | weakest of the tol family |
+| baseline (pre-cutover geometry) | −0.201 | −0.201 | −0.089 (182) | counterfactual |
+| `structstop` (**live now**) | −0.102 | −0.108 | −0.095 (113) | the live experiment |
+| `structstop+nord` | −0.084 | −0.083 | −0.068 (95) | 0% BE; SL share 58%; redundant (§2) |
+| `tol0.25` | **−0.062** (n 152) | **−0.012** | +0.025 (45) | ~6 trades/day; **pre-registered** |
+| `tol0.50+pause` | −0.065 | −0.040 | +0.061 (52) | pause is a second variable |
+| `tol1.00` | −0.089 | −0.074 | +0.028 (94) | weakest of the tol family |
 
 Reading it honestly:
 
-- **`tol0.25` is the strongest single lever in the replay** (the same finding as handoff §6 item 3(i)). It is the only candidate that moves the book to around breakeven on the replay.
-- **Its post-cutover numbers are on 45 trades. They are not evidence.** Earlier evidence of the
-  same kind was era-unstable (0 winners of 21 decisive in the 0.30R slice). It also needs ~4 weeks.
-- It is also **inside the replay's optimism gap** (§3): roughly 4.6 pp of decisive WR is about 0.11R/trade
-  at this payoff, and the replay's *edge* over the live baseline is smaller than that. It may not survive the live check.
-- It must not be stacked on the struct-stop window (handoff §1/§6) and must wait until after 10-19.
+- **`tol0.25` is still the strongest single lever** on the master and max-hold books, after the harness fix.
+  It does not make the bot profitable at $0.20/side on the master book (−0.062R), so this is an improvement,
+  not a fix.
+- **Its post-cutover numbers are on 45 trades. They are not evidence.** Earlier evidence of the same kind was
+  era-unstable (0 winners of 21 decisive in the 0.30R slice). It also needs ~4 weeks.
+- It must not be stacked on the struct-stop window and must wait until after 10-19.
 
 ## 5. Options, in the order I would take them
 
-1. **Now (no runtime change):** close the replay-vs-live gap in §3. Find why the replay has ~4.6 pp
-   more decisive WR and 6 pp fewer SLs on the same era. A tooling PR, judged by `--calib-only`
-   and the era table, not by P&L.
+1. **Done 10-15:** replay-vs-live gap closed (§3). Tooling fix only; `--calib-only`, smoke test and the
+   structural-stop guard all pass.
 2. **After the 10-19 review (per the handoff):** if the struct-stop judgement is SCREEN or PASS, register
    **one** next variable with a bar written before any post-change trade. Best candidate: the
    `tol0.25` level-test re-scale (handoff §6 item 3(i)). Second: `tol0.50+pause`, only if `tol0.25` is
    judged on its own first.
 3. **Do not do:** raise `MIN_ATR` / cut ATR band (already normalized-rejected), RSI ≥ 45 (dropped),
    BUY-ban / momentum gate (dropped 10-05), session-band gate (downgraded 10-05), stop widening
-   (degrades the ratio: `stopbeyond` 52.6% WR but −0.081R), a looser stop with the same TP (same
+   (degrades the ratio: `stopbeyond` 51.6% WR but −0.093R master), a looser stop with the same TP (same
    failure mode).
 
-## 6. Draft pre-registration (for the owner to approve — NOT registered)
+## 6. Pre-registration
 
-Proposed for the first isolation slot after the struct-stop judgement:
+**Registered on paper 10-15, NOT deployed:** `docs/PREREG-2026-10-15-level-test-0.25.md`.
+It may only be deployed after the 2026-10-19 struct-stop judgement, must not be stacked on that window,
+and its bars are fixed before any post-change trade exists. Pre-checks: the replay-vs-live gap is met (§3).
 
-- **Variable:** level test `FLOOR_BUFFER_PCT` (price-%) → **0.25 ATR**, nothing else changed.
-- **Window:** entries after the deploy time of that change (to be taken from the autosync log, not the plan).
-- **Pre-check (must PASS first):** replay-vs-live gap in §3 closed to ≤ 2 pp decisive WR on the
-  struct-stop era; `check_structural_stop.py` PASS; `--calib-only` ~100%.
-- **Screen at n ≥ 100:** R/trade ≥ −0.05R, decisive WR ≥ 40%, SL/day ≤ 6, scratch share ≤ 35%.
-- **PASS at n ≥ 150:** Wilson 95% lower bound on decisive WR > 42.0% (the breakeven at 1:1.5 with
-  live payoff), and gross $/trade > 0.
-- **REVERT:** R/trade ≤ −0.15R, or era drawdown > $250, or any stop inside its level.
+## 7. Decisions (owner, 10-15: "Let's do it")
 
-These numbers are proposals taken from the existing bars in `ANALYSIS-2026-10-05` §7; the 42% breakeven
-line is the one new element. The owner must sign off before anything is registered.
-
-## 7. Decision needed from the owner
-
-1. Approve the §6 draft (or name a different single variable) to register after 10-19.
-2. Approve the §5(1) replay-calibration task as the next (tooling-only) work item.
-3. Confirm no change to the live engine before the 10-19 review.
+1. Register the level-test draft to deploy after 10-19 — **done on paper** (`PREREG-2026-10-15-level-test-0.25.md`).
+2. Close the replay-vs-live gap as tooling-only work — **done** (blackout end boundary, §3).
+3. No live engine change before the 10-19 review — **held**.
 
 ## 8. Reproduce
 
@@ -112,6 +110,7 @@ line is the one new element. The owner must sign off before anything is register
 python3 tools/check_structural_stop.py
 python3 tools/strategy_lab.py --calib-only
 python3 tools/strategy_lab.py --table --cost 0.20 --only baseline,structstop,structstop+nord,tol0.25,tol0.50,tol0.50+pause,tol1.00
+# the trade-by-trade matching used for §3 is reproduced by comparing strategy_lab.Lab.run() with trades.csv on Entry_Time
 python3 tools/win_rate_report.py --spread 0.40
 ```
 
