@@ -22,6 +22,7 @@ build/
 *.db
 state.json
 portfolio_state.pkl
+.pressure_notifier_state.json
 
 # === OS & Editor Files ===
 .DS_Store
