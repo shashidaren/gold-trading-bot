@@ -26,6 +26,7 @@ MAX_DAILY_LOSSES         = 10     # Trend-side-only mode engages after this many
                                   # skip rows still show the previous limit ("11/3 SLs today").
 MIN_ATR_TO_TRADE         = 1.10   # Do not trade when ATR is too low
 MAX_ATR_TO_TRADE         = 4.50   # Block trades during extreme news spikes / illiquidity
+MIN_SPREAD_POINTS        = 60     # Minimum-spread filter: block when live spread (pts) exceeds this
 MOMENTUM_LOOKBACK_MINUTES = 60    # Higher-TF momentum window for the trend-side gate
 
 # === Session Blackout Windows (UTC) ===
@@ -40,6 +41,7 @@ BLACKOUT_WINDOWS = [
     (12, 25, 12, 45, "NY Early Pre-Market", ("BUY", "SELL")),
     (13, 25, 15, 15, "NY Open & US High-Impact Macro Releases", ("BUY", "SELL")),
     (21, 45, 22, 30, "Daily Market Rollover & Spread Spike", ("BUY", "SELL")),
+    (17, 55, 18, 30, "FOMC / 18:00 UTC high-impact", ("BUY", "SELL")),
 ]
 
 
@@ -249,7 +251,7 @@ def log_skip(reason: str, price=None, atr=None):
         print(f"⚠️ Failed to log skip: {e}")
 
 
-def should_take_trade(current_atr=None, current_price=None, ema_fast=None, ema_slow=None, now: datetime = None, side: str = None) -> tuple[bool, str]:
+def should_take_trade(current_atr=None, current_price=None, ema_fast=None, ema_slow=None, now: datetime = None, side: str = None, current_spread_points=None) -> tuple[bool, str]:
     """
     Final gatekeeper for portfolio/state-level rules.
     Note: RSI, Wick, Floor/Ceiling, and Trend direction are validated in engine.py.
@@ -289,6 +291,12 @@ def should_take_trade(current_atr=None, current_price=None, ema_fast=None, ema_s
     # 5. Maximum ATR (Block extreme news volatility / spreads)
     if current_atr is not None and current_atr > MAX_ATR_TO_TRADE:
         reason = f"ATR too high - News volatility ({current_atr:.2f} > {MAX_ATR_TO_TRADE})"
+        log_skip(reason, current_price, current_atr)
+        return False, reason
+
+    # 5b. Minimum-spread filter (cost control; the ATR cap above is volatility, not spread)
+    if current_spread_points is not None and current_spread_points > MIN_SPREAD_POINTS:
+        reason = f"Spread too wide ({current_spread_points} > {MIN_SPREAD_POINTS} pts)"
         log_skip(reason, current_price, current_atr)
         return False, reason
 
