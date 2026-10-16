@@ -14,21 +14,21 @@ from the first commit.
 <!-- HANDOFF-SNAPSHOT machine-checked by tools/handoff_check.py; refresh with --update -->
 | key | value |
 |---|---|
-| as_of_utc | 2026-10-16 08:59 |
-| data_collection | 250 |
-| closed_trades | 617 |
-| outcomes | 121W/267L/227BE/2TIME |
-| decisive_wr_pct | 31.2 |
-| engine_ledger_usd | 161.36 |
-| true_equity_usd | 144.38 |
+| as_of_utc | 2026-10-16 14:59 |
+| data_collection | 253 |
+| closed_trades | 620 |
+| outcomes | 121W/269L/228BE/2TIME |
+| decisive_wr_pct | 31.0 |
+| engine_ledger_usd | 152.71 |
+| true_equity_usd | 135.73 |
 | cost_usd_per_side | 0.20 |
-| net_pnl_usd_at_cost | -602.42 |
+| net_pnl_usd_at_cost | -612.27 |
 | cutover_utc | 2026-10-06 03:00 |
-| structstop_era_trades | 120 |
-| structstop_era_outcomes | 36W/56L/27BE/1TIME |
-| log_bars | 42903 |
-| log_last_bar_utc | 2026-10-16 08:59 |
-| skip_rows | 1413 |
+| structstop_era_trades | 123 |
+| structstop_era_outcomes | 36W/58L/28BE/1TIME |
+| log_bars | 43263 |
+| log_last_bar_utc | 2026-10-16 14:59 |
+| skip_rows | 1428 |
 | open_trade | none |
 <!-- /HANDOFF-SNAPSHOT -->
 
@@ -68,6 +68,10 @@ snapshot block, still said FRESH.
    `🧪 Live experiment`, `📡 Feed health`) — **display-only**, calibrated in
    `docs/ANALYSIS-2026-10-16-dashboard-pressure.md`, CLI equivalent `tools/pressure_report.py`.
    A dashboard change only restarts the dashboard, never the engine (`docs/AUTOSYNC.md`).
+   A later 10-16 session added the **Telegram ping layer** on top of it (`notifier.py` + a dashboard
+   thread, `smoke_test.py` Scenario V): 🎯 setup-ready pings and 🌡️ tape-flip pings, rate-limited,
+   stale-feed-safe, every message footed "context, not a signal" —
+   `docs/ANALYSIS-2026-10-16-pressure-notifier.md`.
 
 3. **10-05 re-review is DONE:** `docs/REVIEW-2026-10-05.md`. Max-hold isolation
    closed (n=209, 1 TIME exit, cap never bound in-session); fallback step-2
@@ -95,6 +99,7 @@ snapshot block, still said FRESH.
 | **Measured spreads / cost / server clock / contract spec** (once `mt5quotes-gold` runs) | `python3 tools/xm_quote_report.py` (`--quiet` = the digest line) |
 | **Large-N replay over broker M1 history** | `python3 tools/history_to_log.py mt5_history.csv --out history_utc.csv`, then `python3 tools/strategy_lab.py --bars history_utc.csv` |
 | **Market context (tape / gates / §7 era / calibration)** | `python3 tools/pressure_report.py` (`--root DIR`, `--era structstop|maxhold|075|all`, `--json`) — the same read-only layer the dashboard renders |
+| **Telegram pings (setup-ready / tape-flip)** | `python3 notifier.py --once --dry-run` (evaluate + print), `--test` (send one test message), `--status`, `--loop` (standalone; then set `GOLD_NOTIFIER=0` for the dashboard thread) |
 | Loser features | `python3 tools/analyze_losers.py` |
 | Engine regression | `python3 tools/smoke_test.py` |
 | Force autosync now | `sudo /opt/gold/tools/autosync.sh` |
@@ -126,6 +131,9 @@ snapshot block, still said FRESH.
 - Ship param/strategy changes without a pre-registered bar + REVIEW/ANALYSIS doc.
 - Quote replay numbers from before 2026-10-15 without noting the harness fix (blackout end boundary, §8).
 - Treat the bot as income, or go LIVE without broker-side BE + a costs model.
+- Treat a Telegram ping (notifier.py) as a signal, advice or evidence — it is the display layer
+  on a phone, footed "context, not a signal" by construction; the engine's own entry/exit alerts
+  remain the authoritative stream.
 - Read falling-vs-rising (or "gold is down") stats pooled across sides — split
   by BUY/SELL first (they are ~collinear with direction, §2).
 
@@ -152,18 +160,22 @@ snapshot block, still said FRESH.
 | 2026-10-15 (tooling) | **Replay-vs-live gap fixed** (`strategy_lab.py` blackout end boundary, end exclusive; the live check is on the full timestamp). Struct-stop era: replay 39.3% decisive vs live 39.1%. Older replay numbers move by ~0.02–0.1R/trade. **Level-test 0.25 ATR pre-registered on paper** (`PREREG-2026-10-15-level-test-0.25.md`), not deployed. No runtime change |
 | 2026-10-15 (docs) | **HANDOFF restored + consolidated** (no runtime change): the daily doc job truncated the file at 14:06 UTC (`43884e1` wrote `PLACEHOLDER - will replace`), losing **§2–§11**; content recovered from `712d106`, §1 history split out to `docs/HANDOFF-HISTORY.md`, `handoff_check.py` now checks section structure, not just freshness. |
 | 2026-10-16 | **Dashboard market-context layer (display-only, no runtime change):** `pressure.py` + `tools/pressure_report.py` + `smoke_test.py` Scenario U; buy/sell pressure gauge, the engine's gates read back on the last bar, location/risk, §7 era card, feed health. Calibration says the composite is **collinear with side — not a signal**. `engine.py`/`trade_filter.py`/deploy path untouched; autosync restarts the dashboard only |
+| 2026-10-16 (notifier) | **Telegram ping layer (display-only, no runtime change):** `notifier.py` + a dashboard daemon thread (`GOLD_NOTIFIER=0` off) + `smoke_test.py` Scenario V; 🎯 ping when the engine's 8 entry gates all pass on a closed bar (suppressed if the engine just opened it — its own alert fires), 🌡️ ping when the tape gauge enters its strong band. Rate-limited, restart-safe, stale-feed-safe, every message footed "context, not a signal". `engine.py`/`trade_filter.py` untouched; dashboard-only deploy (`docs/ANALYSIS-2026-10-16-pressure-notifier.md`) |
 
-## 1. Where things stand (as of **2026-10-16, ~10:30 UTC — data collection 250**)
+## 1. Where things stand (as of **2026-10-16, ~15:15 UTC — data collection 253**)
 
 **Current stance (2026-10-16):** still **paper-only, no runtime change**. The struct-stop window is the
-only live experiment and it is **un-stacked** — nothing in this session touched `engine.py` or
-`trade_filter.py`. The book: **617 closed trades, 31.2% decisive** (era-blind), engine ledger
-**$161.36** from a $500 start (true equity **$144.38**, drift +$16.97), **−$602.42** at the assumed
-$0.20/side — i.e. **−$0.976/trade true** before the assumed cost. The 2026-10-16 session added a
-**read-only dashboard market-context layer** (§1 below, `docs/ANALYSIS-2026-10-16-dashboard-pressure.md`):
-buy/sell pressure, the engine's gates read back on the last closed bar, location/risk, the §7 era card
-and feed health. It changes no rule, and its calibration says plainly that the pressure composite is a
-**side proxy, not a signal**.
+only live experiment and it is **un-stacked** — nothing in either 10-16 session touched `engine.py` or
+`trade_filter.py`. The book: **620 closed trades, 31.0% decisive** (era-blind), engine ledger
+**$152.71** from a $500 start (true equity **$135.73**, drift +$16.98), **−$612.27** at the assumed
+$0.20/side — i.e. **−$0.99/trade true** before the assumed cost. The two 2026-10-16 sessions added a
+**read-only dashboard market-context layer** (`docs/ANALYSIS-2026-10-16-dashboard-pressure.md`: buy/sell
+pressure, the engine's gates read back on the last closed bar, location/risk, the §7 era card and feed
+health — its calibration says plainly that the pressure composite is a **side proxy, not a signal**) and,
+on top of it, a **read-only Telegram ping layer** (`notifier.py`, §1 below,
+`docs/ANALYSIS-2026-10-16-pressure-notifier.md`): a 🎯 ping when the engine's 8 entry gates all pass on a
+closed bar, a 🌡️ ping when the tape gauge enters its strong band. Neither changes a rule; every ping is
+footed "context, not a signal".
 
 ### 2026-10-16 — dashboard market-context layer (display-only, **no runtime change**)
 
@@ -200,26 +212,46 @@ and feed health. It changes no rule, and its calibration says plainly that the p
   SCREEN/PASS/REVERT exactly as written. The panel's R/trade reproduces `win_rate_report.py`'s cost
   view to the digit (struct-stop era **−0.053R** = $/trade ÷ mean 1R $5.74, @0.00 spread).
 
-### Struct-stop era at the n=120 look (unchanged bar, **not yet a judgement**)
+### 2026-10-16 (later session) — Telegram ping layer (`notifier.py`, display-only, **no runtime change**)
 
-- **All five §7 screen checks are inside their bars** at n=120 (10 session dates, entries ≥ 2026-10-06
-  03:00 UTC): B1 SL/day **5.60** (≤6.5 ✔) · B2 SL share **46.7%** (≤47% ✔ — **0.3 pp of headroom**,
-  was 47.7% on 10-15) · B3 scratch **22.5%** (≤35% ✔) · C1 R/trade **−0.053** (≥−0.10 ✔) ·
-  C2 decisive WR **39.1%** CI[29.8,49.3] (≥36% ✔). Geometry: A4 level-bound **83.3%** (70–90 ✔),
-  A5 median risk **3.27 ATR** (2.7–3.5 ✔). Revert triggers **clear** (R −0.053 vs ≤−0.20; avg SL
-  $5.92 vs >$8.60; era DD $91.35 vs >$250). Status: **SCREEN MET — 30 trades short of PASS**
-  (PASS needs n≥150 **and** Wilson LB >32.1%).
-- **Guard green:** `check_structural_stop.py` → **PASS**, struct-stop cutover n=120, **0 stops inside
-  the level**, median clearance +0.50 ATR, boundary bracket confirmed (#498 02:39:09 old rule →
-  #499 03:33:05 new rule). `strategy_lab --calib-only` recall **100.0/100.0**.
+- **What shipped:** `notifier.py` (new root module, stdlib-only, reads only through `pressure.py`),
+  a daemon thread in `dashboard.py` (`GOLD_NOTIFIER=0` disables; header line shows ping status) and
+  `smoke_test.py` **Scenario V** (29 checks). Two triggers: **🎯 setup-ready** (rising edge of the
+  engine's 8 entry gates all passing on a closed bar — with an honest engine-state line: free /
+  blocked-cooldown / blackout / breaker / already-in-a-trade) and **🌡️ tape-flip** (the dashboard gauge
+  entering its ≥70% strong band, re-armed only through the middle). Suppression: if the engine itself
+  opened the trade ≤5 min ago, the setup ping stays quiet (the engine's own alert fires). Guards:
+  stale feed >240 s never pings, each closed bar evaluated once, first bar after a fresh state never
+  pings, rate limits 20/45/5 min, state in a gitignored dot-file.
+- **Boundary (binding):** it is the *phone half of the display layer* — no gate, no threshold, no entry
+  condition, nothing imported by the engine; every message ends "context, not a signal", and the tape
+  message carries the calibration verdict. Deploy: `dashboard.py` changed → `DASH_CHANGED` → dashboard
+  restart only. **Caveat:** a future `notifier.py`-only change does NOT restart the dashboard — pair it
+  with a dashboard restart in the same merge (`docs/ANALYSIS-2026-10-16-pressure-notifier.md` §1).
+- **On the box after merge:** `python3 notifier.py --test` (one test message), then the autosync deploy
+  restarts the dashboard and the thread starts; `journalctl -u <dashboard-unit>` shows `notifier:` lines.
+
+### Struct-stop era at the n=123 look (data refresh 10-16 ~15:00, **not yet a judgement**)
+
+- **One screen check has slipped marginally over its bar** at n=123 (10 session dates, entries ≥
+  2026-10-06 03:00 UTC): B1 SL/day **5.80** (≤6.5 ✔) · B2 SL share **47.15%** (≤47% ✗ — **0.15 pp
+  over**, was 46.7% at n=120) · B3 scratch **22.8%** (≤35% ✔) · C1 R/trade **−0.065** (≥−0.10 ✔) ·
+  C2 decisive WR **38.3%** CI[29.1,48.4] (≥36% ✔). Geometry: A4 level-bound **82.9%** (70–90 ✔),
+  A5 median risk **3.3 ATR** (2.7–3.5 ✔). Revert triggers **clear** (R −0.065 vs ≤−0.20; avg SL
+  $5.87 vs >$8.60; era DD $91.36 vs >$250). Status: **SCREEN NOT MET at n=123** (B2 by 0.15 pp; PASS
+  needs n≥150 **and** Wilson LB >32.1%). B2 sits exactly on its bar — the 10-19 review reads the era
+  as a whole, not one decimal.
+- **Guard green:** `check_structural_stop.py` → **PASS**, struct-stop cutover n=123, **0 stops inside
+  the level**, boundary bracket confirmed (#498 02:39:09 old rule → #499 03:33:05 new rule).
+  `strategy_lab --calib-only` recall ~100% per era.
 - **Still not a result.** Gross expectancy is still negative, the window's judgement is the scheduled
   **2026-10-19 21:00 UTC review** (or n=150), and its thresholds are exactly as written on 10-05.
-  The 10-16 dashboard work is display-only and deliberately does **not** touch that window.
-- **Quote logger** collected 2/14 days (median spread **$0.55**/oz, p95 $0.58; report flags STALE when
+  Both 10-16 sessions are display-only and deliberately do **not** touch that window.
+- **Quote logger** collected 2/14 days (median spread **$0.55**/oz, p95 $0.57; report flags STALE when
   the newest row is >1 h old). The $0.40 round trip remains an assumption until 14 days incl. two
   weekends land; `win_rate_report.py --spread` / `strategy_lab.py --cost` re-cost the book meanwhile.
-- **No open trade.** Last closed **#617 BUY TP +$6.64**; #618 BUY SL −$8.87 (live rule, 3.24 ATR risk).
-  Skips total 1,413 rows (19 in the last 24 h).
+- **No open trade.** Last closed **#621 SELL SL −$2.58**; #620 SELL BE before it. Skips total 1,428
+  rows (28 in the last 24 h — 19 cooldown, 9 blackout).
 
 **Dated session history is in `docs/HANDOFF-HISTORY.md`** (append-only, newest first): §1 as it stood on
 10-15, the 10-13 tooling session, the 10-05 state block, the 09-29 feed outage, and the stances as
@@ -368,7 +400,12 @@ entry guard / flat-before-close policy is a named candidate (§5a/REVIEW-10-05
 ## 5. Evidence base (don't re-derive)
 
 Key documents:
-- `docs/ANALYSIS-2026-10-16-dashboard-pressure.md` (**latest, display-only**): what the dashboard's
+- `docs/ANALYSIS-2026-10-16-pressure-notifier.md` (**latest, display-only**): the Telegram ping layer
+  (`notifier.py` + dashboard thread + smoke Scenario V) — what fires a ping (setup-ready rising edge,
+  tape strong-band entry), what never does (first bar after a restart, stale feed, a bar the engine
+  already traded), the rate limits, the run paths and the wording rules that keep a ping from reading
+  as advice.
+- `docs/ANALYSIS-2026-10-16-dashboard-pressure.md` (display-only): what the dashboard's
   market-context layer is (`pressure.py`, `tools/pressure_report.py`), the composite's weights, the
   **calibration** (n=120 struct-stop era + n=347 max-hold era: *collinear with side — not separable
   within-side*; no `against` bucket on either side, in either era), what the rest of the panel answers,
@@ -636,6 +673,13 @@ that doc):
    ($/trade ÷ mean 1R, rebuilt from the reward leg) so the two cannot disagree. Refreshing the printed
    calibration is `python3 tools/pressure_report.py`; the dashboard re-joins the ledger itself every
    10 min. **No dashboard number may become an entry condition without a pre-registered bar (§11).**
+8. **Telegram ping layer (2026-10-16, `notifier.py`) — the phone half of that read layer, same rules.**
+   It runs as a dashboard thread (`GOLD_NOTIFIER=0` off; state in a gitignored dot-file), pings on
+   setup-ready edges and tape strong-band entries, stays quiet on stale feeds / first bars after a
+   restart / bars the engine itself traded, and every message is footed "context, not a signal".
+   **Scenario V pins all of that.** A ping is never evidence and never an entry condition. On the box:
+   `python3 notifier.py --test` after the first deploy; remember a `notifier.py`-only change does not
+   restart the dashboard — pair it with a dashboard restart.
 
 ## 7. How to verify code changes (always)
 
@@ -740,9 +784,11 @@ data drop, not just after code changes.
 ```
 engine.py          signals + structural stop + BE ratchet + max-hold TIME + state machine
 trade_filter.py    portfolio gates (cooldown, daily breaker, blackouts, ATR)
-dashboard.py       Flask status page (read-only)
+dashboard.py       Flask status page (read-only) + the notifier ping thread (GOLD_NOTIFIER=0 off)
 pressure.py        read-only market-context layer for the dashboard (tape pressure, engine-gate read,
                    location/risk, portfolio state, §7 era card, feed health) — stdlib only, no writes
+notifier.py        read-only Telegram pings from that layer (setup-ready edge, tape strong band);
+                   stdlib only, reads via pressure.py, writes only its own state dot-file
 tools/strategy_lab.py   canonical costed/stateful/era-matched replay (exit+gate decisions)
 tools/check_structural_stop.py  ledger-side invariant guard for the 2026-10-05 change (+ deploy-boundary evidence)
 tools/handoff_check.py  machine-checks the snapshot block at the top of THIS file (autosync digest: 📝 handoff)
@@ -774,7 +820,9 @@ tools/             other analysis / integrity / report scripts (not on the hot p
   `docs/XM-LOGGER.md` — `mt5quotes-gold.service` (read-only quote/spec logger; autosync commits its `xm_data/` and
   the digest shows `📡 xm logger: …`; a ⚠️ means the logger is down, not that gold is shut).
 - A `dashboard.py` / `pressure.py` change is a **dashboard-only** deploy (`DASH_CHANGED`): the dashboard
-  service restarts, `goldbot` does not. For a local render, point the reader at a checkout instead of the
+  service restarts, `goldbot` does not. **The notifier thread rides the dashboard restart** — and a
+  `notifier.py`-only change does *not* trigger one, so pair it with a dashboard restart in the same
+  merge (or any `dashboard.py` edit). For a local render, point the reader at a checkout instead of the
   live root: `GOLD_DATA_DIR=. python3 dashboard.py` (also `GOLD_LOG_FILE`, `GOLD_TRADES_FILE`,
   `GOLD_SKIP_FILE`, `GOLD_STATUS_FILE`); defaults stay `/opt/gold/*`.
 - Logs: `journalctl -u goldbot -f`; autosync log `/var/log/gold_autosync.log`.

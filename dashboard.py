@@ -1,6 +1,8 @@
 import os
 import csv
 import json
+import threading
+import time
 from datetime import datetime, timezone
 from flask import Flask, render_template_string
 
@@ -11,6 +13,14 @@ except Exception as _exc:  # never take the dashboard down over the read layer
     _PR_IMPORT_ERROR = str(_exc)
 else:
     _PR_IMPORT_ERROR = ""
+
+try:  # optional read-only Telegram pings (notifier.py — stdlib-only, like pressure.py)
+    import notifier as NT
+except Exception as _exc:  # a ping layer must never take the page down either
+    NT = None
+    _NT_IMPORT_ERROR = str(_exc)
+else:
+    _NT_IMPORT_ERROR = ""
 
 app = Flask(__name__)
 
@@ -58,6 +68,7 @@ HTML_TEMPLATE = """
                     {% if status.trade_active %}
                     · live forward-test (no real orders)
                     {% endif %}
+                    · 🔔 Telegram pings: {{ notifier_line }}
                 </p>
             </div>
             <div class="flex items-center gap-4">
@@ -868,6 +879,63 @@ def pressure_context():
     return ctx
 
 
+# ── optional Telegram ping thread (notifier.py — read-only, stdlib-only) ────
+# The dashboard is a long-running process that already reads the same read-only
+# layer, so it is the cheapest host for the ping loop: no new service to install,
+# and autosync restarts exactly this process on a dashboard.py deploy. The thread
+# only ever READS the data files and SENDS Telegram messages — it never writes a
+# data file and can never touch trading behaviour (engine.py is never imported).
+# GOLD_NOTIFIER=0 in the environment disables it without a code change.
+
+_notifier_thread = None
+_notifier_thread_lock = threading.Lock()
+
+
+def notifier_enabled():
+    return os.getenv("GOLD_NOTIFIER", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def start_notifier_thread():
+    """Start the ping loop once per process. Returns the thread (or None)."""
+    global _notifier_thread
+    if NT is None or not notifier_enabled() or _notifier_thread is not None:
+        return _notifier_thread
+    with _notifier_thread_lock:
+        if _notifier_thread is None:
+            _notifier_thread = threading.Thread(
+                target=_notifier_loop, name="gold-notifier", daemon=True)
+            _notifier_thread.start()
+    return _notifier_thread
+
+
+def _notifier_loop():
+    interval = NT.POLL_INTERVAL_SECONDS
+    while True:
+        started = time.monotonic()
+        try:
+            NT.run_once()
+        except Exception as exc:  # a torn CSV tail must not kill the ping loop
+            print(f"notifier thread: run failed: {exc}")
+        time.sleep(max(1.0, interval - (time.monotonic() - started)))
+
+
+def notifier_badge():
+    """One short line for the header: are pings on, and when was the last one."""
+    if NT is None:
+        return f"off (notifier.py import failed: {_NT_IMPORT_ERROR[:60]})"
+    if not notifier_enabled():
+        return "off (GOLD_NOTIFIER=0)"
+    try:
+        state = NT.load_state()
+    except Exception:
+        state = {}
+    pings = state.get("last_ping") or {}
+    if not pings:
+        return "on · no ping yet"
+    newest = max(pings.values())
+    return f"on · last ping {newest} UTC"
+
+
 def open_trade_read(status, log_tail):
     """Unrealized progress of the open trade in $ and R (last logged close as price)."""
     if PR is None or not status.get("trade_active"):
@@ -1003,8 +1071,10 @@ def index():
         equity_delta=equity_delta,
         ctx=ctx,
         trade_read=trade_read,
+        notifier_line=notifier_badge(),
     )
 
 
 if __name__ == "__main__":
+    start_notifier_thread()  # read-only Telegram pings (GOLD_NOTIFIER=0 disables)
     app.run(host="0.0.0.0", port=5000)

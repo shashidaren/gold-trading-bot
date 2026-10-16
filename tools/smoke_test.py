@@ -90,6 +90,17 @@ Scenarios:
      SCREEN/PASS/REVERT exactly as written, and the calibration MUST refuse to call the composite a
      signal when it is collinear with side. Synthetic data only; no wall clock, no /opt/gold.
 
+  V) Telegram ping layer (notifier.py, 2026-10-16) -> the dashboard's read layer pushed to Telegram
+     MUST stay read-only and stdlib-only (writes nothing but its own state dot-file, and that only
+     inside save_state), MUST never import engine.py / trade_filter.py, its decision core MUST be
+     pure (no clock, no network, no files: `now` is a parameter), MUST NOT ping on the first bar
+     after a fresh state (restart protection), on a stale feed (closed market), or twice on the same
+     bar (as_of dedup); the tape trigger MUST fire only on entry into the strong band and re-arm
+     only through the middle; the setup trigger MUST fire on the rising edge of all-gates-ready and
+     MUST stay quiet when the engine itself just opened the trade (its own alert fires); every
+     message MUST carry the "context, not a signal" footer. The dashboard wiring (thread start,
+     GOLD_NOTIFIER=0 kill switch, header badge) is checked statically (no flask import needed).
+
 Usage: python3 tools/smoke_test.py
 """
 import os
@@ -2915,6 +2926,303 @@ try:
           u_stat(u_dir) == u_before, str(u_stat(u_dir)))
 finally:
     shutil.rmtree(u_dir, ignore_errors=True)
+
+
+# --- Scenario V ------------------------------------------------------------
+print("\nScenario V: Telegram ping layer (notifier.py) — read-only, rate-limited, "
+      "restart-safe, never a trading input")
+import ast as _astV
+import notifier as NT
+
+# ── V1. module hygiene: stdlib-only, reads through pressure.py, writes ONLY its state ──
+v_tree = _astV.parse(open(os.path.join(ROOT, "notifier.py")).read())
+v_imports = set()
+for node in _astV.walk(v_tree):
+    if isinstance(node, _astV.Import):
+        v_imports.update(a.name.split(".")[0] for a in node.names)
+    elif isinstance(node, _astV.ImportFrom) and node.module:
+        v_imports.add(node.module.split(".")[0])
+check("V: notifier.py imports the standard library + pressure.py only — never engine.py / "
+      "trade_filter.py / flask / requests (it runs inside the dashboard process)",
+      v_imports <= {"__future__", "argparse", "json", "os", "sys", "time", "urllib", "datetime", "pressure"}
+      and "pressure" in v_imports, str(sorted(v_imports)))
+
+
+def _v_write_opens(tree):
+    """(lineno, target) of every write-mode open() and every os.replace/remove-style call."""
+    ops = []
+    for node in _astV.walk(tree):
+        if not isinstance(node, _astV.Call):
+            continue
+        fn = node.func
+        if getattr(fn, "id", None) == "open" and len(node.args) > 1:
+            mode = node.args[1]
+            if isinstance(mode, _astV.Constant) and isinstance(mode.value, str) \
+                    and any(m in mode.value for m in "wax+"):
+                ops.append((node.lineno, "open"))
+        if isinstance(fn, _astV.Attribute) and isinstance(fn.value, _astV.Name) \
+                and fn.value.id == "os" and fn.attr in ("replace", "remove", "unlink", "rename", "mkdir", "makedirs"):
+            ops.append((node.lineno, f"os.{fn.attr}"))
+        if getattr(fn, "id", None) in ("eval", "exec", "Popen", "system"):
+            ops.append((node.lineno, fn.id))
+        if isinstance(fn, _astV.Attribute) and isinstance(fn.value, _astV.Name) \
+                and fn.value.id == "subprocess":
+            ops.append((node.lineno, "subprocess"))
+    return ops
+
+
+def _v_func(tree, name):
+    for node in tree.body:
+        if isinstance(node, _astV.FunctionDef) and node.name == name:
+            return node
+    return None
+
+
+v_save = _v_func(v_tree, "save_state")
+check("V: the ONLY writes in notifier.py are save_state's own state dot-file (atomic tmp+rename), "
+      "and the data files it reads are never written by it",
+      v_save is not None and _v_write_opens(v_save) and not [
+          op for op in _v_write_opens(v_tree) if op not in _v_write_opens(v_save)],
+      str(_v_write_opens(v_tree)))
+
+# the decision core is pure: no clock, no network, no files inside evaluate() or its helpers
+PURE_FUNCS = ("default_state", "_parse_ts", "_minutes_since", "_gap_ok", "_global_gap_ok",
+              "_mark_ping", "evaluate", "_engine_state_line", "render_setup_message",
+              "render_tape_message")
+v_pure_src = []
+for _fname in PURE_FUNCS:
+    _fdef = _v_func(v_tree, _fname)
+    if _fdef is None:
+        v_pure_src.append(f"{_fname}: MISSING")
+        continue
+    seg = _astV.get_source_segment(open(os.path.join(ROOT, "notifier.py")).read(), _fdef) or ""
+    for _bad in ("datetime.now", "utcnow", "time.time", "time.monotonic", "urlopen",
+                 "urllib", "open(", "os.replace", "sender"):
+        if _bad in seg:
+            v_pure_src.append(f"{_fname}:{_bad}")
+check("V: evaluate() and the renderers are pure — `now` is a parameter, no clock, no network, "
+      "no file IO (the smoke test drives them with fixed timestamps)",
+      not v_pure_src, "; ".join(v_pure_src))
+
+# ── V2. trigger semantics on synthetic build()-shaped dicts ─────────────────
+V_AS_OF = "2026-10-07 12:40:00"
+
+
+def v_ctx(buy=75.0, ready=True, as_of=V_AS_OF, age=45, **over):
+    base = {
+        "feed": {"ok": True, "age_seconds": age},
+        "pressure": {"buy_pct": buy, "sell_pct": 100.0 - buy,
+                     "label": "Tape pushed UP hard" if buy >= 70 else "Tape leaning UP",
+                     "window": 60, "as_of": as_of,
+                     "components": [{"key": "flow", "raw": "+0.34"}, {"key": "momentum", "raw": "+1.85"},
+                                    {"key": "trend", "raw": "+0.62"}, {"key": "slope", "raw": "+0.21"},
+                                    {"key": "rsi", "raw": "61.0"}]},
+        "setup": {"ok": True, "as_of": as_of, "close": 4153.0, "atr": 1.60, "rsi": 55.0,
+                  "nearest_miss": {"BUY": "Rejection wick: 22% vs ≥ 38%", "SELL": None},
+                  "BUY": {"ready": ready, "passed": 8 if ready else 5, "total": 8,
+                          "level": 4150.0, "level_dist_atr": 0.42},
+                  "SELL": {"ready": False, "passed": 2, "total": 8,
+                           "level": 4156.0, "level_dist_atr": 1.42}},
+        "portfolio": {"sides_blocked": {"BUY": None, "SELL": None}, "cooldown_minutes_left": 0,
+                      "cooldown_note": "", "breaker_on": False, "daily_sls": 2},
+    }
+    base.update(over)
+    return base
+
+
+v_now = datetime(2026, 10, 7, 12, 41)
+v_st = NT.default_state()
+msgs, v_st, notes = NT.evaluate(v_ctx(ready=False), {}, v_st, v_now)
+check("V: the first bar after a fresh state is recorded, never pinged (a restart must not spam)",
+      not msgs and v_st["last_as_of"] == V_AS_OF and not v_st["setup_was_ready"]["BUY"]
+      and any("first bar" in n for n in notes), str(notes))
+
+msgs, v_st, notes = NT.evaluate(v_ctx(ready=True, as_of="2026-10-07 12:41:00"), {}, v_st,
+                                v_now.replace(minute=42))
+check("V: tape entry into the strong band + the setup rising edge fire together on one bar "
+      "(the global gap spaces pings ACROSS evaluations, not within one)",
+      [m["key"] for m in msgs] == ["tape:BUY", "setup:BUY"], str([m["key"] for m in msgs]))
+v_setup_msg = msgs[1]["text"]
+v_tape_msg = msgs[0]["text"]
+check("V: the setup message carries 8/8, the side, the level, the engine state and the footer",
+      all(s in v_setup_msg for s in ("GOLD BUY", "8/8", "4150.00", "Engine:", "not a signal")),
+      v_setup_msg[:120])
+check("V: the tape message carries the composite, its components and the calibration footer "
+      "(collinear with side — never sold as a signal)",
+      all(s in v_tape_msg for s in ("BUY 75.0%", "flow +0.34", "Context, not a signal")),
+      v_tape_msg[:120])
+
+msgs, v_st, notes = NT.evaluate(v_ctx(as_of="2026-10-07 12:41:00"), {}, v_st, v_now.replace(minute=42))
+check("V: the same closed bar is never evaluated twice (as_of dedup)", not msgs and
+      any("already evaluated" in n for n in notes), str(notes))
+msgs, v_st, notes = NT.evaluate(v_ctx(as_of="2026-10-07 12:42:00"), {}, v_st, v_now.replace(minute=43))
+check("V: a held state (still strong, still ready) stays quiet", not msgs, str(notes))
+
+msgs, v_st, notes = NT.evaluate(v_ctx(buy=52.0, ready=False, as_of="2026-10-07 12:43:00"),
+                                {}, v_st, v_now.replace(minute=44))
+check("V: the tape re-arms only back in the middle band (40–60) and the setup re-arms on not-ready",
+      not msgs and v_st["tape_armed"] == {"BUY": True, "SELL": True}
+      and not v_st["setup_was_ready"]["BUY"], str(v_st["tape_armed"]))
+
+msgs, v_st, notes = NT.evaluate(v_ctx(ready=True, as_of="2026-10-07 12:44:00"), {}, v_st,
+                                v_now.replace(minute=45))
+check("V: re-entering the strong band inside the rate-limit window is suppressed with a note",
+      not msgs and any("rate-limited" in n for n in notes), str(notes))
+msgs, v_st, notes = NT.evaluate(v_ctx(buy=52.0, ready=False, as_of="2026-10-07 12:45:00"),
+                                {}, v_st, v_now.replace(minute=46))
+check("V: a not-ready bar re-arms the setup trigger for the next rising edge",
+      not msgs and not v_st["setup_was_ready"]["BUY"])
+msgs, v_st, notes = NT.evaluate(v_ctx(ready=True, as_of="2026-10-07 13:35:00"), {}, v_st,
+                                v_now.replace(hour=13, minute=36))
+check("V: after the per-trigger gap the same edges fire again (re-armed, not consumed)",
+      [m["key"] for m in msgs] == ["tape:BUY", "setup:BUY"], str([m["key"] for m in msgs]))
+
+v_st2 = NT.default_state()
+v_st2["last_as_of"] = "2026-10-07 12:40:00"
+v_open = {"trade_active": True, "trade_type": "BUY", "current_trade_num": 424,
+          "entry_time": "2026-10-07 12:40:40"}
+msgs, v_st2, notes = NT.evaluate(v_ctx(as_of="2026-10-07 12:41:00"), v_open, v_st2, v_now.replace(minute=42))
+check("V: when the engine itself just opened the trade, the setup ping stays quiet (the engine's own "
+      "alert fires) — but the tape ping is independent",
+      [m["key"] for m in msgs] == ["tape:BUY"]
+      and any("suppressed" in n and "engine" in n for n in notes), str(notes))
+
+v_st3 = NT.default_state()
+v_st3["last_as_of"] = "2026-10-07 12:40:00"
+sell_ctx = v_ctx(buy=24.0, ready=False, as_of="2026-10-07 12:41:00")
+sell_ctx["pressure"]["label"] = "Tape pushed DOWN hard"
+sell_ctx["setup"]["SELL"] = {"ready": True, "passed": 8, "total": 8, "level": 4156.0,
+                             "level_dist_atr": 0.31}
+msgs, v_st3, notes = NT.evaluate(sell_ctx, {}, v_st3, v_now.replace(minute=42))
+check("V: the SELL side mirrors BUY (tape:SELL + setup:SELL, ceiling named, footer intact)",
+      [m["key"] for m in msgs] == ["tape:SELL", "setup:SELL"]
+      and "GOLD SELL" in msgs[1]["text"] and "ceiling" in msgs[1]["text"]
+      and "SELL 76.0%" in msgs[0]["text"], str([m["key"] for m in msgs]))
+
+msgs, v_st4, notes = NT.evaluate(v_ctx(age=99999), {}, NT.default_state(), v_now)
+check("V: a stale feed (closed market) is never pinged — Friday's tape must not re-fire all weekend",
+      not msgs and any("stale" in n for n in notes), str(notes))
+msgs, v_st4, notes = NT.evaluate({"feed": {"ok": False, "reason": "no log rows"}}, {}, NT.default_state(), v_now)
+check("V: an unreadable feed degrades to a note, never to an exception", not msgs
+      and any("not readable" in n for n in notes), str(notes))
+msgs_a, _, _ = NT.evaluate(v_ctx(as_of="2026-10-07 12:41:00"), {}, NT.default_state(), v_now.replace(minute=42))
+msgs_b, _, _ = NT.evaluate(v_ctx(as_of="2026-10-07 12:41:00"), {}, NT.default_state(), v_now.replace(minute=42))
+check("V: evaluate() is deterministic (same inputs, same messages)",
+      [m["text"] for m in msgs_a] == [m["text"] for m in msgs_b])
+
+# ── V3. state round-trip (the only file the module writes) ──────────────────
+v_tmp = tempfile.mkdtemp()
+try:
+    v_state_path = os.path.join(v_tmp, ".pressure_notifier_state.json")
+    st = NT.default_state()
+    st["last_as_of"] = "2026-10-07 12:41:00"
+    st["last_ping"] = {"tape:BUY": "2026-10-07 12:42:00"}
+    check("V: save_state persists atomically and load_state round-trips it exactly",
+          NT.save_state(st, v_state_path) and NT.load_state(v_state_path) == st)
+    with open(v_state_path, "w") as f:
+        f.write("{not json")
+    check("V: a corrupt state file degrades to defaults instead of crashing the loop",
+          NT.load_state(v_state_path) == NT.default_state())
+    check("V: a missing state file is the fresh-start default (no ping on the first bar after it)",
+          NT.load_state(os.path.join(v_tmp, "nope.json")) == NT.default_state())
+
+    # ── V4. end to end on a synthetic root: CLI + run_once, no network, no wall clock ──
+    v_dir = tempfile.mkdtemp()
+    try:
+        # the same BUY-ready synthetic tape Scenario U builds (last bar: floor test + 65% wick),
+        # one bar LONGER than the priming tape so the ready bar is a NEW as_of
+        buy_rows = u_rows(n=141)
+        floor_buy = min(float(r["Low"]) for r in buy_rows[-21:-1])
+        buy_rows[-1].update({
+            "Open": f"{floor_buy + 1.5:.2f}", "Low": f"{floor_buy:.2f}",
+            "Close": f"{floor_buy + 3.0:.2f}", "High": f"{floor_buy + 3.05:.2f}",
+            "Wick_Ratio": "65%", "Dynamic_Floor": f"{floor_buy:.2f}",
+            "EMA_50": f"{floor_buy + 3.2:.2f}", "EMA_200": f"{floor_buy + 1.0:.2f}",
+            "Trend_Confirmed": "True", "Tested_Floor": "True", "Valid_Rejection": "True",
+            "Held_Floor": "True", "RSI": "55.0", "ATR": "1.60"})
+        u_write(os.path.join(v_dir, "forward_test_log.csv"), buy_rows)
+        with open(os.path.join(v_dir, "trades.csv"), "w", newline="") as f:
+            csv.writer(f, lineterminator="\r\n").writerow(LEDGER_HEAD)
+        with open(os.path.join(v_dir, "skipped_trades.csv"), "w", newline="") as f:
+            csv.writer(f, lineterminator="\r\n").writerow(["Timestamp", "Reason", "Price", "ATR"])
+        with open(os.path.join(v_dir, "status.json"), "w") as f:
+            json.dump({"trade_active": False, "daily_losses": 0, "last_update": "2026-10-07 12:40:06"}, f)
+
+        # step 1: a plain (not-ready) tape primes the state — first bar, no ping,
+        # but the state MUST land on disk anyway or the module could never get
+        # past "first bar" and would stay silent forever.
+        u_write(os.path.join(v_dir, "forward_test_log.csv"), u_rows())
+        v_last_bar = P.parse_ts(u_rows()[-1]["Timestamp"])
+        prime = NT.run_once(root=v_dir, dry_run=True, now=v_last_bar + timedelta(seconds=30))
+        check("V: run_once on a fresh root records the first bar without pinging AND persists "
+              "the state (restart protection survives the process)",
+              not prime["printed"] and not prime["sent"]
+              and prime["as_of"] == u_rows()[-1]["Timestamp"]
+              and os.path.isfile(os.path.join(v_dir, ".pressure_notifier_state.json")),
+              str(prime["notes"]))
+
+        # step 2: the next closed bar is the BUY-ready one (Scenario U's recipe) —
+        # a NEW as_of, so the rising edge fires and the dry run prints it.
+        u_write(os.path.join(v_dir, "forward_test_log.csv"), buy_rows)
+        v_ready_bar = P.parse_ts(buy_rows[-1]["Timestamp"])
+        fired = NT.run_once(root=v_dir, dry_run=True, now=v_ready_bar + timedelta(seconds=30))
+        check("V: run_once dry-prints the setup ping when the ready bar arrives "
+              "(state was primed, so this is a rising edge, not a first bar)",
+              "setup:BUY" in fired["printed"] and fired["as_of"] == buy_rows[-1]["Timestamp"]
+              and not fired["sent"], str(fired["notes"]))
+        again = NT.run_once(root=v_dir, dry_run=True, now=v_ready_bar + timedelta(seconds=90))
+        check("V: a second run over the same bar does not repeat the ping (state on disk)",
+              not again["printed"] and any("already evaluated" in n for n in again["notes"]),
+              str(again["notes"]))
+
+        v_cli_buf = io.StringIO()
+        with contextlib.redirect_stdout(v_cli_buf):
+            v_rc = NT.main(["--root", v_dir, "--once", "--dry-run"])
+        check("V: the CLI exits 0 on a synthetic root and reports the stale feed honestly "
+              "(the synthetic tape is weeks old to the real clock — no ping, no crash)",
+              v_rc == 0 and "feed stale" in v_cli_buf.getvalue(), v_cli_buf.getvalue()[:160])
+
+        def v_stat(root):
+            return {n: (os.path.getsize(os.path.join(root, n)), int(os.path.getmtime(os.path.join(root, n))))
+                    for n in sorted(os.listdir(root)) if n != ".pressure_notifier_state.json"}
+        v_before = v_stat(v_dir)
+        NT.run_once(root=v_dir, dry_run=True, now=v_last_bar + timedelta(seconds=30))
+        check("V: the notifier never touches the data files it reads (CSVs byte-identical, mtimes intact)",
+              v_stat(v_dir) == v_before, str(v_stat(v_dir)))
+    finally:
+        shutil.rmtree(v_dir, ignore_errors=True)
+finally:
+    shutil.rmtree(v_tmp, ignore_errors=True)
+
+# ── V5. dashboard wiring (static checks — the smoke gate must not need flask) ─
+v_dash_src = open(os.path.join(ROOT, "dashboard.py")).read()
+v_dash_tree = _astV.parse(v_dash_src)
+check("V: dashboard.py imports notifier behind the same never-take-the-page-down guard as pressure",
+      "import notifier as NT" in v_dash_src and "GOLD_NOTIFIER" in v_dash_src
+      and "start_notifier_thread()" in v_dash_src and "notifier_badge()" in v_dash_src)
+v_main_block = [n for n in _astV.walk(v_dash_tree)
+                if isinstance(n, _astV.If) and isinstance(n.test, _astV.Compare)
+                and any(isinstance(c, _astV.Constant) and c.value == "__main__"
+                        for c in [n.test.left] + list(n.test.comparators))]
+v_start_before_run = False
+if v_main_block:
+    body = v_main_block[0].body
+    names = []
+    for stmt in body:
+        if isinstance(stmt, _astV.Expr) and isinstance(stmt.value, _astV.Call):
+            fn = stmt.value.func
+            names.append(getattr(fn, "id", None) or getattr(fn, "attr", None))
+        elif isinstance(stmt, _astV.Expr) and isinstance(stmt.value, _astV.Constant):
+            names.append("docstring")
+    v_start_before_run = "start_notifier_thread" in names and "run" in names \
+        and names.index("start_notifier_thread") < names.index("run")
+check("V: the ping thread starts inside __main__ BEFORE app.run (so the service gets pings, "
+      "and an import of dashboard.py never starts one)",
+      v_main_block and v_start_before_run, str(v_main_block and "found"))
+v_enabled_src = _astV.get_source_segment(v_dash_src, _v_func(v_dash_tree, "notifier_enabled")) or ""
+check("V: GOLD_NOTIFIER=0 is a kill switch that needs no code change (default on)",
+      'os.getenv("GOLD_NOTIFIER", "1")' in v_enabled_src
+      and "false" in v_enabled_src and "off" in v_enabled_src, v_enabled_src[:100])
 
 
 print()
