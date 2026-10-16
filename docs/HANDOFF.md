@@ -14,21 +14,21 @@ from the first commit.
 <!-- HANDOFF-SNAPSHOT machine-checked by tools/handoff_check.py; refresh with --update -->
 | key | value |
 |---|---|
-| as_of_utc | 2026-10-16 08:59 |
-| data_collection | 250 |
-| closed_trades | 617 |
-| outcomes | 121W/267L/227BE/2TIME |
-| decisive_wr_pct | 31.2 |
-| engine_ledger_usd | 161.36 |
-| true_equity_usd | 144.38 |
+| as_of_utc | 2026-10-16 20:57 |
+| data_collection | 255 |
+| closed_trades | 624 |
+| outcomes | 122W/271L/229BE/2TIME |
+| decisive_wr_pct | 31.0 |
+| engine_ledger_usd | 150.69 |
+| true_equity_usd | 133.71 |
 | cost_usd_per_side | 0.20 |
-| net_pnl_usd_at_cost | -602.42 |
+| net_pnl_usd_at_cost | -615.89 |
 | cutover_utc | 2026-10-06 03:00 |
-| structstop_era_trades | 120 |
-| structstop_era_outcomes | 36W/56L/27BE/1TIME |
-| log_bars | 42903 |
-| log_last_bar_utc | 2026-10-16 08:59 |
-| skip_rows | 1413 |
+| structstop_era_trades | 127 |
+| structstop_era_outcomes | 37W/60L/29BE/1TIME |
+| log_bars | 43621 |
+| log_last_bar_utc | 2026-10-16 20:57 |
+| skip_rows | 1429 |
 | open_trade | none |
 <!-- /HANDOFF-SNAPSHOT -->
 
@@ -153,7 +153,7 @@ snapshot block, still said FRESH.
 | 2026-10-15 (docs) | **HANDOFF restored + consolidated** (no runtime change): the daily doc job truncated the file at 14:06 UTC (`43884e1` wrote `PLACEHOLDER - will replace`), losing **§2–§11**; content recovered from `712d106`, §1 history split out to `docs/HANDOFF-HISTORY.md`, `handoff_check.py` now checks section structure, not just freshness. |
 | 2026-10-16 | **Dashboard market-context layer (display-only, no runtime change):** `pressure.py` + `tools/pressure_report.py` + `smoke_test.py` Scenario U; buy/sell pressure gauge, the engine's gates read back on the last bar, location/risk, §7 era card, feed health. Calibration says the composite is **collinear with side — not a signal**. `engine.py`/`trade_filter.py`/deploy path untouched; autosync restarts the dashboard only |
 
-## 1. Where things stand (as of **2026-10-16, ~10:30 UTC — data collection 250**)
+## 1. Where things stand (as of **2026-10-17 — data collection 255**)
 
 **Current stance (2026-10-16):** still **paper-only, no runtime change**. The struct-stop window is the
 only live experiment and it is **un-stacked** — nothing in this session touched `engine.py` or
@@ -220,6 +220,29 @@ and feed health. It changes no rule, and its calibration says plainly that the p
   weekends land; `win_rate_report.py --spread` / `strategy_lab.py --cost` re-cost the book meanwhile.
 - **No open trade.** Last closed **#617 BUY TP +$6.64**; #618 BUY SL −$8.87 (live rule, 3.24 ATR risk).
   Skips total 1,413 rows (19 in the last 24 h).
+
+### 2026-10-17 — risk sizer + gates (runtime change, R-invariant; session PR pending deploy)
+- **What shipped on the branch (not yet on the box):** a `%-risk` position sizer and two
+  missing portfolio gates. `engine.py` gains `size_lots(stop_usd)` (constants `RISK_PCT=1.0`,
+  `CONTRACT_SIZE=100`, `VOLUME_MIN=0.01`, `VOLUME_STEP=0.01`) that sizes
+  `lots = balance × RISK_PCT/100 ÷ (stop$ × CONTRACT_SIZE)`, normalizes to `VOLUME_STEP`,
+  and **returns `None` → SKIP when the required lot is below `volume_min`** (the structural
+  dead-end at a ~$200 balance). Wired into both `execute_simulated_trade` and
+  `execute_live_trade` (live sizes off the real `account.balance` and sends `volume:
+  self.trade_lots`). P&L is rescaled by lot via `_pnl()`. `trade_filter.py` gains a
+  **minimum-spread filter** (`MIN_SPREAD_POINTS=60`, LIVE-only — paper has no spread feed)
+  and an **FOMC 18:00 UTC blackout** (CPI/NFP 13:30 was already inside the 13:25–15:15 NY
+  window). `pressure.py`'s blackout mirror was updated in the same commit to keep Scenario U green.
+- **Why it is safe inside the struct-stop window:** on GOLD Standard `VOLUME_MIN=0.01` the sizer
+  rounds **up**, so `trade_lots` is always 0.01 whenever a trade is taken — the ledger math is
+  unchanged and the sizer's *only* effect is **refusing setups it cannot size to 1% risk** (M5+
+  and high-ATR M1). It is **R-invariant** (`R = P&L ÷ $risk` scales with lots), so the open
+  struct-stop era metrics (R/trade, WR, SL share) are **not** confounded. `ATR_SL_MULT` /
+  `RR_TARGET` / `SL_CLEAR_ATR` are **untouched** (the 1:2 target stays blocked until 2026-10-19
+  per §6.1). Pre-registration: `docs/PREREG-2026-10-17-risk-sizer.md`.
+- **Deferred:** the **weekend / flat-before-close** gate was written but **dropped from this
+  change** — it read the wall clock (forbidden for hermetic tests) and §6.3(h) reserves it for a
+  *separate* post-10-19 PR.
 
 **Dated session history is in `docs/HANDOFF-HISTORY.md`** (append-only, newest first): §1 as it stood on
 10-15, the 10-13 tooling session, the 10-05 state block, the 09-29 feed outage, and the stances as
@@ -364,6 +387,13 @@ TIME exit so far is #476, held 49.1 h across the 10-02→10-04 weekly close.
 In LIVE mode that stop is not broker-protected across the gap; a pre-close
 entry guard / flat-before-close policy is a named candidate (§5a/REVIEW-10-05
 §5b), not adopted.
+
+- **Engine: risk sizer (2026-10-17, session PR — not yet deployed).** `size_lots(stop_usd)`
+  enforces `RISK_PCT = 1.0` of balance and **skips the trade when the sized lot is below
+  `volume_min`** — the missing `%-of-balance` cap + `volume_min` refusal. `CONTRACT_SIZE=100`
+  (GOLD Standard; `1` for GOLDmicro) and `VOLUME_STEP=0.01` are now explicit constants. P&L is
+  scaled by lot via `_pnl()` so the ledger reflects the actual position; the live path sizes off
+  `account.balance`. Additive and R-invariant — does not touch the open struct-stop experiment.
 
 ## 5. Evidence base (don't re-derive)
 
@@ -636,6 +666,14 @@ that doc):
    ($/trade ÷ mean 1R, rebuilt from the reward leg) so the two cannot disagree. Refreshing the printed
    calibration is `python3 tools/pressure_report.py`; the dashboard re-joins the ledger itself every
    10 min. **No dashboard number may become an entry condition without a pre-registered bar (§11).**
+
+8. **Risk sizer + gates (2026-10-17 session PR) — R-invariant, weekend deferred.** Adds the `%-risk`
+   sizer (skips below `volume_min`), the minimum-spread filter, and the FOMC 18:00 blackout.
+   Pre-registered in `docs/PREREG-2026-10-17-risk-sizer.md` (bar: must not move struct-stop-era R/trade
+   or decisive WR; must keep `SMOKE TEST PASSED`). **Weekend / flat-before-close gate deferred** to a
+   separate PR (§6.3(h) — also reads the wall clock, not hermetic). The **1:2 target (SL 1.5×/TP 3.0×
+   ATR)** stays blocked until the 2026-10-19 struct-stop judgement (§6.1) — this PR does **not** touch
+   `ATR_SL_MULT` / `RR_TARGET` / `SL_CLEAR_ATR`.
 
 ## 7. How to verify code changes (always)
 
