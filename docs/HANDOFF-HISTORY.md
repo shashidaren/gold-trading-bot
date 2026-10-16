@@ -14,7 +14,63 @@ block or a REVIEW instead; that is what makes this file trustworthy. (Created 20
 
 ---
 
-## 2026-10-13 — tooling and docs session (no runtime change)
+## 2026-10-15 — data refresh + struct-stop era past the n≥100 screen; HANDOFF restored
+
+**This is HANDOFF §1 exactly as it stood on 2026-10-15**, moved here on 2026-10-16 when §1 was
+rewritten in place (HANDOFF §11 rule 5). **Nothing here is current.** The numbers are as of
+data collection 243–246; everything that still matters was carried forward into the 2026-10-16 §1,
+and the struct-stop judgement it points at (2026-10-19 21:00 UTC) has not happened yet.
+
+### §1 as written (2026-10-15) (as of **2026-10-15, ~14:00 UTC — data collection 243**)
+
+### 2026-10-15 update — data refresh + struct-stop era past n=100 screen (no runtime change)
+
+- **Snapshot refreshed.** `handoff_check.py --update` brought the machine-checked block current to 2026-10-15 11:59 UTC (data collection 243, 606 closed, no open trade). Integrity still **0 fail / 8 warn**.
+- **Struct-stop era now n=109** (entries ≥ 2026-10-06 03:00 UTC). Crossed the pre-registered n≥100 screen. Outcomes: **34W / 52L / 22BE / 1TIME**; decisive WR **39.5%**; gross **−$30.23 (−$0.277/trade)**; at assumed $0.40 RT **−$0.119R/trade** (from `win_rate_report.py --spread 0.40`). Guard still **PASS** (0 stops inside level; level-bound share 82.6%, median clearance +0.50 ATR, median risk 3.23 ATR).
+- **Against the pre-registered bars** (from `ANALYSIS-2026-10-05-stop-loss-geometry.md` §7, unchanged): SL events **5.2 / calendar day** (bar ≤6.5 ✔); SL share **47.7%** (bar ≤47% — still marginal ✗ by 0.7 pp); BE share **20.2%** (≤35% ✔); avg SL loss **$5.91** vs pre-change ~$3.91 = **1.51×** (revert >2.2× ✔); peak-to-trough DD in era **$76.84** (revert >$250 ✔). Gross expectancy still negative. **Not yet a PASS/FAIL judgement** — the scheduled 10-19 21:00 review (targeting n≈130) comes next; this is the first look past the screen.
+- **Quote logger is collecting.** `xm_data/` has quotes-2026-10-13..15.csv + symbol_spec. Median spread **$0.55** (p95 $0.58) per oz. Report currently notes STALE (newest row ~2h old at check time — normal if market closed or logger paused). Cost model is moving from pure assumption toward measurement; full 14-day (incl. weekends) still needed before replacing the $0.20/side constant.
+- **No open trade.** Last closed #607 BUY SL −$5.91. Equity (true) **$150.96** (engine ledger $167.93, drift +$16.97). Net-of-assumed-cost ledger **−$591.44**.
+- **Still no runtime change.** Struct-stop window remains the only live experiment. Do not stack another change until the 10-19 review judges the bars.
+
+### 2026-10-15 (later) — HANDOFF restored and consolidated (docs only, **no runtime change**)
+
+- **The file had been truncated; it is restored.** The daily doc job rewrote `docs/HANDOFF.md` twice on 10-15:
+  `43884e1` (14:06 UTC) wrote the single line `PLACEHOLDER - will replace`, and `072459d` (14:07 UTC) put back
+  the front matter + §1 only. **§2–§11 were lost** — the gates, the evidence base, next steps, the verification
+  ritual, data gotchas, architecture, the deploy runbook and the **§11 protocol itself** — along with the §1
+  history blocks, `Definitions` and the 09-29 feed-outage record. **`handoff_check.py` still said FRESH** (it only
+  read the snapshot block), so nothing flagged it. Content recovered from `712d106` (the 10-13 version).
+- **The gate now checks structure, not just freshness.** `tools/handoff_check.py` gained `doc_structure()`:
+  every `## 1.`–`## 11.` section must exist, placeholder markers are flagged, and every `§N` reference must
+  resolve. `--update` **refuses to stamp a truncated file**, and smoke Scenario P covers all three rules.
+- **§1 no longer accumulates.** The dated session blocks (10-13 tooling, the 10-05 state, the 09-29 outage,
+  the superseded stances) moved to **`docs/HANDOFF-HISTORY.md`** (append-only, newest first); §1 keeps the
+  current state and pointers only. That is the whole of the 10-15 shrinkage: 223 lines of §1 were 92% history
+  that no session ever pruned. New rule 5 in §11 stops it coming back.
+- **Why it matters beyond tidiness:** the file is rewritten by an automated daily job, and an 886-line / 68 KB
+  document is more than that job can reliably reproduce — the truncation is a symptom of the size. A smaller
+  §1 (and a hard structural gate) is the mitigation.
+
+**Current stance (2026-10-15, later):** still **paper-only**, no runtime change. Stop-loss question answered in
+`docs/ANALYSIS-2026-10-15-stop-loss-rate.md`: the replay-vs-live gap is closed (tooling fix), and the next candidate, the 0.25 ATR level test, is **pre-registered on paper** (`docs/PREREG-2026-10-15-level-test-0.25.md`) to be deployed only after the 10-19 review.
+
+**Current stance (2026-10-15):** unchanged and still **paper-only**. Edge is **not confirmed**, and neither the
+10-15 data refresh nor this docs pass claims one. The struct-stop era has crossed its pre-registered n≥100
+**screen** (n=109, 39.5% decisive WR, gross −$0.277/trade, −$0.119R/trade at the assumed cost) with the
+mechanical invariant **PASS**ing and every revert trigger clear, but the SL-share bar is still marginal
+(47.7% vs ≤47%) and expectancy is still negative — so the judgement stays exactly where the bar put it:
+the scheduled **2026-10-19 21:00 UTC review (targeting n≈130)**, thresholds as written on 10-05.
+**No runtime change is stacked on the open window.** The honest one-line summary of the book: 606 closed
+trades, 31.2% decisive, engine ledger **$167.93** from a $500 start (true equity $150.96, drift +$16.97),
+**−$591.44** at the assumed $0.20/side — i.e. **−$0.576/trade true, −$0.976/trade at the assumed cost**.
+The cost model is moving from assumption toward measurement (quote logger collecting, median spread
+$0.55/oz; needs 14 days incl. two weekends) — a reason to keep measuring, not to size up.
+
+**Dated session history is in `docs/HANDOFF-HISTORY.md`** (append-only, newest first): the 10-13 tooling
+session, the 10-05 state block, the 09-29 feed outage, and the stances as written then. §1 is current-state
+only — see §11 rule 5.
+
+
 
 - **What this session did.** Branch `arena/3f12a4a6-gold-trading-bot`, **no PR yet** (the owner asked to
   finalise first). Compared gold with `bitcoin-trading-bot`'s improvements and changed **only** `tools/`,
