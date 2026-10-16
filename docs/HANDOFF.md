@@ -14,22 +14,22 @@ from the first commit.
 <!-- HANDOFF-SNAPSHOT machine-checked by tools/handoff_check.py; refresh with --update -->
 | key | value |
 |---|---|
-| as_of_utc | 2026-10-15 20:58 |
-| data_collection | 246 |
-| closed_trades | 608 |
-| outcomes | 119W/264L/223BE/2TIME |
-| decisive_wr_pct | 31.1 |
-| engine_ledger_usd | 162.73 |
-| true_equity_usd | 145.76 |
+| as_of_utc | 2026-10-16 08:59 |
+| data_collection | 250 |
+| closed_trades | 617 |
+| outcomes | 121W/267L/227BE/2TIME |
+| decisive_wr_pct | 31.2 |
+| engine_ledger_usd | 161.36 |
+| true_equity_usd | 144.38 |
 | cost_usd_per_side | 0.20 |
-| net_pnl_usd_at_cost | -597.44 |
+| net_pnl_usd_at_cost | -602.42 |
 | cutover_utc | 2026-10-06 03:00 |
-| structstop_era_trades | 111 |
-| structstop_era_outcomes | 34W/53L/23BE/1TIME |
-| log_bars | 42246 |
-| log_last_bar_utc | 2026-10-15 20:58 |
-| skip_rows | 1409 |
-| open_trade | BUY #610 @ 4172.9 |
+| structstop_era_trades | 120 |
+| structstop_era_outcomes | 36W/56L/27BE/1TIME |
+| log_bars | 42903 |
+| log_last_bar_utc | 2026-10-16 08:59 |
+| skip_rows | 1413 |
+| open_trade | none |
 <!-- /HANDOFF-SNAPSHOT -->
 
 This block is the **only machine-checked part of the file**: `python3 tools/handoff_check.py`
@@ -64,6 +64,11 @@ snapshot block, still said FRESH.
    `docs/ANALYSIS-2026-10-13-btc-port-assessment.md` §3 (context: the 10-13 block in `docs/HANDOFF-HISTORY.md`).
    The quote logger and the large-N history path are **built but not yet installed/run on the box** —
    `docs/XM-LOGGER.md` §3 (before Sunday 2026-10-25), `docs/ACCELERATE-TESTING.md` §2.
+   The dashboard now carries that read layer itself (`🌡️ Tape pressure`, `🎯 Setup read`, `📍 Location`,
+   `🧪 Live experiment`, `📡 Feed health`) — **display-only**, calibrated in
+   `docs/ANALYSIS-2026-10-16-dashboard-pressure.md`, CLI equivalent `tools/pressure_report.py`.
+   A dashboard change only restarts the dashboard, never the engine (`docs/AUTOSYNC.md`).
+
 3. **10-05 re-review is DONE:** `docs/REVIEW-2026-10-05.md`. Max-hold isolation
    closed (n=209, 1 TIME exit, cap never bound in-session); fallback step-2
    trigger **MET** (−$0.570/trade at n=209) → ratchet-off is **eligible to be
@@ -89,6 +94,7 @@ snapshot block, still said FRESH.
 | Net-of-cost view of the ledger | `python3 tools/win_rate_report.py --spread 0.40` (round-trip $; the default output is unchanged without it) |
 | **Measured spreads / cost / server clock / contract spec** (once `mt5quotes-gold` runs) | `python3 tools/xm_quote_report.py` (`--quiet` = the digest line) |
 | **Large-N replay over broker M1 history** | `python3 tools/history_to_log.py mt5_history.csv --out history_utc.csv`, then `python3 tools/strategy_lab.py --bars history_utc.csv` |
+| **Market context (tape / gates / §7 era / calibration)** | `python3 tools/pressure_report.py` (`--root DIR`, `--era structstop|maxhold|075|all`, `--json`) — the same read-only layer the dashboard renders |
 | Loser features | `python3 tools/analyze_losers.py` |
 | Engine regression | `python3 tools/smoke_test.py` |
 | Force autosync now | `sudo /opt/gold/tools/autosync.sh` |
@@ -145,55 +151,79 @@ snapshot block, still said FRESH.
 | 2026-10-15 | **Data refresh (no runtime change):** struct-stop era n=109 (past n=100 screen); metrics still inside most bars (SL share marginal); quote logger collecting (median spread $0.55); handoff snapshot + §1 updated. Scheduled 10-19 review next. |
 | 2026-10-15 (tooling) | **Replay-vs-live gap fixed** (`strategy_lab.py` blackout end boundary, end exclusive; the live check is on the full timestamp). Struct-stop era: replay 39.3% decisive vs live 39.1%. Older replay numbers move by ~0.02–0.1R/trade. **Level-test 0.25 ATR pre-registered on paper** (`PREREG-2026-10-15-level-test-0.25.md`), not deployed. No runtime change |
 | 2026-10-15 (docs) | **HANDOFF restored + consolidated** (no runtime change): the daily doc job truncated the file at 14:06 UTC (`43884e1` wrote `PLACEHOLDER - will replace`), losing **§2–§11**; content recovered from `712d106`, §1 history split out to `docs/HANDOFF-HISTORY.md`, `handoff_check.py` now checks section structure, not just freshness. |
+| 2026-10-16 | **Dashboard market-context layer (display-only, no runtime change):** `pressure.py` + `tools/pressure_report.py` + `smoke_test.py` Scenario U; buy/sell pressure gauge, the engine's gates read back on the last bar, location/risk, §7 era card, feed health. Calibration says the composite is **collinear with side — not a signal**. `engine.py`/`trade_filter.py`/deploy path untouched; autosync restarts the dashboard only |
 
-## 1. Where things stand (as of **2026-10-15, ~14:00 UTC — data collection 243**)
+## 1. Where things stand (as of **2026-10-16, ~10:30 UTC — data collection 250**)
 
-### 2026-10-15 update — data refresh + struct-stop era past n=100 screen (no runtime change)
+**Current stance (2026-10-16):** still **paper-only, no runtime change**. The struct-stop window is the
+only live experiment and it is **un-stacked** — nothing in this session touched `engine.py` or
+`trade_filter.py`. The book: **617 closed trades, 31.2% decisive** (era-blind), engine ledger
+**$161.36** from a $500 start (true equity **$144.38**, drift +$16.97), **−$602.42** at the assumed
+$0.20/side — i.e. **−$0.976/trade true** before the assumed cost. The 2026-10-16 session added a
+**read-only dashboard market-context layer** (§1 below, `docs/ANALYSIS-2026-10-16-dashboard-pressure.md`):
+buy/sell pressure, the engine's gates read back on the last closed bar, location/risk, the §7 era card
+and feed health. It changes no rule, and its calibration says plainly that the pressure composite is a
+**side proxy, not a signal**.
 
-- **Snapshot refreshed.** `handoff_check.py --update` brought the machine-checked block current to 2026-10-15 11:59 UTC (data collection 243, 606 closed, no open trade). Integrity still **0 fail / 8 warn**.
-- **Struct-stop era now n=109** (entries ≥ 2026-10-06 03:00 UTC). Crossed the pre-registered n≥100 screen. Outcomes: **34W / 52L / 22BE / 1TIME**; decisive WR **39.5%**; gross **−$30.23 (−$0.277/trade)**; at assumed $0.40 RT **−$0.119R/trade** (from `win_rate_report.py --spread 0.40`). Guard still **PASS** (0 stops inside level; level-bound share 82.6%, median clearance +0.50 ATR, median risk 3.23 ATR).
-- **Against the pre-registered bars** (from `ANALYSIS-2026-10-05-stop-loss-geometry.md` §7, unchanged): SL events **5.2 / calendar day** (bar ≤6.5 ✔); SL share **47.7%** (bar ≤47% — still marginal ✗ by 0.7 pp); BE share **20.2%** (≤35% ✔); avg SL loss **$5.91** vs pre-change ~$3.91 = **1.51×** (revert >2.2× ✔); peak-to-trough DD in era **$76.84** (revert >$250 ✔). Gross expectancy still negative. **Not yet a PASS/FAIL judgement** — the scheduled 10-19 21:00 review (targeting n≈130) comes next; this is the first look past the screen.
-- **Quote logger is collecting.** `xm_data/` has quotes-2026-10-13..15.csv + symbol_spec. Median spread **$0.55** (p95 $0.58) per oz. Report currently notes STALE (newest row ~2h old at check time — normal if market closed or logger paused). Cost model is moving from pure assumption toward measurement; full 14-day (incl. weekends) still needed before replacing the $0.20/side constant.
-- **No open trade.** Last closed #607 BUY SL −$5.91. Equity (true) **$150.96** (engine ledger $167.93, drift +$16.97). Net-of-assumed-cost ledger **−$591.44**.
-- **Still no runtime change.** Struct-stop window remains the only live experiment. Do not stack another change until the 10-19 review judges the bars.
+### 2026-10-16 — dashboard market-context layer (display-only, **no runtime change**)
 
-### 2026-10-15 (later) — HANDOFF restored and consolidated (docs only, **no runtime change**)
+- **What shipped on the branch:** `pressure.py` (new read-only module), `tools/pressure_report.py`
+  (new CLI), `dashboard.py` panels + a read-only context layer, `tools/smoke_test.py` **Scenario U**
+  (45 checks), `docs/ANALYSIS-2026-10-16-dashboard-pressure.md`, README/HANDOFF. **`engine.py`,
+  `trade_filter.py`, every parameter, gate, exit and the autosync/deploy path: untouched.** Autosync
+  classifies a `dashboard.py` change as `DASH_CHANGED` — dashboard restart only, never the engine
+  (`docs/AUTOSYNC.md`).
+- **The gauge, and the trap it survived.** The tape composite (60 bars: volume-weighted flow 0.30,
+  60-bar momentum 0.20, EMA50−EMA200 0.20, EMA50 30-bar slope 0.15, RSI posture 0.15) reads
+  **BUY 71.9% / SELL 28.1%** ("Tape pushed UP hard") at the last bar. But the trend gate makes
+  direction ≈ side (§2), so the composite was **measured before being trusted**: joined to every
+  entry in the struct-stop era (n=120) and the max-hold era (n=347), bucketed on one pre-specified
+  split per side. Verdict in both eras: **"collinear with side — not separable within-side"** —
+  buy-pressure at entry spans BUY 49–81 (median 75) and SELL 14–42 (median 22), and the `against`
+  bucket has **0 trades on either side in either era**. It is context, not a gate, and the dashboard
+  prints that verdict from a live re-join (10-min cache) instead of a hand-typed note.
+- **What the panel actually answers** (the useful part): *would the engine take this bar, and if not,
+  what is the first thing missing* (BUY 6/8 gates at the last bar — failing the ≥38% rejection wick and
+  the 1.10–4.50 ATR bounds); *is price at a level at all* (floor $4181.23 / ceiling $4187.24, price
+  $4188.62 = **above the range**, floor 7.62 ATR below price); *what would the live rule risk*
+  (level-bound BUY stop $7.88 = 3.9 ATR, TP $4200.43; SELL $1.94); *do the risk gates even allow it*
+  (no blackout now, next NY pre-market 12:25 UTC; SL cooldown clear; 2/10 daily SLs; 19 blocked
+  setups in the last 24 h — 12 cooldown, 7 blackout); and *is the data alive* (last bar, open-market
+  gaps in the unit the 09-29 review used).
+- **Honesty mechanics, all machine-checked.** Scenario U pins every mirrored threshold to
+  `engine.py`/`trade_filter.py` and the §7 thresholds to the 10-05 analysis doc (the dashboard must
+  **never** import the engine, and must not drift from it either), pins `STRUCT_STOP_CUTOVER` to
+  `strategy_lab.LIVE_CUTOVER`, proves `pressure.py` is read-only + stdlib-only by AST, and asserts the
+  behaviour that matters: the 20-bar level is the engine's previous-20-bars rule, risk comes from the
+  reward leg, a weekend close is **not** an outage while an open-market stall **is** (open-market
+  minutes — the live log reproduces the 09-29 stall as 284 open minutes), and the §7 card reports
+  SCREEN/PASS/REVERT exactly as written. The panel's R/trade reproduces `win_rate_report.py`'s cost
+  view to the digit (struct-stop era **−0.053R** = $/trade ÷ mean 1R $5.74, @0.00 spread).
 
-- **The file had been truncated; it is restored.** The daily doc job rewrote `docs/HANDOFF.md` twice on 10-15:
-  `43884e1` (14:06 UTC) wrote the single line `PLACEHOLDER - will replace`, and `072459d` (14:07 UTC) put back
-  the front matter + §1 only. **§2–§11 were lost** — the gates, the evidence base, next steps, the verification
-  ritual, data gotchas, architecture, the deploy runbook and the **§11 protocol itself** — along with the §1
-  history blocks, `Definitions` and the 09-29 feed-outage record. **`handoff_check.py` still said FRESH** (it only
-  read the snapshot block), so nothing flagged it. Content recovered from `712d106` (the 10-13 version).
-- **The gate now checks structure, not just freshness.** `tools/handoff_check.py` gained `doc_structure()`:
-  every `## 1.`–`## 11.` section must exist, placeholder markers are flagged, and every `§N` reference must
-  resolve. `--update` **refuses to stamp a truncated file**, and smoke Scenario P covers all three rules.
-- **§1 no longer accumulates.** The dated session blocks (10-13 tooling, the 10-05 state, the 09-29 outage,
-  the superseded stances) moved to **`docs/HANDOFF-HISTORY.md`** (append-only, newest first); §1 keeps the
-  current state and pointers only. That is the whole of the 10-15 shrinkage: 223 lines of §1 were 92% history
-  that no session ever pruned. New rule 5 in §11 stops it coming back.
-- **Why it matters beyond tidiness:** the file is rewritten by an automated daily job, and an 886-line / 68 KB
-  document is more than that job can reliably reproduce — the truncation is a symptom of the size. A smaller
-  §1 (and a hard structural gate) is the mitigation.
+### Struct-stop era at the n=120 look (unchanged bar, **not yet a judgement**)
 
-**Current stance (2026-10-15, later):** still **paper-only**, no runtime change. Stop-loss question answered in
-`docs/ANALYSIS-2026-10-15-stop-loss-rate.md`: the replay-vs-live gap is closed (tooling fix), and the next candidate, the 0.25 ATR level test, is **pre-registered on paper** (`docs/PREREG-2026-10-15-level-test-0.25.md`) to be deployed only after the 10-19 review.
+- **All five §7 screen checks are inside their bars** at n=120 (10 session dates, entries ≥ 2026-10-06
+  03:00 UTC): B1 SL/day **5.60** (≤6.5 ✔) · B2 SL share **46.7%** (≤47% ✔ — **0.3 pp of headroom**,
+  was 47.7% on 10-15) · B3 scratch **22.5%** (≤35% ✔) · C1 R/trade **−0.053** (≥−0.10 ✔) ·
+  C2 decisive WR **39.1%** CI[29.8,49.3] (≥36% ✔). Geometry: A4 level-bound **83.3%** (70–90 ✔),
+  A5 median risk **3.27 ATR** (2.7–3.5 ✔). Revert triggers **clear** (R −0.053 vs ≤−0.20; avg SL
+  $5.92 vs >$8.60; era DD $91.35 vs >$250). Status: **SCREEN MET — 30 trades short of PASS**
+  (PASS needs n≥150 **and** Wilson LB >32.1%).
+- **Guard green:** `check_structural_stop.py` → **PASS**, struct-stop cutover n=120, **0 stops inside
+  the level**, median clearance +0.50 ATR, boundary bracket confirmed (#498 02:39:09 old rule →
+  #499 03:33:05 new rule). `strategy_lab --calib-only` recall **100.0/100.0**.
+- **Still not a result.** Gross expectancy is still negative, the window's judgement is the scheduled
+  **2026-10-19 21:00 UTC review** (or n=150), and its thresholds are exactly as written on 10-05.
+  The 10-16 dashboard work is display-only and deliberately does **not** touch that window.
+- **Quote logger** collected 2/14 days (median spread **$0.55**/oz, p95 $0.58; report flags STALE when
+  the newest row is >1 h old). The $0.40 round trip remains an assumption until 14 days incl. two
+  weekends land; `win_rate_report.py --spread` / `strategy_lab.py --cost` re-cost the book meanwhile.
+- **No open trade.** Last closed **#617 BUY TP +$6.64**; #618 BUY SL −$8.87 (live rule, 3.24 ATR risk).
+  Skips total 1,413 rows (19 in the last 24 h).
 
-**Current stance (2026-10-15):** unchanged and still **paper-only**. Edge is **not confirmed**, and neither the
-10-15 data refresh nor this docs pass claims one. The struct-stop era has crossed its pre-registered n≥100
-**screen** (n=109, 39.5% decisive WR, gross −$0.277/trade, −$0.119R/trade at the assumed cost) with the
-mechanical invariant **PASS**ing and every revert trigger clear, but the SL-share bar is still marginal
-(47.7% vs ≤47%) and expectancy is still negative — so the judgement stays exactly where the bar put it:
-the scheduled **2026-10-19 21:00 UTC review (targeting n≈130)**, thresholds as written on 10-05.
-**No runtime change is stacked on the open window.** The honest one-line summary of the book: 606 closed
-trades, 31.2% decisive, engine ledger **$167.93** from a $500 start (true equity $150.96, drift +$16.97),
-**−$591.44** at the assumed $0.20/side — i.e. **−$0.576/trade true, −$0.976/trade at the assumed cost**.
-The cost model is moving from assumption toward measurement (quote logger collecting, median spread
-$0.55/oz; needs 14 days incl. two weekends) — a reason to keep measuring, not to size up.
-
-**Dated session history is in `docs/HANDOFF-HISTORY.md`** (append-only, newest first): the 10-13 tooling
-session, the 10-05 state block, the 09-29 feed outage, and the stances as written then. §1 is current-state
-only — see §11 rule 5.
+**Dated session history is in `docs/HANDOFF-HISTORY.md`** (append-only, newest first): §1 as it stood on
+10-15, the 10-13 tooling session, the 10-05 state block, the 09-29 feed outage, and the stances as
+written then. §1 is current-state only — see §11 rule 5.
 
 ### Definitions (binding)
 
@@ -275,6 +305,12 @@ feed** (~4.4k), not spot XAUUSD.
 | London blackout | 07:55–09:00 UTC, **BUY only** | `trade_filter.py` `BLACKOUT_WINDOWS` |
 | NY / rollover blackouts | both sides | `trade_filter.py` `BLACKOUT_WINDOWS` |
 
+**Mirrored, and pinned:** the read-only dashboard layer needs some of these thresholds, so it keeps its own
+copies in `pressure.py` (`docs/ANALYSIS-2026-10-16-dashboard-pressure.md`) — it must not import the engine, and
+it must not drift from it either: `tools/smoke_test.py` Scenario U asserts every mirror **equals** the
+`engine.py`/`trade_filter.py` value, so a param change here has to move the mirror in the same commit or the
+deploy gate goes red. Nothing in the dashboard can change trading behaviour.
+
 - SL cooldown: 30 min, escalating to 60 min after 2 consecutive SLs (BE
   scratches neither count toward nor break the streak — see the engine note
   below and §6 item 2b).
@@ -332,6 +368,11 @@ entry guard / flat-before-close policy is a named candidate (§5a/REVIEW-10-05
 ## 5. Evidence base (don't re-derive)
 
 Key documents:
+- `docs/ANALYSIS-2026-10-16-dashboard-pressure.md` (**latest, display-only**): what the dashboard's
+  market-context layer is (`pressure.py`, `tools/pressure_report.py`), the composite's weights, the
+  **calibration** (n=120 struct-stop era + n=347 max-hold era: *collinear with side — not separable
+  within-side*; no `against` bucket on either side, in either era), what the rest of the panel answers,
+  and what it does **not** authorize (no gate, no change to the open struct-stop window).
 - `docs/PREREG-2026-10-15-level-test-0.25.md` (**pre-registration, not deployed**): the 0.25 ATR level test, its bars and REVERT rules. Binding only after the 10-19 judgement.
 - `docs/ANALYSIS-2026-10-15-stop-loss-rate.md` (**latest analysis, no runtime change**): "too many stop losses" —
   live struct-stop book 39.1% decisive vs 42.0% breakeven at the live payoff; the replay-vs-live gap is **found and fixed**
@@ -587,6 +628,15 @@ that doc):
    *Not for gold now:* `live_readiness` / `live_path_probe` / order executor / GO-LIVE window (no positive point
    estimate to stage), `reconcile_stale_trade` (no stuck trade; #577 verified).
 
+7. **Dashboard read layer (2026-10-16) — display-only, keep it that way.** `pressure.py` mirrors
+   `engine.py`/`trade_filter.py` constants instead of importing them, and **Scenario U pins every
+   mirror** (plus the §7 thresholds and `LIVE_CUTOVER`) so a change to either side fails the deploy gate
+   — if a threshold moves, move it in both places in the same commit. The panel's era card reports the
+   §7 bar; it never judges it, and its R/trade is `win_rate_report.py`'s cost-view scale
+   ($/trade ÷ mean 1R, rebuilt from the reward leg) so the two cannot disagree. Refreshing the printed
+   calibration is `python3 tools/pressure_report.py`; the dashboard re-joins the ledger itself every
+   10 min. **No dashboard number may become an entry condition without a pre-registered bar (§11).**
+
 ## 7. How to verify code changes (always)
 
 ```bash
@@ -600,6 +650,8 @@ python3 tools/strategy_lab.py --calib-only        # funnel recall must stay ~100
 python3 tools/check_structural_stop.py            # stop-vs-level invariant (post-cutover: 0, PASS) + boundary evidence
 python3 tools/handoff_check.py                    # this file vs the data (FRESH); --update after a refresh
 python3 tools/xm_quote_report.py --quiet          # "not collecting yet" until mt5quotes-gold is installed; never errors
+python3 tools/pressure_report.py                 # dashboard read layer end to end (tape/gates/§7 era/calibration)
+                                                  #   smoke Scenario U pins its mirrors to engine/trade_filter
 python3 tools/strategy_lab.py --bars forward_test_log.csv > /dev/null   # history mode still runs end to end on real bars
 ```
 
@@ -689,9 +741,13 @@ data drop, not just after code changes.
 engine.py          signals + structural stop + BE ratchet + max-hold TIME + state machine
 trade_filter.py    portfolio gates (cooldown, daily breaker, blackouts, ATR)
 dashboard.py       Flask status page (read-only)
+pressure.py        read-only market-context layer for the dashboard (tape pressure, engine-gate read,
+                   location/risk, portfolio state, §7 era card, feed health) — stdlib only, no writes
 tools/strategy_lab.py   canonical costed/stateful/era-matched replay (exit+gate decisions)
 tools/check_structural_stop.py  ledger-side invariant guard for the 2026-10-05 change (+ deploy-boundary evidence)
 tools/handoff_check.py  machine-checks the snapshot block at the top of THIS file (autosync digest: 📝 handoff)
+tools/pressure_report.py  what the dashboard shows, printed (--root/--era/--json): tape, gates, location,
+                   portfolio, §7 verdict, CALIBRATION (does the pressure composite separate outcomes?)
 tools/mt5_quotes.py     read-only Wine sidecar: 30 s XM quotes + contract spec -> xm_data/ (deploy/mt5quotes.service)
 tools/xm_quote_report.py  what the logger measured: spreads, cost vs the assumed $0.40, server clock, spec (digest: 📡)
 tools/broker_time.py    the EU/US DST rule for XM's server clock (verified only by observed offsets)
@@ -717,6 +773,10 @@ tools/             other analysis / integrity / report scripts (not on the hot p
 - Services: `goldbot.service` (engine), `mt5feed.service` (Wine MT5 sidecar), and — once installed per
   `docs/XM-LOGGER.md` — `mt5quotes-gold.service` (read-only quote/spec logger; autosync commits its `xm_data/` and
   the digest shows `📡 xm logger: …`; a ⚠️ means the logger is down, not that gold is shut).
+- A `dashboard.py` / `pressure.py` change is a **dashboard-only** deploy (`DASH_CHANGED`): the dashboard
+  service restarts, `goldbot` does not. For a local render, point the reader at a checkout instead of the
+  live root: `GOLD_DATA_DIR=. python3 dashboard.py` (also `GOLD_LOG_FILE`, `GOLD_TRADES_FILE`,
+  `GOLD_SKIP_FILE`, `GOLD_STATUS_FILE`); defaults stay `/opt/gold/*`.
 - Logs: `journalctl -u goldbot -f`; autosync log `/var/log/gold_autosync.log`.
 
 ## 11. How to keep this file honest

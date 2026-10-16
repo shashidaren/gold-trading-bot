@@ -16,11 +16,14 @@ changelog.
 | `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` | **Why the stop-loss rate is high, and the change that shipped for it** (structural stop, live 2026-10-06 03:00 UTC; the doc's own 10-05 21:00 cutover is corrected in its erratum): the inert `FLOOR_BUFFER_PCT` level test, the ~64–66% of trades whose stop sat *inside* the 20-bar level, the costed/stateful era-matched evidence, everything rejected, and the **pre-registered forward bar** (§7) that must be judged at n≥100 before anything else changes. |
 | `docs/AUTOSYNC.md` | How the unattended data sync + auto-deploy works, how to read the Telegram digest, and **why the deploy time (not the plan) is the era cutover**. |
 | `docs/ANALYSIS-2026-10-13-btc-port-assessment.md` | Which of the `bitcoin-trading-bot` improvements transfer to gold, which were ported, which were rejected and why, and what is queued behind the open struct-stop window. |
+| `docs/ANALYSIS-2026-10-16-dashboard-pressure.md` | What the dashboard's market-context layer is, the composite's weights, and the **calibration** that keeps it honest: on the live book the buy/sell gauge is **collinear with side** (no `against` bucket on either side, in either era) — context, never a signal. |
 | `docs/XM-LOGGER.md` | The **GOLD quote + contract-spec logger** (`tools/mt5_quotes.py`, `deploy/mt5quotes.service`, `tools/xm_quote_report.py`): install checklist (do it before the 2026-10-25 server-clock change), what it writes to `xm_data/`, how closed markets and DST show up, and what the measured costs may and may not be used for. |
 | `docs/ACCELERATE-TESTING.md` | The **large-N history path**: dump M1 history → `tools/history_to_log.py` (proves the broker-server → UTC conversion against the live log, refuses rather than guesses) → `strategy_lab.py --bars`. How to read it, and why a result there is a hypothesis to pre-register, never a reason to change a rule. |
+| `tools/pressure_report.py` | Prints the dashboard's read layer: tape pressure, the engine's gate read, location/risk, portfolio state, the §7 era verdict, feed health and the composite's **calibration** (does it separate outcomes, per side and era?). `--root DIR`, `--era …`, `--json`. Read-only, exits 0. |
 | `tools/strategy_lab.py` | Canonical **costed, stateful, era-matched** full-strategy replay (funnel + exits + cooldown/breaker/blackouts). Read-only. This is what an exit or gate idea must be measured with; `exit_sims.py` / `pathwalk_sims.py` / `phantom_trades.py` predate it and are cascade-ignorant. `--bars FILE` replays today's rules over converted broker history (large-N mode; `docs/ACCELERATE-TESTING.md`). |
 | `trade_filter.py` | Risk gatekeeper: direction-aware session blackouts (London blocks BUYs, allows SELLs), SL cooldowns, momentum-gated daily-loss breaker (trend-side-only after limit), ATR bounds. |
-| `dashboard.py` | Web dashboard (funnel telemetry, equity, active trade). |
+| `dashboard.py` | Web dashboard (funnel telemetry, equity, active trade) + the **read-only market-context layer**: tape pressure, the engine's own gates read back on the last closed bar, 20-bar location/risk, portfolio state, the live struct-stop era card and feed health. Display-only — it never drives trading. |
+| `pressure.py` | The read-only module behind those panels (stdlib only, no engine import — `tools/smoke_test.py` Scenario U pins its mirrored thresholds to `engine.py`/`trade_filter.py` and asserts it writes nothing). |
 | `trades.csv` | **The ledger** — one row per closed trade (16-field schema with `Trade_Type`). |
 | `forward_test_log.csv` | 1-minute candle log with all indicator values per bar. |
 | `skipped_trades.csv` | Every full signal the risk layer blocked, with reason. |
@@ -47,6 +50,8 @@ python3 tools/strategy_lab.py --table --only baseline,structstop  # 11. era x co
 python3 tools/check_structural_stop.py      # 12. is the stop really beyond the tested level? (2026-10-05 rule;
                                             #     also proves WHEN the deploy happened from the ledger itself)
 python3 tools/handoff_check.py              # 13. is docs/HANDOFF.md still telling the truth? (--update refreshes the block)
+python3 tools/pressure_report.py            # 13b. dashboard read layer: tape pressure, gate read, §7 era verdict,
+                                            #     and the calibration of the pressure gauge (display-only)
 python3 tools/win_rate_report.py --spread 0.40   # 14. the same report net of the assumed round-trip cost (default output unchanged)
 python3 tools/xm_quote_report.py            # 15. what the quote logger measured: spreads, cost vs the assumed $0.40, server clock, spec
 python3 tools/history_to_log.py mt5_history.csv --out history_utc.csv && python3 tools/strategy_lab.py --bars history_utc.csv

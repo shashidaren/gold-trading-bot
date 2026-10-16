@@ -80,6 +80,16 @@ Scenarios:
      --spread/--cost flags that re-cost the ledger, and keep the DST verdict UNVERIFIED until a
      transition has been observed (EU vs US vs NEITHER). Also reads the logger's OWN output.
 
+  U) Dashboard read layer (pressure.py, 2026-10-16) -> the tape-pressure composite, the engine's own
+     gates read back on a closed bar, the portfolio state, the §7 era verdict, feed health and the
+     calibration MUST stay display-only and MUST stay honest: every mirrored threshold MUST equal
+     engine.py / trade_filter.py (the dashboard must never import the engine), the module MUST be
+     read-only and stdlib-only by construction, the 20-bar level MUST be the engine's own
+     (previous-20-bars) rule, risk MUST come from the reward leg, a weekend close MUST NOT read as a
+     feed outage while an open-market stall MUST (open-market minutes), the §7 bar MUST report
+     SCREEN/PASS/REVERT exactly as written, and the calibration MUST refuse to call the composite a
+     signal when it is collinear with side. Synthetic data only; no wall clock, no /opt/gold.
+
 Usage: python3 tools/smoke_test.py
 """
 import os
@@ -2518,6 +2528,393 @@ try:
     shutil.rmtree(empty, ignore_errors=True)
 finally:
     shutil.rmtree(tmp_t, ignore_errors=True)
+
+# --- Scenario U ------------------------------------------------------------
+print("\nScenario U: dashboard read layer (pressure.py) — mirrors pinned to the source of truth, "
+      "display-only invariants, honest calibration")
+import pressure as P  # noqa: E402
+import pressure_report as XPR  # noqa: E402
+
+# ── U1. the mirror gate ─────────────────────────────────────────────────────
+# pressure.py duplicates the engine's gate thresholds on purpose (the dashboard
+# must not import the engine: requests/dotenv, and stale constants across an
+# engine-only deploy). This is the check that keeps the duplicate honest.
+mirrors = [
+    ("LOOKBACK_PERIOD", P.LOOKBACK_PERIOD, engine.LOOKBACK_PERIOD),
+    ("WICK_RATIO_TARGET", P.WICK_RATIO_TARGET, engine.WICK_RATIO_TARGET),
+    ("FLOOR_BUFFER_PCT", P.FLOOR_BUFFER_PCT, engine.FLOOR_BUFFER_PCT),
+    ("EMA_SLOPE_LOOKBACK", P.EMA_SLOPE_LOOKBACK, engine.EMA_SLOPE_LOOKBACK),
+    ("MAX_BELOW_EMA_ATR", P.MAX_BELOW_EMA_ATR, engine.MAX_BELOW_EMA_ATR),
+    ("RSI_MIN", P.RSI_MIN, engine.RSI_MIN),
+    ("RSI_MAX", P.RSI_MAX, engine.RSI_MAX),
+    ("MIN_ATR", P.MIN_ATR, engine.MIN_ATR),
+    ("ATR_SL_MULT", P.ATR_SL_MULT, engine.ATR_SL_MULT),
+    ("SL_CLEAR_ATR", P.SL_CLEAR_ATR, engine.SL_CLEAR_ATR),
+    ("RR_TARGET", P.RR_TARGET, engine.RR_TARGET),
+    ("BE_TRIGGER_R", P.BE_TRIGGER_R, engine.BE_TRIGGER_R),
+    ("MAX_HOLD_MINUTES", P.MAX_HOLD_MINUTES, engine.MAX_HOLD_MINUTES),
+    ("REQUIRE_VOLUME_CONFIRM", P.REQUIRE_VOLUME_CONFIRM, engine.REQUIRE_VOLUME_CONFIRM),
+    ("MIN_ATR_TO_TRADE", P.MIN_ATR_TO_TRADE, trade_filter.MIN_ATR_TO_TRADE),
+    ("MAX_ATR_TO_TRADE", P.MAX_ATR_TO_TRADE, trade_filter.MAX_ATR_TO_TRADE),
+    ("MAX_DAILY_LOSSES", P.MAX_DAILY_LOSSES, trade_filter.MAX_DAILY_LOSSES),
+    ("SL_COOLDOWN_BASE_MINUTES", P.SL_COOLDOWN_BASE_MINUTES, trade_filter.SL_COOLDOWN_BASE_MINUTES),
+    ("SL_COOLDOWN_ESCALATED_MINUTES", P.SL_COOLDOWN_ESCALATED_MINUTES,
+     trade_filter.SL_COOLDOWN_ESCALATED_MINUTES),
+    ("MOMENTUM_LOOKBACK_MINUTES", P.MOMENTUM_LOOKBACK_MINUTES, trade_filter.MOMENTUM_LOOKBACK_MINUTES),
+    ("BLACKOUT_WINDOWS", P.BLACKOUT_WINDOWS, trade_filter.BLACKOUT_WINDOWS),
+]
+drifted = [f"{name}: {mine!r} != {real!r}" for name, mine, real in mirrors if mine != real]
+check("U: every mirrored gate constant equals engine.py / trade_filter.py (the dashboard cannot drift "
+      "from the engine silently)", not drifted, "; ".join(drifted)[:300])
+check("U: SELL RSI bounds stay the engine's mirror of the BUY ones (100-RSI_MAX .. 100-RSI_MIN)",
+      (P.SELL_RSI_MIN, P.SELL_RSI_MAX) == (100.0 - engine.RSI_MAX, 100.0 - engine.RSI_MIN))
+check("U: the era cutover equals strategy_lab.LIVE_CUTOVER (the §7 window is one number, not two)",
+      P.STRUCT_STOP_CUTOVER == SL.LIVE_CUTOVER, f"{P.STRUCT_STOP_CUTOVER} vs {SL.LIVE_CUTOVER}")
+check("U: the §7 bar thresholds match docs/ANALYSIS-2026-10-05-stop-loss-geometry.md §7",
+      (P.BAR_SL_PER_DAY, P.BAR_SL_SHARE_PCT, P.BAR_SCRATCH_PCT, P.BAR_WR_PCT, P.BAR_R_PER_TRADE,
+       P.BAR_PASS_N, P.BREAKEVEN_WR_PCT, P.REVERT_R_PER_TRADE, P.REVERT_SL_MULTIPLE, P.REVERT_DD_USD)
+      == (6.5, 47.0, 35.0, 36.0, -0.10, 150, 32.1, -0.20, 2.2, 250.0))
+quiet_samples = [datetime(2026, 10, 9, 20, 57), datetime(2026, 10, 11, 22, 0), datetime(2026, 10, 7, 3, 0),
+                 datetime(2026, 10, 7, 14, 0), datetime(2026, 10, 7, 21, 30), datetime(2026, 10, 10, 12, 0)]
+check("U: market_quiet mirrors engine.is_market_quiet on weekends/nights/open sessions",
+      all(P.market_quiet(t) == engine.is_market_quiet(t) for t in quiet_samples))
+
+# ── U2. synthetic tape + the gate read ──────────────────────────────────────
+U_HEAD = ["Timestamp", "Open", "High", "Low", "Close", "Wick_Ratio", "Volume", "Vol_MA", "Vol_Confirmed",
+          "Dynamic_Floor", "EMA_50", "EMA_200", "Trend_Confirmed", "Tested_Floor", "Valid_Rejection",
+          "Held_Floor", "RSI", "ATR"]
+
+
+def u_write(path, rows):
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f, lineterminator="\r\n")
+        w.writerow(U_HEAD)
+        for r in rows:
+            w.writerow([r[k] for k in U_HEAD])
+
+
+def u_rows(n=140, start=datetime(2026, 10, 7, 10, 0), px=4150.0, drift=0.05, atr=1.6, rsi=55.0,
+           ema_gap=1.0, wick_low=0.05, wick_up=0.05, last=None):
+    """A deterministic M1 tape with fully populated indicator columns. `last` overrides the final bar."""
+    out = []
+    t = start
+    for i in range(n):
+        o = px
+        c = o + drift
+        h, l = max(o, c) + 0.30, min(o, c) - 0.30
+        px = c
+        ema_f = px - ema_gap
+        ema_s = px - ema_gap * 2.0
+        out.append({
+            "Timestamp": t.strftime("%Y-%m-%d %H:%M:%S"), "Open": f"{o:.2f}", "High": f"{h:.2f}",
+            "Low": f"{l:.2f}", "Close": f"{c:.2f}", "Wick_Ratio": f"{wick_low:.0%}", "Volume": "100",
+            "Vol_MA": "100.0", "Vol_Confirmed": "True", "EMA_50": f"{ema_f:.2f}", "EMA_200": f"{ema_s:.2f}",
+            "Trend_Confirmed": "True", "Tested_Floor": "False", "Valid_Rejection": "False",
+            "Held_Floor": "False", "RSI": f"{rsi:.1f}", "ATR": f"{atr:.2f}", "Dynamic_Floor": f"{px - 3:.2f}",
+        })
+        t += timedelta(minutes=1)
+    if last:
+        out[-1].update(last)
+    return out
+
+
+u_dir = tempfile.mkdtemp()
+try:
+    # BUY: last bar tests the 20-bar floor with a 65% lower wick, closes back above it, uptrend, RSI 55
+    buy_rows = u_rows()
+    floor_buy = min(float(r["Low"]) for r in buy_rows[-21:-1])
+    buy_rows[-1].update({
+        "Open": f"{floor_buy + 1.5:.2f}", "Low": f"{floor_buy:.2f}", "Close": f"{floor_buy + 3.0:.2f}",
+        "High": f"{floor_buy + 3.05:.2f}", "Wick_Ratio": "65%", "Dynamic_Floor": f"{floor_buy:.2f}",
+        "EMA_50": f"{floor_buy + 3.2:.2f}", "EMA_200": f"{floor_buy + 1.0:.2f}", "Trend_Confirmed": "True",
+        "Tested_Floor": "True", "Valid_Rejection": "True", "Held_Floor": "True", "RSI": "55.0", "ATR": "1.60"})
+    u_path = os.path.join(u_dir, "forward_test_log.csv")
+    u_write(u_path, buy_rows)
+    rows = P.tail_rows(u_path, 400)
+    s = P.setup_read(rows)
+    check("U: the log is read back row-for-row and the BUY read is READY when every engine gate passes",
+          s.get("ok") and s["BUY"]["ready"] and s["BUY"]["passed"] == s["BUY"]["total"] == 8
+          and not s["SELL"]["ready"], f"{s.get('reason')} {s.get('BUY', {}).get('passed')}")
+    check("U: the floor is recomputed from the previous 20 bars (engine rule: the current bar is excluded) "
+          "and matches the engine's own logged Dynamic_Floor",
+          abs(s["floor"] - floor_buy) < 0.01 and not s["floor_mismatch"])
+    check("U: the failing side reports the first gate that would have to flip (funnel order: wick before trend)",
+          s["nearest_miss"]["BUY"] is None and (s["nearest_miss"]["SELL"] or "").startswith("Rejection wick"),
+          str(s["nearest_miss"]))
+
+    # the same tape with a doji last bar: BUY must fail on the wick, not on the level
+    no_wick = [dict(r) for r in buy_rows]
+    no_wick[-1].update({"Low": f"{float(no_wick[-1]['Close']) - 3.0:.2f}", "Wick_Ratio": "0.0%",
+                        "Valid_Rejection": "False"})
+    u_write(u_path, no_wick)
+    s2 = P.setup_read(P.tail_rows(u_path, 400))
+    check("U: a doji at the floor is not a setup, and the panel names the wick as the blocker",
+          not s2["BUY"]["ready"] and s2["BUY"]["passed"] == 7
+          and "Rejection wick" in (s2["nearest_miss"]["BUY"] or ""), str(s2["nearest_miss"]))
+
+    # SELL mirror: ceiling tested, upper wick, downtrend
+    sell_rows = u_rows(drift=-0.05)
+    ceil_sell = max(float(r["High"]) for r in sell_rows[-21:-1])
+    sell_rows[-1].update({
+        "Open": f"{ceil_sell - 1.5:.2f}", "High": f"{ceil_sell:.2f}", "Close": f"{ceil_sell - 3.0:.2f}",
+        "Low": f"{ceil_sell - 3.05:.2f}", "Dynamic_Floor": f"{ceil_sell - 40:.2f}",
+        "EMA_50": f"{ceil_sell - 3.2:.2f}", "EMA_200": f"{ceil_sell - 1.0:.2f}", "Trend_Confirmed": "False",
+        "RSI": "45.0", "ATR": "1.60"})
+    u_write(u_path, sell_rows)
+    s3 = P.setup_read(P.tail_rows(u_path, 400))
+    check("U: the SELL side is computed from the log's OHLC (the log carries BUY-side flags only) and is "
+          "READY when its mirror gates pass",
+          s3.get("ok") and s3["SELL"]["ready"] and not s3["BUY"]["ready"],
+          f"ceil {s3.get('ceiling')} passed {s3.get('SELL', {}).get('passed')}")
+
+    # ── U3. pressure composite ──
+    up_rows, down_rows = u_rows(drift=0.15), u_rows(drift=-0.15)
+    u_write(os.path.join(u_dir, "up.csv"), up_rows)
+    u_write(os.path.join(u_dir, "down.csv"), down_rows)
+    pu = P.pressure(P.tail_rows(os.path.join(u_dir, "up.csv"), 400))
+    pd_ = P.pressure(P.tail_rows(os.path.join(u_dir, "down.csv"), 400))
+    check("U: pressure is bounded, the two sides sum to 100, and a rising tape reads higher than a falling one",
+          pu and pd_ and 0 <= pu["buy_pct"] <= 100 and abs(pu["buy_pct"] + pu["sell_pct"] - 100) < 1e-9
+          and pu["buy_pct"] > 60 > pd_["buy_pct"], f"{pu and round(pu['buy_pct'], 1)} vs {pd_ and round(pd_['buy_pct'], 1)}")
+    check("U: every component is reported with its raw value and weight (the dial is auditable)",
+          len(pu["components"]) == 5 and all(c["unit"] and c["weight"] for c in pu["components"])
+          and abs(sum(c["weight"] for c in pu["components"]) - 1.0) < 1e-9)
+    check("U: pressure() refuses to guess when the history is too short",
+          P.pressure(u_rows(n=30)) is None and P.pressure([]) is None)
+
+    # ── U4. risk geometry is the engine's ──
+    check("U: structural_risk is the engine's own function, level-aware and ATR-floored",
+          P.structural_risk(4150.0, 1.6, 4148.0) == engine.GoldEngine.structural_risk(None, "BUY", 4150.0, 1.6, 4148.0)
+          == 3.2 and P.structural_risk(4150.0, 1.6, 4140.0) == engine.GoldEngine.structural_risk(
+              None, "BUY", 4150.0, 1.6, 4140.0) == 10.8)
+    legacy = {"Entry_Price": "4150.00", "Take_Profit": "4156.00", "ATR_At_Entry": "2.00"}
+    ratcheted = {"Entry_Price": "4150.00", "Take_Profit": "4198.00", "Stop_Loss": "4150.00",
+                 "ATR_At_Entry": "2.00"}
+    check("U: risk comes from the REWARD leg (never ATR_At_Entry), so a ratcheted stop cannot shrink R",
+          abs(P.trade_risk(legacy) - 4.0) < 1e-9 and abs(P.trade_risk(ratcheted) - 32.0) < 1e-9
+          and P.trade_risk({"Entry_Price": "4150", "Take_Profit": "4150"}) is None)
+
+    # ── U5. era stats + the §7 verdict ──
+    def u_trade(i, reason, profit, hour=10, tp=4156.0, entry=4150.0):
+        return {"Trade_Num": str(i), "Trade_Type": "BUY", "Entry_Time": f"2026-10-07 {hour:02d}:{i % 60:02d}:02",
+                "Exit_Time": f"2026-10-07 {hour:02d}:{i % 60:02d}:59", "Entry_Price": f"{entry:.2f}",
+                "Stop_Loss": f"{entry - 4:.2f}", "Take_Profit": f"{tp:.2f}", "Exit_Price": "0",
+                "Exit_Reason": reason, "Profit": f"{profit:.2f}", "Balance_After": "500.00",
+                "RSI_At_Entry": "50.0", "ATR_At_Entry": "2.00", "Wick_Ratio_At_Entry": "50.0%",
+                "EMA50_At_Entry": "4148.00", "EMA200_At_Entry": "4140.00"}
+
+    good = [u_trade(i, "TP", 6.0, hour=10) for i in range(5)] + \
+           [u_trade(i + 5, "SL", -4.0, hour=11) for i in range(5)] + \
+           [u_trade(i + 10, "BE", 0.0, hour=12) for i in range(2)]
+    e = P.era_stats(good)
+    check("U: era stats reproduce WR / R / SL-share / scratch / SL-per-session from the ledger, with R "
+          "on win_rate_report's scale ($/trade ÷ mean 1R rebuilt from the reward leg) and the decisive-only "
+          "mean kept separately",
+          e and abs(e["wr"] - 50.0) < 1e-9 and abs(e["r_per_trade"] - 10.0 / 12 / 4.0) < 1e-9
+          and abs(e["r_per_trade_decisive"] - 0.25) < 1e-9 and abs(e["mean_1r_usd"] - 4.0) < 1e-9
+          and abs(e["sl_share_pct"] - 41.67) < 0.01 and abs(e["scratch_pct"] - 16.67) < 0.01
+          and abs(e["sl_per_day"] - 5.0) < 1e-9 and abs(e["avg_sl_usd"] - 4.0) < 1e-9,
+          str(e and {k: round(v, 3) if isinstance(v, float) else v for k, v in
+                     (("wr", e["wr"]), ("R", e["r_per_trade"]), ("slshare", e["sl_share_pct"]))}))
+    check("U: a book that clears the §7 screen is reported as SCREEN-n short of PASS, never as a pass",
+          e["screen_ok"] and not e["pass_ok"] and e["trades_to_pass"] == P.BAR_PASS_N - 12
+          and e["status"].startswith("SCREEN MET"), e["status"])
+    ratcheted = u_trade(99, "BE", 0.0, hour=10)
+    ratcheted["Stop_Loss"] = ratcheted["Entry_Price"]          # ratcheted to entry: |entry-sl| == 0
+    e_rat = P.era_stats(good + [ratcheted])
+    check("U: a ratcheted-to-entry row does not shrink the book's 1R (the stop is rebuilt from the reward leg)",
+          e_rat and abs(e_rat["mean_1r_usd"] - 4.0) < 1e-9, str(e_rat and e_rat["mean_1r_usd"]))
+    bad = [u_trade(i, "SL", -8.0, hour=10) for i in range(10)]
+    eb = P.era_stats(bad)
+    check("U: R/trade below the revert trigger is reported as REVERT TRIGGER FIRED",
+          eb and eb["revert_fired"] and not eb["screen_ok"] and eb["status"] == "REVERT TRIGGER FIRED"
+          and eb["reverts"]["R4"]["fired"], str(eb and eb["status"]))
+    check("U: an empty era returns None instead of a fake zero-trade summary",
+          P.era_stats([u_trade(1, "TP", 6.0, hour=10)], cutover=datetime(2030, 1, 1)) is None)
+    check("U: Wilson interval matches the repo's convention (40/100 -> ~30.9..49.8)",
+          abs(P.wilson_interval(40, 100)[0] - 30.9) < 0.2 and abs(P.wilson_interval(40, 100)[1] - 49.8) < 0.2)
+
+    # ── U6. portfolio state (blackout / cooldown / breaker / momentum) ──
+    wed_open = datetime(2026, 10, 7, 8, 30)
+    london = P.portfolio_read([], wed_open)
+    check("U: the London kill-zone blocks BUY only — the direction-aware rule survives the mirror",
+          london["sides_blocked"]["BUY"] and not london["sides_blocked"]["SELL"]
+          and "London" in london["sides_blocked"]["BUY"])
+    ny = P.portfolio_read([], datetime(2026, 10, 7, 13, 40))
+    check("U: the NY windows block both sides", ny["sides_blocked"]["BUY"] and ny["sides_blocked"]["SELL"])
+    check("U: the end minute of a window is still inside it (trade_filter is inclusive on both ends)",
+          P.portfolio_read([], datetime(2026, 10, 7, 9, 0))["blackout_any"]
+          and not P.portfolio_read([], datetime(2026, 10, 7, 9, 1))["blackout_any"])
+    check("U: outside the windows nothing is blocked (10:00 UTC is free)",
+          not P.portfolio_read([], datetime(2026, 10, 7, 10, 0))["blackout_any"])
+    nx = P.portfolio_read([], datetime(2026, 10, 7, 10, 0))
+    check("U: the next blackout is found ahead of 'now' (10:00 -> 12:25 NY pre-market)",
+          nx["next_window"] and nx["next_window"][2] == datetime(2026, 10, 7, 12, 25)
+          and not nx["blackout_any"], str(nx["next_window"]))
+    sl_10_ago = u_trade(1, "SL", -4.0, hour=10)
+    sl_10_ago["Exit_Time"] = "2026-10-07 10:20:00"
+    p1 = P.portfolio_read([sl_10_ago], datetime(2026, 10, 7, 10, 30))
+    p2 = P.portfolio_read([dict(sl_10_ago, Exit_Time="2026-10-07 09:59:00"),
+                           dict(sl_10_ago, Exit_Time="2026-10-07 10:20:00")], datetime(2026, 10, 7, 10, 30))
+    check("U: one SL -> 30 min cooldown, two consecutive -> 60 min (trade_filter's escalation)",
+          20 <= p1["cooldown_minutes_left"] <= 21 and 50 <= p2["cooldown_minutes_left"] <= 51,
+          f"{p1['cooldown_minutes_left']} / {p2['cooldown_minutes_left']}")
+    check("U: a TP after the SLs breaks the streak and clears the cooldown",
+          P.portfolio_read([sl_10_ago, u_trade(2, "TP", 6.0, hour=10)],
+                           datetime(2026, 10, 7, 10, 30))["cooldown_minutes_left"] == 0)
+    ten_sl = [dict(sl_10_ago, Exit_Time=f"2026-10-07 {9 + i // 10}:{(i * 5) % 60:02d}:00") for i in range(10)]
+    mom_rows = u_rows(n=80, drift=0.1)
+    mom_now = P.parse_ts(mom_rows[-1]["Timestamp"]) + timedelta(minutes=1)
+    pb = P.portfolio_read(ten_sl, mom_now, mom_rows)
+    check("U: 10 SLs in a day is not a halt — it is trend-side-only, keyed on the 60-min momentum",
+          pb["breaker_on"] and pb["momentum_side"] == "BUY" and pb["sides_blocked"]["SELL"]
+          and not pb["sides_blocked"]["BUY"], str(pb["sides_blocked"]))
+    stale_rows = [dict(r, Timestamp=(P.parse_ts(r["Timestamp"]) - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S"))
+                  for r in mom_rows]
+    down_rows2 = u_rows(n=80, drift=-0.1)
+    down_now = P.parse_ts(down_rows2[-1]["Timestamp"]) + timedelta(minutes=1)
+    check("U: momentum reads the last 60 min of closes, refuses a stale log (>15 min) instead of "
+          "inventing a side, and splits by direction",
+          P.momentum_side(mom_rows, mom_now) == "BUY" and P.momentum_side(down_rows2, down_now) == "SELL"
+          and P.momentum_side(stale_rows, mom_now) is None)
+    skips = [{"Timestamp": "2026-10-07 10:10:00", "Reason": "SL Cooldown: 26 min remaining", "Price": "4150", "ATR": "1.6"},
+             {"Timestamp": "2026-10-07 10:20:00", "Reason": "SL Cooldown: 12 min remaining", "Price": "4151", "ATR": "1.6"},
+             {"Timestamp": "2026-10-07 08:10:00", "Reason": "Blackout: London Open & Early Session Kill-Zone", "Price": "4152", "ATR": "1.7"},
+             {"Timestamp": "2026-10-05 08:10:00", "Reason": "ATR too low (1.02 < 1.1)", "Price": "4152", "ATR": "1.02"}]
+    sk = P.skip_summary(skips, datetime(2026, 10, 7, 11, 0), hours=24)
+    check("U: skips are bucketed by the risk layer's own reason, and old rows fall outside the window",
+          sk["total"] == 3 and dict(sk["buckets"]) == {"SL cooldown": 2, "Blackout": 1}, str(sk["buckets"]))
+
+    # ── U7. feed health ──
+    def u_feed_row(ts):
+        return {"Timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"), "Open": "4150.00", "High": "4151.00",
+                "Low": "4149.00", "Close": "4150.50", "Volume": "10"}
+
+    weekend = [u_feed_row(datetime(2026, 10, 9, 20, 57)), u_feed_row(datetime(2026, 10, 11, 22, 0))]
+    fw = P.feed_read(weekend, datetime(2026, 10, 11, 22, 5))
+    check("U: a weekend close is NOT an outage (both ends must be expected-trading time)",
+          fw["ok"] and fw["gaps"] == 0, str(fw))
+    outage = [u_feed_row(datetime(2026, 10, 7, 8, 30) + timedelta(minutes=i)) for i in range(3)]
+    outage += [u_feed_row(datetime(2026, 10, 7, 14, 30) + timedelta(minutes=i)) for i in range(3)]
+    fo = P.feed_read(outage, datetime(2026, 10, 7, 14, 40))
+    check("U: an open-market stall is reported in the unit the 2026-09-29 review used (open-market minutes)",
+          fo["gaps"] == 1 and abs(fo["largest_gap_minutes"] - 360) <= 2
+          and fo["gap_detail"][0]["start"] == datetime(2026, 10, 7, 8, 32), str(fo["gap_detail"]))
+    check("U: the daily break is excluded too (21:15 -> 01:41 is not 'lost' time)",
+          P.feed_read([u_feed_row(datetime(2026, 10, 7, 20, 57)), u_feed_row(datetime(2026, 10, 8, 1, 41))],
+                      datetime(2026, 10, 8, 2, 0))["gaps"] == 0)
+    check("U: feed_read degrades to a reason string on an empty log", not P.feed_read([])["ok"])
+
+    # ── U8. calibration: measure, never assert ──
+    cal_rows = u_rows(n=200, drift=0.12)
+    cal_trades = []
+    for i in range(12):
+        t = u_trade(i, "TP" if i % 3 else "SL", 6.0 if i % 3 else -4.0, hour=12)
+        t["Trade_Type"] = "BUY"
+        t["Entry_Time"] = (datetime(2026, 10, 7, 12, 0) + timedelta(minutes=i * 3)).strftime("%Y-%m-%d %H:%M:%S")
+        cal_trades.append({"Trade_Num": str(i), **t})
+    cal = P.calibration(cal_rows, cal_trades)
+    check("U: the calibration joins each entry to a bar STRICTLY before the entry minute",
+          cal["ok"] and cal["n"] == len(cal_trades))
+    check("U: an all-BUY uptrend book is detected as degenerate (collinear with side) instead of being "
+          "sold as a signal", cal["degenerate"] and cal["verdict"].startswith("collinear")
+          and cal["reliable"] is False, str(cal["verdict"]))
+    check("U: calibration reports unavailability rather than a fake table",
+          not P.calibration([], [])["ok"] and not P.calibration(cal_rows, [])["ok"])
+
+    # ── U9. the module end to end, and the CLI report ──
+    u_write(os.path.join(u_dir, "forward_test_log.csv"), buy_rows)
+    with open(os.path.join(u_dir, "trades.csv"), "w", newline="") as f:
+        w = csv.writer(f, lineterminator="\r\n")
+        w.writerow(LEDGER_HEAD)
+        for i, t in enumerate(cal_trades, 1):
+            w.writerow([i, "BUY", t["Entry_Time"], t["Exit_Time"], t["Entry_Price"], t["Stop_Loss"],
+                        t["Take_Profit"], "4156.00", t["Exit_Reason"], t["Profit"], "500.00", "50.0",
+                        "2.00", "50.0%", "4148.00", "4140.00"])
+    with open(os.path.join(u_dir, "skipped_trades.csv"), "w", newline="") as f:
+        w = csv.writer(f, lineterminator="\r\n")
+        w.writerow(["Timestamp", "Reason", "Price", "ATR"])
+        for s_ in skips:
+            w.writerow([s_["Timestamp"], s_["Reason"], s_["Price"], s_["ATR"]])
+    with open(os.path.join(u_dir, "trades.csv")) as f_:
+        u_trades = [dict(zip(LEDGER_HEAD, r)) for r in list(csv.reader(f_))[1:]]
+    ctx = P.build(log_rows=P.tail_rows(os.path.join(u_dir, "forward_test_log.csv"), 400),
+                  trades=u_trades, skip_rows=skips, now=datetime(2026, 10, 7, 14, 0))
+    check("U: build() returns the whole read-only snapshot from synthetic files (no /opt/gold, no wall clock)",
+          ctx["pressure"] and ctx["setup"]["ok"] and ctx["era"] and ctx["book"] and ctx["feed"]["ok"]
+          and ctx["era"]["n"] == 12 and ctx["portfolio"]["daily_sls"] == 4 and ctx["skips"]["total"] == 3,
+          str((ctx["era"] or {}).get("n")))
+    ot = P.open_trade_read({"trade_active": True, "trade_type": "BUY", "entry_price": 4150.0,
+                            "take_profit": 4156.0, "stop_loss": 4146.0}, 4153.0)
+    ot_s = P.open_trade_read({"trade_active": True, "trade_type": "SELL", "entry_price": 4150.0,
+                              "take_profit": 4144.0, "stop_loss": 4154.0}, 4147.0)
+    check("U: an open position is scored from the last logged close in R, unsigned by side "
+          "(risk from the reward leg: 6/1.5 = $4)",
+          ot and abs(ot["risk"] - 4.0) < 1e-9 and abs(ot["pnl"] - 3.0) < 1e-9
+          and abs(ot["r_now"] - 0.75) < 1e-9 and abs(ot["be_price"] - 4153.0) < 1e-9
+          and ot_s and abs(ot_s["pnl"] - 3.0) < 1e-9 and abs(ot_s["r_now"] - 0.75) < 1e-9
+          and P.open_trade_read({"trade_active": False}, 4150.0) is None
+          and P.open_trade_read({"trade_active": True, "entry_price": 4150.0}, 4150.0) is None)
+
+    # ── U10. read-only by construction ──
+    import ast as _ast
+    u_tree = _ast.parse(open(os.path.join(ROOT, "pressure.py")).read())
+    u_imports = set()
+    for node in _ast.walk(u_tree):
+        if isinstance(node, _ast.Import):
+            u_imports.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, _ast.ImportFrom) and node.module:
+            u_imports.add(node.module.split(".")[0])
+    writes, calls = [], []
+    MODULE_FS = {"os": ("remove", "unlink", "rename", "replace", "rmdir", "makedirs", "mkdir", "system"),
+                 "shutil": ("rmtree", "move", "copy", "copyfile", "copytree")}
+    for node in _ast.walk(u_tree):
+        if not isinstance(node, _ast.Call):
+            continue
+        fn = node.func
+        name = getattr(fn, "id", None)
+        if name == "open" and len(node.args) > 1 and isinstance(node.args[1], _ast.Constant) \
+                and isinstance(node.args[1].value, str) and any(m in node.args[1].value for m in "wax+"):
+            writes.append(node.lineno)
+        if name in ("eval", "exec", "compile", "__import__", "Popen", "system"):
+            calls.append(f"{name}:{node.lineno}")
+        if isinstance(fn, _ast.Attribute) and isinstance(fn.value, _ast.Name):
+            mod, attr = fn.value.id, fn.attr
+            if attr in MODULE_FS.get(mod, ()) or (mod == "subprocess"):
+                calls.append(f"{mod}.{attr}:{node.lineno}")
+            if attr in ("write", "writelines", "writerow", "writerows"):
+                calls.append(f"{mod}.{attr}:{node.lineno}")
+    check("U: pressure.py is READ-ONLY by construction (no write-mode open, no remove/rename/subprocess/write call)",
+          not writes and not calls, f"writes {writes} calls {calls}")
+    check("U: pressure.py imports the standard library only — never engine.py / trade_filter.py / flask "
+          "(the mirror is checked at deploy time instead, so the dashboard cannot pull the engine in)",
+          u_imports <= {"__future__", "csv", "math", "os", "bisect", "datetime"}, str(sorted(u_imports)))
+
+    def u_stat(root):
+        return {n: (os.path.getsize(os.path.join(root, n)), int(os.path.getmtime(os.path.join(root, n))))
+                for n in sorted(os.listdir(root))}
+
+    u_before = u_stat(u_dir)
+    rp_buf = io.StringIO()
+    with contextlib.redirect_stdout(rp_buf):
+        rc = XPR.main(["--root", u_dir])
+    rp_out = rp_buf.getvalue()
+    check("U: tools/pressure_report.py runs end to end on a synthetic root and exits 0",
+          rc == 0 and "Display-only read" in rp_out and "== 6. CALIBRATION" in rp_out
+          and "SIDE PROXY" in rp_out, rp_out[:200])
+    rp_json = io.StringIO()
+    with contextlib.redirect_stdout(rp_json):
+        rc2 = XPR.main(["--root", u_dir, "--json"])
+    try:
+        json.loads(rp_json.getvalue())
+        parsed = True
+    except Exception:
+        parsed = False
+    check("U: --json emits parseable JSON (the report is usable by a script)", rc2 == 0 and parsed)
+    check("U: the CLI writes nothing into the root it reads (no new file, no touched mtime/size)",
+          u_stat(u_dir) == u_before, str(u_stat(u_dir)))
+finally:
+    shutil.rmtree(u_dir, ignore_errors=True)
 
 
 print()
