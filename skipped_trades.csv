@@ -1411,3 +1411,4 @@ Timestamp,Reason,Price,ATR
 2026-10-16 01:44:02,SL Cooldown: 23 min remaining (5 consecutive SLs -> 60m cooldown),4149.96,1.66
 2026-10-16 01:48:03,SL Cooldown: 19 min remaining (5 consecutive SLs -> 60m cooldown),4149.59,1.60
 2026-10-16 02:00:04,SL Cooldown: 7 min remaining (5 consecutive SLs -> 60m cooldown),4152.95,1.46
+2026-10-16 08:46:06,Blackout: London Open & Early Session Kill-Zone,4184.71,1.13
