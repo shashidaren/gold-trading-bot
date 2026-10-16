@@ -131,6 +131,14 @@ SYMBOL = "GOLD"
 LOT_SIZE = 0.01
 MAGIC_NUMBER = 987654
 
+# --- Position sizing / risk gate (adds %-risk control; does NOT touch stop/TP geometry) ---
+# Keeps R-invariant: R = P&L / $risk scales with lots, so the open struct-stop
+# era metrics (R/trade, WR, SL share) are unaffected by lot sizing.
+RISK_PCT        = 1.0     # % of balance risked per trade (balance excludes non-withdrawable credit)
+CONTRACT_SIZE   = 100     # XM GOLD Standard = 100 oz; GOLDmicro = 1
+VOLUME_MIN      = 0.01    # MT5 symbol spec: minimum volume
+VOLUME_STEP     = 0.01    # MT5 symbol spec: volume step
+
 LOG_FILE_PATH = "/opt/gold/forward_test_log.csv"
 STATUS_FILE_PATH = "/opt/gold/status.json"
 # DATA_SOURCE=MT5: the Wine sidecar (tools/mt5_feed.py) publishes the latest
@@ -269,6 +277,9 @@ class GoldEngine:
         self.tick_pool = []
 
         self.balance = 500.00
+        self.trade_lots = LOT_SIZE                  # current position size (set by risk sizer)
+        self.pnl_scale = LOT_SIZE * CONTRACT_SIZE   # $ P&L per $1 move for trade_lots (0.01 GOLD = 1.0)
+        self.account_balance = None                 # live MT5 balance, used by the risk sizer
         self.trade_active = False
         self.trade_type = "BUY"  # "BUY" or "SELL"
         self.entry_price = 0.0
@@ -897,6 +908,11 @@ class GoldEngine:
             now = datetime.now(timezone.utc)
         return (now - entry_dt).total_seconds() / 60.0
 
+    def _pnl(self, price: float) -> float:
+        """P&L for the active trade at `price`, scaled by the sized lot (BUY/SELL aware)."""
+        raw = (price - self.entry_price) if self.trade_type == "BUY" else (self.entry_price - price)
+        return raw * getattr(self, "pnl_scale", 1.0)
+
     def _maybe_time_stop(self, price: float, now: datetime = None) -> bool:
         """Max-hold time stop: close at market once the trade is older than
         MAX_HOLD_MINUTES. Returns True if it exited. Deliberately neutral:
@@ -908,10 +924,7 @@ class GoldEngine:
         held = self._minutes_in_trade(now=now)
         if held is None or held < MAX_HOLD_MINUTES:
             return False
-        if self.trade_type == "BUY":
-            profit = price - self.entry_price
-        else:
-            profit = self.entry_price - price
+        profit = self._pnl(price)
         self.balance += profit
         self.time_exits += 1
         self.trade_active = False
@@ -1069,6 +1082,15 @@ class GoldEngine:
             positions = mt5.positions_get(symbol=SYMBOL, magic=MAGIC_NUMBER)
             in_trade = (positions is not None and len(positions) > 0)
 
+        # Spread for the minimum-spread filter (LIVE only; paper has no spread feed)
+        live_spread_points = None
+        if TRADING_MODE == "LIVE":
+            try:
+                _tk = mt5.symbol_info_tick(SYMBOL)
+                live_spread_points = _tk.spread if _tk else None
+            except Exception:
+                live_spread_points = None
+
         # Funnel tracking
         if dynamic_floor is not None:
             if tested_floor:
@@ -1139,6 +1161,7 @@ class GoldEngine:
                 ema_fast=self.ema_fast,
                 ema_slow=self.ema_slow,
                 side="BUY",
+                current_spread_points=live_spread_points,
             )
 
             if not allow:
@@ -1163,6 +1186,7 @@ class GoldEngine:
                 ema_fast=self.ema_fast,
                 ema_slow=self.ema_slow,
                 side="SELL",
+                current_spread_points=live_spread_points,
             )
 
             if not allow:
@@ -1194,6 +1218,19 @@ class GoldEngine:
                 risk = beyond
         return risk
 
+    def size_lots(self, stop_usd: float):
+        """Target lots for a RISK_PCT-of-balance stop, or None when the required lot
+        is below the broker volume_min (structural dead-end at this balance -> SKIP).
+        R-invariant: R = P&L / $risk scales with lots, so struct-stop metrics are
+        unaffected. Sizes on the live account balance when available, else the ledger."""
+        if stop_usd is None or stop_usd <= 0:
+            return None
+        base = self.account_balance if getattr(self, "account_balance", None) else self.balance
+        risk_usd = base * RISK_PCT / 100.0
+        lots = risk_usd / (stop_usd * CONTRACT_SIZE)
+        lots = round(lots / VOLUME_STEP) * VOLUME_STEP
+        return lots if lots >= VOLUME_MIN else None
+
     def execute_live_trade(self, direction: str, c: float, wick_ratio: float, ts: str, level=None):
         print(f"\nALL CONDITIONS MET! PREPARING LIVE {direction} ORDER...")
         point = mt5.symbol_info(SYMBOL).point
@@ -1218,13 +1255,24 @@ class GoldEngine:
             sl_price = price + risk
             tp_price = price - RR_TARGET * risk
 
+        # --- Risk sizer (live): size lots for RISK_PCT, refuse if below volume_min ---
+        info = mt5.account_info()
+        self.account_balance = info.balance if info else self.balance
+        self.trade_lots = self.size_lots(risk)
+        if self.trade_lots is None:
+            print(f"\nLIVE order skipped -> {RISK_PCT}% risk needs <{VOLUME_MIN} lot at stop ${risk:.2f}\n")
+            self.send_telegram(
+                f"LIVE POSITION SIZE SKIPPED\nStop ${risk:.2f} needs <{VOLUME_MIN} lot for {RISK_PCT}% risk")
+            return
+        self.pnl_scale = self.trade_lots * CONTRACT_SIZE
+
         sl_price = round(sl_price / point) * point
         tp_price = round(tp_price / point) * point
 
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": SYMBOL,
-            "volume": LOT_SIZE,
+            "volume": self.trade_lots,
             "type": order_type,
             "price": price,
             "sl": sl_price,
@@ -1267,6 +1315,15 @@ class GoldEngine:
         # ratio against the ACTUAL risk, so the BE ratchet trigger (0.75R) and every
         # R-denominated stat mean the same thing as before.
         risk = self.structural_risk(direction, c, self.atr, level)
+        # --- Risk sizer: enforce RISK_PCT of balance; refuse if below volume_min ---
+        self.trade_lots = self.size_lots(risk)
+        if self.trade_lots is None:
+            print(f"\nTrade skipped -> {RISK_PCT}% risk needs <{VOLUME_MIN} lot at stop ${risk:.2f} "
+                  f"(structural dead-end at this balance) - not taken\n")
+            self.send_telegram(
+                f"POSITION SIZE SKIPPED\nStop ${risk:.2f} needs <{VOLUME_MIN} lot for {RISK_PCT}% risk")
+            return
+        self.pnl_scale = self.trade_lots * CONTRACT_SIZE
         self.structural_stop_bound = risk > self.atr * ATR_SL_MULT + 1e-9
         if direction == "BUY":
             self.stop_loss = c - risk
@@ -1303,7 +1360,7 @@ class GoldEngine:
 
         if self.trade_type == "BUY":
             if price >= self.take_profit:
-                profit = price - self.entry_price
+                profit = self._pnl(price)
                 self.balance += profit
                 self.wins += 1
                 self.trade_active = False
@@ -1316,7 +1373,7 @@ class GoldEngine:
                 )
                 self.save_status()
             elif price <= self.stop_loss:
-                loss = self.entry_price - price
+                loss = -self._pnl(price)
                 self.balance -= loss
                 was_be = self.be_armed
                 if was_be:
@@ -1336,7 +1393,7 @@ class GoldEngine:
 
         elif self.trade_type == "SELL":
             if price <= self.take_profit:
-                profit = self.entry_price - price
+                profit = self._pnl(price)
                 self.balance += profit
                 self.wins += 1
                 self.trade_active = False
@@ -1349,7 +1406,7 @@ class GoldEngine:
                 )
                 self.save_status()
             elif price >= self.stop_loss:
-                loss = price - self.entry_price
+                loss = -self._pnl(price)
                 self.balance -= loss
                 was_be = self.be_armed
                 if was_be:
