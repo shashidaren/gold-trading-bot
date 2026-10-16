@@ -83,7 +83,6 @@ BLACKOUT_WINDOWS = [
     (12, 25, 12, 45, "NY Early Pre-Market", ("BUY", "SELL")),
     (13, 25, 15, 15, "NY Open & US High-Impact Macro Releases", ("BUY", "SELL")),
     (21, 45, 22, 30, "Daily Market Rollover & Spread Spike", ("BUY", "SELL")),
-    (17, 55, 18, 30, "FOMC / 18:00 UTC high-impact", ("BUY", "SELL")),
 ]
 
 # era boundary — must equal strategy_lab.LIVE_CUTOVER (see HANDOFF "Snapshot")

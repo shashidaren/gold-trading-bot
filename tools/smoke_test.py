@@ -2917,6 +2917,120 @@ finally:
     shutil.rmtree(u_dir, ignore_errors=True)
 
 
+# --- Scenario V ---
+print("\nScenario V: risk-sizer scope (LIVE-only) + skip-path safety + frozen blackouts (2026-10-17 fix)")
+tmp_v = tempfile.mkdtemp(prefix="gold_smoke_v_")
+engine.LOG_FILE_PATH = os.path.join(tmp_v, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_v, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_v, "trades.csv")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_v, "skipped_trades.csv")
+trade_filter.is_in_blackout = lambda now=None, side=None: (False, "")
+
+# V1. the paper book must not be sized off its own ledger: any stop stays at LOT_SIZE
+# (the 2026-10-17 regression - a ledger-based sizer skipped 76-91% of M1 setups).
+eng_v = engine.GoldEngine()
+eng_v.account_balance = None                      # FORWARD_TEST: no broker account
+check("V: paper keeps the fixed lot at ANY stop - size_lots(14.79) / size_lots(250) == LOT_SIZE "
+      "(no ledger-based skipping in the forward test)",
+      eng_v.size_lots(14.79) == engine.LOT_SIZE and eng_v.size_lots(250.0) == engine.LOT_SIZE
+      and eng_v.size_lots(0.01) == engine.LOT_SIZE,
+      f"14.79->{eng_v.size_lots(14.79)} 250->{eng_v.size_lots(250.0)}")
+check("V: paper P&L scale is LOT_SIZE x CONTRACT_SIZE ($1.00 per $1.00 move at 0.01 GOLD)",
+      eng_v.pnl_scale == engine.LOT_SIZE * engine.CONTRACT_SIZE, f"{eng_v.pnl_scale}")
+
+# V2. where the sizer IS meant to work: the real account balance, 1% risk, volume_min refusal
+eng_v.account_balance = 180.15
+check("V: LIVE sizes 1% of account.balance and refuses below volume_min",
+      eng_v.size_lots(2.20) == 0.01 and eng_v.size_lots(3.50) == 0.01 and eng_v.size_lots(5.26) is None,
+      f"2.20->{eng_v.size_lots(2.20)} 3.50->{eng_v.size_lots(3.50)} 5.26->{eng_v.size_lots(5.26)}")
+eng_v.account_balance = 2400.0
+check("V: a $2,400 account sizes the era's median stop ($5.26) to 0.05 lot (1.1% risk)",
+      abs(eng_v.size_lots(5.26) - 0.05) < 1e-9, f"{eng_v.size_lots(5.26)}")
+check("V: a nonsense stop never sizes (None / 0 / negative -> None)",
+      eng_v.size_lots(None) is None and eng_v.size_lots(0) is None and eng_v.size_lots(-1.0) is None)
+
+# V3. the skip path must arm NOTHING (it used to resolve a phantom trade on the next candle)
+eng_v.account_balance = 180.15                    # live-style sizing: this stop needs 0.0010 lot
+eng_v.atr, eng_v.rsi, eng_v.ema_fast, eng_v.ema_slow = 1.58, 55.0, 4160.0, 4150.0
+eng_v.stop_loss, eng_v.take_profit, eng_v.entry_price = 4150.00, 4185.00, 4155.00   # previous, closed trade
+eng_v.entry_time, eng_v.pnl_scale, eng_v.be_armed = "2026-10-16 12:00:00", 1.0, False
+n_before_v, active_before_v = eng_v.next_trade_num, eng_v.trade_active
+
+
+def v_rows():
+    p = engine.TRADES_LOG_PATH
+    return len(open(p).readlines()) if os.path.isfile(p) else 0
+
+
+rows_before_v = v_rows()
+eng_v.execute_simulated_trade("BUY", 4160.00, 0.40, "2026-10-17 08:00:00", level=4146.00)
+check("V: a setup the sizer refuses leaves no trade behind (no active flag, no trade number burned)",
+      (not eng_v.trade_active) and eng_v.next_trade_num == n_before_v and v_rows() == rows_before_v,
+      f"active={eng_v.trade_active} next={eng_v.next_trade_num} (was {n_before_v}) rows={v_rows()}")
+eng_v.resolve_open_trade_on_candle(o=4160.0, h=4186.0, l=4159.0, c=4186.0)
+check("V: the candle AFTER a refused setup logs no phantom trade (2026-10-17 regression)",
+      v_rows() == rows_before_v == 0 and not eng_v.trade_active,
+      f"rows {rows_before_v} -> {v_rows()} active={eng_v.trade_active}")
+
+# V4. LIVE must refuse to size off the paper ledger when the broker tells us nothing
+class _StubMT5:
+    ORDER_TYPE_BUY, ORDER_TYPE_SELL = 0, 1
+    TRADE_ACTION_DEAL, ORDER_TIME_GTC, ORDER_FILLING_FOK = 0, 0, 0
+    TRADE_RETCODE_DONE = 0
+    sent = []
+
+    class _Info:
+        point = 0.01
+
+    class _Tick:
+        ask, bid, spread = 4160.10, 4160.00, 60
+
+    @classmethod
+    def symbol_info(cls, *a):
+        return cls._Info()
+
+    @classmethod
+    def symbol_info_tick(cls, *a):
+        return cls._Tick()
+
+    @classmethod
+    def account_info(cls):
+        return None                                # <- the broker tells us nothing
+
+    @classmethod
+    def order_send(cls, req):
+        cls.sent.append(req)
+        return None
+
+
+engine.mt5 = _StubMT5
+eng_l = engine.GoldEngine()
+eng_l.atr = 1.58                                   # a live engine always has an ATR on the bar
+eng_l.execute_live_trade("BUY", 4160.00, 0.40, "2026-10-17 08:00:00", level=4146.00)
+check("V: LIVE refuses to size a real order off the paper ledger (account_info() -> None, no order sent)",
+      not _StubMT5.sent, f"orders sent: {len(_StubMT5.sent)}")
+check("V: ...and never adopts the paper ledger as its risk base (account_balance stays None)",
+      eng_l.account_balance is None, f"account_balance={eng_l.account_balance}")
+
+# V5. blackouts are frozen by the open struct-stop window: the FOMC window is reverted
+check("V: the FOMC 17:55-18:30 window is REVERTED - the pre-2026-10-17 blackout set stands (§6.1)",
+      len(trade_filter.BLACKOUT_WINDOWS) == 4
+      and not [w for w in trade_filter.BLACKOUT_WINDOWS if w[0] == 17],
+      f"{len(trade_filter.BLACKOUT_WINDOWS)} windows")
+check("V: the dashboard mirror carries the same 4 windows (no stale FOMC copy)",
+      len(P.BLACKOUT_WINDOWS) == 4 and P.BLACKOUT_WINDOWS == trade_filter.BLACKOUT_WINDOWS)
+blk_v, why_v = REAL_IS_IN_BLACKOUT(datetime(2026, 10, 16, 18, 0, tzinfo=timezone.utc), "BUY")
+check("V: 18:00 UTC is no longer blocked for either side", not blk_v, why_v)
+blk_v2, why_v2 = REAL_IS_IN_BLACKOUT(datetime(2026, 10, 16, 8, 30, tzinfo=timezone.utc), "BUY")
+check("V: the London kill-zone still blocks BUYs (positive control - the gate still works)",
+      blk_v2, why_v2)
+blk_v3, why_v3 = REAL_IS_IN_BLACKOUT(datetime(2026, 10, 16, 8, 30, tzinfo=timezone.utc), "SELL")
+check("V: ...and still lets SELLs through (direction-aware, unchanged)", not blk_v3, why_v3)
+
+shutil.rmtree(tmp_v, ignore_errors=True)
+
+
 print()
 if FAILURES:
     print(f"SMOKE TEST FAILED: {FAILURES}")

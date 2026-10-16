@@ -1221,11 +1221,19 @@ class GoldEngine:
     def size_lots(self, stop_usd: float):
         """Target lots for a RISK_PCT-of-balance stop, or None when the required lot
         is below the broker volume_min (structural dead-end at this balance -> SKIP).
-        R-invariant: R = P&L / $risk scales with lots, so struct-stop metrics are
-        unaffected. Sizes on the live account balance when available, else the ledger."""
+        R-invariant where it does apply: R = P&L / $risk scales with lots.
+        LIVE only (2026-10-17 correction): the paper/forward test has no broker account to
+        size off, so it keeps the fixed LOT_SIZE. Sizing the paper book off its own ledger
+        balance did NOT merely refuse dead-ends - replayed on the struct-stop era (n=127) it
+        skipped 76% of setups on the era's rolling balance and 84-91% at $180/$151, and at
+        the $500 ledger start it would have chosen 0.02 lots on 16/127 (128/449 in the
+        0.75R book). That is a flow stop and a confound for the open struct-stop window
+        (§6.1), not an R-invariant no-op. The %-risk rule belongs to the live path."""
         if stop_usd is None or stop_usd <= 0:
             return None
-        base = self.account_balance if getattr(self, "account_balance", None) else self.balance
+        base = getattr(self, "account_balance", None)
+        if not base:
+            return LOT_SIZE
         risk_usd = base * RISK_PCT / 100.0
         lots = risk_usd / (stop_usd * CONTRACT_SIZE)
         lots = round(lots / VOLUME_STEP) * VOLUME_STEP
@@ -1257,7 +1265,12 @@ class GoldEngine:
 
         # --- Risk sizer (live): size lots for RISK_PCT, refuse if below volume_min ---
         info = mt5.account_info()
-        self.account_balance = info.balance if info else self.balance
+        if info is None:
+            # Never size a real order off the paper ledger (2026-10-17 correction).
+            print("\nLIVE order skipped -> account_info() unavailable, no risk base\n")
+            self.send_telegram("LIVE ORDER SKIPPED\naccount_info() unavailable - no risk base")
+            return
+        self.account_balance = info.balance
         self.trade_lots = self.size_lots(risk)
         if self.trade_lots is None:
             print(f"\nLIVE order skipped -> {RISK_PCT}% risk needs <{VOLUME_MIN} lot at stop ${risk:.2f}\n")
@@ -1283,7 +1296,7 @@ class GoldEngine:
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_FOK,
         }
-        print(f"   Sending: {direction} {LOT_SIZE} {SYMBOL} @ {price:.2f} | SL: {sl_price:.2f} | TP: {tp_price:.2f}")
+        print(f"   Sending: {direction} {self.trade_lots} {SYMBOL} @ {price:.2f} | SL: {sl_price:.2f} | TP: {tp_price:.2f}")
 
         result = mt5.order_send(request)
         if result.retcode != mt5.TRADE_RETCODE_DONE:
@@ -1303,13 +1316,6 @@ class GoldEngine:
             )
 
     def execute_simulated_trade(self, direction: str, c: float, wick_ratio: float, ts: str, level=None):
-        self.trade_active = True
-        self.trade_type = direction
-        self.current_trade_num = self.next_trade_num
-        self.next_trade_num += 1
-        self.be_armed = False  # fresh trade: ratchet re-arms at +BE_TRIGGER_R
-
-        self.entry_price = c
         # risk = ATR floor, pushed out beyond the tested 20-bar level when that level
         # sits further away (see structural_risk / SL_CLEAR_ATR). TP keeps the 1:1.5
         # ratio against the ACTUAL risk, so the BE ratchet trigger (0.75R) and every
@@ -1318,11 +1324,25 @@ class GoldEngine:
         # --- Risk sizer: enforce RISK_PCT of balance; refuse if below volume_min ---
         self.trade_lots = self.size_lots(risk)
         if self.trade_lots is None:
+            # Refuse BEFORE arming anything: a skipped setup must leave no position, no
+            # trade number and no stale SL/TP behind (2026-10-17 correction).
             print(f"\nTrade skipped -> {RISK_PCT}% risk needs <{VOLUME_MIN} lot at stop ${risk:.2f} "
                   f"(structural dead-end at this balance) - not taken\n")
             self.send_telegram(
                 f"POSITION SIZE SKIPPED\nStop ${risk:.2f} needs <{VOLUME_MIN} lot for {RISK_PCT}% risk")
             return
+        # --- commit the trade only now that it is known to be takeable ---
+        # (2026-10-17 correction: the sizer check used to sit AFTER this block, and its
+        # refuse branch returned without clearing trade_active/trade_type/entry_price -
+        # leaving the previous trade's SL/TP armed against the new entry price. The next
+        # published candle resolved it and logged a trade that was never taken.)
+        self.trade_active = True
+        self.trade_type = direction
+        self.current_trade_num = self.next_trade_num
+        self.next_trade_num += 1
+        self.be_armed = False  # fresh trade: ratchet re-arms at +BE_TRIGGER_R
+
+        self.entry_price = c
         self.pnl_scale = self.trade_lots * CONTRACT_SIZE
         self.structural_stop_bound = risk > self.atr * ATR_SL_MULT + 1e-9
         if direction == "BUY":

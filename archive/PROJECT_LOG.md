@@ -114,6 +114,13 @@ For a BUY signal to trigger, ALL of the following must be true:
 - [ ] Multi-Timeframe (15m/1h) higher-timeframe trend integration.
 - [ ] Live spread filter check before order dispatch.
 
+## 2026-10-17 — PR #34 corrected: sizer is LIVE-only, skips arm nothing, FOMC window reverted
+- PR #34 (%-risk sizer + min-spread filter + FOMC 18:00 blackout) **deployed 2026-10-16 23:01:54 UTC** via autosync `d5b81151`, into a **closed market** (gold shut 20:57 UTC) — ledger 624 closed, struct-stop era n=127, no trade affected.
+- Measuring the deployed code against its own claim found three defects. (1) `size_lots` sized off the **paper ledger** ($150.69), not a broker account: replayed on the era's 127 entries it skips 76.4% (rolling balance) and 84–91% ($180/$151); at the $500 ledger start it would have picked **0.02** lots on 16/127 — a flow stop and an entry-stream confound for the open struct-stop window, not the R-invariant no-op the PR claimed. (2) `execute_simulated_trade` armed the position **before** the sizer check and the refuse branch returned without clearing it, so the next candle **logged a phantom trade** (previous SL/TP vs the new entry price) — reproduced hermetically. (3) LIVE fell back to the paper ledger when `account_info()` was unavailable, and logged `LOT_SIZE` instead of the sized volume.
+- Fix (one commit, no strategy/param change): `size_lots` returns `LOT_SIZE` in paper (book byte-identical to pre-PR-34), the trade commits atomically after the sizer accepts, LIVE refuses to size without an account, and the **FOMC 17:55–18:30 window is reverted** (blackouts frozen by §6.1; it blocked 3 of 127 era entries, +$15.80, ~0.023R of era R/trade ≈ a quarter of the headroom to the −0.10R bar) — to be re-registered after 2026-10-19.
+- Coverage: `tools/smoke_test.py` **Scenario V** (paper lot parity, LIVE sizing arithmetic, skip-path invariant, frozen blackout list + positive controls) — PR #34 had **zero** smoke coverage of its own code. Bars: paper identical to pre-PR-34; `SMOKE TEST PASSED`; `check_structural_stop.py` PASS.
+- Docs: `docs/PREREG-2026-10-17-risk-sizer.md` erratum (skip table + deploy cutover + defect), HANDOFF §1/§4/§6.8, era timeline. The struct-stop window is the only live experiment again.
+
 ## 2026-10-16 — dashboard market-context layer (display-only, no runtime change)
 - Owner ask: a buy/sell pressure indicator on the dashboard, plus anything else useful for a daily decision.
 - Added `pressure.py` (read-only, stdlib-only) + panels in `dashboard.py` + `tools/pressure_report.py` (CLI) + smoke Scenario U (45 checks) + `docs/ANALYSIS-2026-10-16-dashboard-pressure.md`.

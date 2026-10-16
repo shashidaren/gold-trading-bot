@@ -41,7 +41,12 @@ BLACKOUT_WINDOWS = [
     (12, 25, 12, 45, "NY Early Pre-Market", ("BUY", "SELL")),
     (13, 25, 15, 15, "NY Open & US High-Impact Macro Releases", ("BUY", "SELL")),
     (21, 45, 22, 30, "Daily Market Rollover & Spread Spike", ("BUY", "SELL")),
-    (17, 55, 18, 30, "FOMC / 18:00 UTC high-impact", ("BUY", "SELL")),
+    # (17, 55, 18, 30, "FOMC / 18:00 UTC high-impact", ...) was added by PR #34 on
+    # 2026-10-17 and REVERTED the same session: blackouts are frozen by the open
+    # struct-stop window (§6.1), and the window changed the very entry stream the 10-19
+    # judgement is taken on - it blocked 3 of the 127 era entries (+$15.80), moving era
+    # R/trade by ~0.023R (about a quarter of the headroom to the -0.10R bar). Re-register
+    # it as its own gate after 2026-10-19. See PREREG-2026-10-17 erratum.
 ]
 
 
