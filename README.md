@@ -1,23 +1,25 @@
 # gold-trading-bot
 
 Forward-testing engine for a gold (XAU/USD) price-action strategy. All trades
-are simulated (paper) until the strategy proves an edge. See
-`docs/HANDOFF.md` for the current session handoff (start here), and
-`archive/PROJECT_LOG.md` for the full architecture, strategy rules, and
-changelog.
+are simulated (paper) until the strategy proves an edge. For a new session, the
+owner can simply say **“Execute the plan.”** The ordered queue is in
+`docs/EXECUTION-PLAN.md`; current state and operating rules are in
+`docs/HANDOFF.md`. See `archive/PROJECT_LOG.md` for the full architecture,
+strategy rules, and changelog.
 
 ## 📁 Where everything lives
 
 | Path | What it is |
 |---|---|
-| `docs/HANDOFF.md` | **Start here for any new session** — current state, definitions, next steps, ops. §1 is current-state only. |
+| `docs/EXECUTION-PLAN.md` | **Session execution queue and timeline.** In a new session, the owner can say “Execute the plan”; work the first eligible step only and preserve every registered gate. |
+| `docs/HANDOFF.md` | **Current session handoff** — current state, definitions, evidence, next steps, and ops. Read it with the execution plan. §1 is current-state only. |
 | `docs/HANDOFF-HISTORY.md` | Dated session archaeology — the per-session state blocks §1 replaced (append-only, newest first). Read it for the *why* behind a rule or the full record of an incident, **never for current numbers**. |
 | `engine.py` | Data ingestion, indicators (EMA/RSI/ATR), the Buy/Sell signal funnel, trade execution. Includes `migrate_trades_csv()` — self-healing schema fix (see 09-10 review) — the **structural stop** (`SL_CLEAR_ATR = 0.5` + `RR_TARGET`, live **2026-10-06 03:00 UTC** — planned for 10-05 21:00, deployed by the 03:00 autosync: risk = `max(2·ATR, |entry − level| + 0.5·ATR)`, TP = 1.5 × that risk — see `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md`), and the breakeven stop ratchet (`BE_TRIGGER_R`: 0.30R since the 09-10 losing-trade analysis, **raised to 0.75R on 09-15** — the tight trigger was scratching 77% of trades; see `docs/REVIEW-2026-09-15.md`). |
 | `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` | **Why the stop-loss rate is high, and the change that shipped for it** (structural stop, live 2026-10-06 03:00 UTC; the doc's own 10-05 21:00 cutover is corrected in its erratum): the inert `FLOOR_BUFFER_PCT` level test, the ~64–66% of trades whose stop sat *inside* the 20-bar level, the costed/stateful era-matched evidence, everything rejected, and the **pre-registered forward bar** (§7) that must be judged at n≥100 before anything else changes. |
 | `docs/AUTOSYNC.md` | How the unattended data sync + auto-deploy works, how to read the Telegram digest, and **why the deploy time (not the plan) is the era cutover**. |
 | `docs/ANALYSIS-2026-10-13-btc-port-assessment.md` | Which of the `bitcoin-trading-bot` improvements transfer to gold, which were ported, which were rejected and why, and what is queued behind the open struct-stop window. |
 | `docs/ANALYSIS-2026-10-16-dashboard-pressure.md` | What the dashboard's market-context layer is, the composite's weights, and the **calibration** that keeps it honest: on the live book the buy/sell gauge is **collinear with side** (no `against` bucket on either side, in either era) — context, never a signal. |
-| `docs/XM-LOGGER.md` | The **GOLD quote + contract-spec logger** (`tools/mt5_quotes.py`, `deploy/mt5quotes.service`, `tools/xm_quote_report.py`): install checklist (do it before the 2026-10-25 server-clock change), what it writes to `xm_data/`, how closed markets and DST show up, and what the measured costs may and may not be used for. |
+| `docs/XM-LOGGER.md` | The **GOLD quote + contract-spec logger** (`tools/mt5_quotes.py`, `deploy/mt5quotes.service`, `tools/xm_quote_report.py`): service runbook, `xm_data/` schema, closed-market and DST handling, and limits on cost conclusions. |
 | `docs/ACCELERATE-TESTING.md` | The **large-N history path**: dump M1 history → `tools/history_to_log.py` (proves the broker-server → UTC conversion against the live log, refuses rather than guesses) → `strategy_lab.py --bars`. How to read it, and why a result there is a hypothesis to pre-register, never a reason to change a rule. |
 | `tools/pressure_report.py` | Prints the dashboard's read layer: tape pressure, the engine's gate read, location/risk, portfolio state, the §7 era verdict, feed health and the composite's **calibration** (does it separate outcomes, per side and era?). `--root DIR`, `--era …`, `--json`. Read-only, exits 0. |
 | `tools/strategy_lab.py` | Canonical **costed, stateful, era-matched** full-strategy replay (funnel + exits + cooldown/breaker/blackouts). Read-only. This is what an exit or gate idea must be measured with; `exit_sims.py` / `pathwalk_sims.py` / `phantom_trades.py` predate it and are cascade-ignorant. `--bars FILE` replays today's rules over converted broker history (large-N mode; `docs/ACCELERATE-TESTING.md`). |
