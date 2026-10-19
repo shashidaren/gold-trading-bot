@@ -104,6 +104,7 @@ snapshot block, still said FRESH.
 | Net-of-cost view of the ledger | `python3 tools/win_rate_report.py --spread 0.40` (round-trip $; the default output is unchanged without it) |
 | **Measured spreads / cost / server clock / contract spec** (once `mt5quotes-gold` runs) | `python3 tools/xm_quote_report.py` (`--quiet` = the digest line) |
 | **Large-N replay over broker M1 history** | `python3 tools/history_to_log.py mt5_history.csv --out history_utc.csv`, then `python3 tools/strategy_lab.py --bars history_utc.csv` |
+| **Boxes now + does box theory pay?** | `python3 tools/box_report.py` (`--root DIR`, `--spread $`, `--json`) — live 20-bar/1h/4h/prior-day boxes with structural stop/TP per edge, plus the measured breakout/fade verdict. Read-only, display-only (`docs/ANALYSIS-2026-10-20-box-theory-manual-trading.md`) |
 | **Market context (tape / gates / §7 era / calibration)** | `python3 tools/pressure_report.py` (`--root DIR`, `--era structstop|maxhold|075|all`, `--json`) — the same read-only layer the dashboard renders |
 | **Where did strong (8/8) signals head? (rough estimate)** | `python3 tools/signal_outlook.py --root .` (`--era structstop|075|all`, `--json`) — forward-walk cone + base rates per side/era; display-only, `docs/ANALYSIS-2026-10-19-signal-outlook.md` |
 | Loser features | `python3 tools/analyze_losers.py` |
@@ -187,6 +188,8 @@ The pre-registered response is **REVERT with the gap guard first**; therefore th
 **Accounting incident reconciled (2026-10-19):** malformed rows #626–645 were quarantined from backed-up evidence using `tools/repair_phantom_ledger.py`; the checked-in ledger has advanced to 636 valid closed trades and passes `check_data.py` (0 fail; 8 documented warnings). The raw-row reconciliation and evidence are in `docs/REVIEW-2026-10-19-negative-balance.md` and `incident_backups/`. **Host-side verification of the running executable/revision remains operator-only**; do not infer production process health from this checkout alone.
 
 **The dashboard pressure composite remains a side proxy, not a signal.** The latest re-join at n=139 is still collinear with side and has no within-side `against` bucket. The owner's manual pressure/hold observation remains a separate, unmeasured hypothesis. The signal-outlook re-read at n=139 still shows no directional edge after an 8/8 signal: 50.4% [42–59] trade-way at 30m (median +0.02R) and 50.7% [42–59] at 60m. These are base rates for manual context, never a forecast, entry gate, sizing, or hold-past-stop input.
+
+**Box theory (manual, unmeasured in the ledger):** asked 2026-10-20 whether boxes can be used for manual trades. Measured on the same tape (`tools/box_report.py`, `docs/ANALYSIS-2026-10-20-box-theory-manual-trading.md`): breakout and fade entries land on or below the driftless reference at both box sizes, and 74–75% of breaks close back inside within 15 min. **Verdict: box = a place to put a stop, not a signal.** Display/advice only — no gate, no runtime change; manual box trades are not in `trades.csv` and are not evidence until logged (bar: n≥100, positive after spread).
 
 ### Definitions (binding)
 
