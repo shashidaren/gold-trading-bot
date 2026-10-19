@@ -17,22 +17,22 @@ from the first commit.
 <!-- HANDOFF-SNAPSHOT machine-checked by tools/handoff_check.py; refresh with --update -->
 | key | value |
 |---|---|
-| as_of_utc | 2026-10-19 02:59 |
-| data_collection | 279 |
-| closed_trades | 624 |
-| outcomes | 122W/271L/229BE/2TIME |
-| decisive_wr_pct | 31.0 |
-| engine_ledger_usd | 150.69 |
-| true_equity_usd | 133.71 |
+| as_of_utc | 2026-10-19 11:59 |
+| data_collection | 282 |
+| closed_trades | 630 |
+| outcomes | 123W/276L/229BE/2TIME |
+| decisive_wr_pct | 30.8 |
+| engine_ledger_usd | 137.42 |
+| true_equity_usd | 120.44 |
 | cost_usd_per_side | 0.20 |
-| net_pnl_usd_at_cost | -615.89 |
+| net_pnl_usd_at_cost | -631.56 |
 | cutover_utc | 2026-10-06 03:00 |
-| structstop_era_trades | 127 |
-| structstop_era_outcomes | 37W/60L/29BE/1TIME |
-| log_bars | 43907 |
-| log_last_bar_utc | 2026-10-19 02:59 |
-| skip_rows | 1433 |
-| open_trade | SELL #626 @ 4175.02 |
+| structstop_era_trades | 133 |
+| structstop_era_outcomes | 38W/65L/29BE/1TIME |
+| log_bars | 44447 |
+| log_last_bar_utc | 2026-10-19 11:59 |
+| skip_rows | 1466 |
+| open_trade | none |
 <!-- /HANDOFF-SNAPSHOT -->
 
 This block is the **only machine-checked part of the file**: `python3 tools/handoff_check.py`
@@ -152,6 +152,7 @@ snapshot block, still said FRESH.
 
 | When | What |
 |------|------|
+| 2026-10-19 (dashboard PR) | Read-only risk/map/costed-evidence panels; no runtime change or deploy claimed. |
 | 2026-09-10 ~12:34 | BE ratchet 0.30R + London BUY-only + trend-side daily breaker (PR #7) |
 | 2026-09-15 ~06:00 | `BE_TRIGGER_R` → **0.75** (PR #9 deploy) |
 | 2026-09-17 | Falsification bar tripped (−$0.40/trade at n≥60) |
@@ -166,22 +167,23 @@ snapshot block, still said FRESH.
 | 2026-10-17 (merge 10-16 22:54:47; **deploy 10-16 23:01:54**) | **Risk sizer + gates (PR #34) deployed into a closed market** (624 closed, no trade affected), then **corrected in place the same session**: `size_lots` is LIVE-only (the ledger-based version skipped 76–91% of M1 setups and would have sized 0.02 lots at the $500 start), the trade is committed atomically after the sizer accepts (the old order logged phantom trades), LIVE never sizes off the paper ledger, and the **FOMC 17:55–18:30 blackout is reverted** (blackouts frozen, §6.1; it moved era R/trade by ~0.023R). Struct-stop window un-stacked; smoke Scenario V added |
 | 2026-10-19 (docs/tools only, **no runtime change**) | **Struct-stop interim screen at n=127** (`docs/REVIEW-2026-10-19-struct-stop-screen.md`): A1–A5, B1, B3, C1, C2 pass, **B2 47.24% vs ≤47.0% fails → SCREEN NOT MET**; era −$47.48 gross / −$98.30 at $0.40. **The §7 closure-gap revert trigger is AT its threshold (2 of 2 post-cutover rides over a daily closure: #595, #610)** — first item of the 21:00 judgement. New read-only `tools/check_gap_rides.py` makes that trigger measurable (count + damage facts) + smoke **Scenario W**. Quote logger 5/14 days, 1/2 weekends (median $0.55). An earlier 04:41 UTC draft of the review was PR #38 — **closed unmerged**, so nothing of it reached `main` |
 
-## 1. Where things stand (as of **2026-10-19 — data collection 279**)
+## 1. Where things stand (as of **2026-10-19 — data collection 282**)
 
-**Current stance (2026-10-19, ~06:00 UTC):** paper-only; `engine.py` remains `TRADING_MODE = "FORWARD_TEST"`.
+**Current stance (2026-10-19, data to 11:59 UTC):** paper-only; `engine.py` remains
+`TRADING_MODE = "FORWARD_TEST"`. Dashboard-only PR adds risk now, market map and
+costed evidence; see `docs/ANALYSIS-2026-10-19-dashboard-context.md` for scope and limitations.
 
-**The book:** **624 closed trades** (122W/271L/229BE/2TIME; 31.0% decisive), engine ledger **$150.69**,
-true equity $133.71, net **−$615.89** at the assumed $0.40 round trip. The quote logger has **5/14
-complete days, 1/2 weekends** collected (first-look median spread $0.55) — **not enough to replace the
-$0.40 assumption**, which therefore stands.
+**The book:** **630 closed trades** (123W/276L/229BE/2TIME; 30.8% decisive), engine ledger
+**$137.42**, true equity $120.44, net **−$631.56** at the assumed $0.40 round trip.
+No open trade in the checked-in status. Quote sample remains insufficient to replace
+that registered assumption (last full review: 5 complete days, 1 weekend).
 
-**The only open experiment** is the un-stacked **structural stop** (entries ≥ **2026-10-06 03:00 UTC**),
-now **n=127 closed** (37W/60L/29BE/1TIME) over 10 entry dates. Its mechanical guard is green
-(`check_structural_stop.py` **PASS** — **0 stops inside their level**, median clearance +0.50 ATR;
-replay recall 100.0/100.0), but the pre-registered **screen is NOT met**: **SL share 47.24% against the
-strict ≤47.0% bar**; the other four screen measures pass (SL/day 6.00 ≤ 6.5, scratch 22.83% ≤ 35%,
-R/trade −0.065R ≥ −0.10R, decisive WR 38.14% [29.1–48.1] ≥ 36%). A PASS is unreachable at n=127
-(Wilson LB 29.1% < the required 32.1%), and the era is negative after costs (−$98.30, −0.135R at $0.40).
+**The only open experiment** is the un-stacked structural stop (entries ≥
+**2026-10-06 03:00 UTC**): **n=133** (38W/65L/29BE/1TIME), 11 entry dates.
+Mechanical guard PASS, zero stops inside the tested level. Screen remains **NOT MET**:
+SL share **48.87% > 47.0%**. Other screen checks pass: SL/day 5.91, scratch 21.80%,
+gross R/trade −0.080R, decisive WR 36.89% [28.2–46.5]. This dashboard work does not
+judge or modify the experiment; the scheduled review and original thresholds still govern.
 
 **The §7 closure-gap revert trigger is AT its threshold — 2 of 2 post-cutover rides over a daily market
 closure** (#595 on 10-14, #610 on 10-15; no weekend closure has been ridden, neither stop gapped
@@ -274,6 +276,8 @@ Stale-feed guard still active. Feed price scale is the **broker demo GOLD
 feed** (~4.4k), not spot XAUUSD.
 
 ## 4. Current risk gates (trade_filter.py)
+
+Dashboard PR: no risk gates, parameters or cost assumptions changed.
 
 **Recovery PR (2026-10-19):** candle/tick paper exits reject invalid/nonfinite/zero
 position geometry before booking P&L; startup retains finite negative/zero balances
@@ -510,6 +514,8 @@ that doc):
   alone).
 
 ## 6. Next steps (in order)
+
+Dashboard PR: review read-only panels and limitations, then deploy dashboard-only after sign-off; no engine restart.
 
 **Priority incident blocker (2026-10-19):** recovery tool and safeguards are prepared
 for owner merge; full smoke + repair tests pass. Merge alone does not repair the host.

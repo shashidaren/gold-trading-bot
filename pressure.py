@@ -1131,6 +1131,94 @@ def calibration(log_rows, trades, cutover=STRUCT_STOP_CUTOVER):
     }
 
 
+def evidence_read(trades, cost=0.40):
+    """All valid closed era exits, costed equally including scratches; exit-order DD."""
+    groups = []
+    era = [t for t in trades if (parse_ts(t.get('Entry_Time')) or datetime.min) >= STRUCT_STOP_CUTOVER]
+    for side in ('ALL', 'BUY', 'SELL'):
+        sample = [t for t in era if side == 'ALL' or t.get('Trade_Type') == side]
+        values, rs, excluded = [], [], 0
+        for t in sorted(sample, key=lambda t: parse_ts(t.get('Exit_Time')) or datetime.max):
+            p, risk = parse_float(t.get('Profit')), trade_risk(t)
+            if p is None or not math.isfinite(p) or not risk or not math.isfinite(risk) or not parse_ts(t.get('Exit_Time')):
+                excluded += 1
+                continue
+            values.append(p - cost)
+            rs.append((p - cost) / risk)
+        running = peak = dd = 0.0
+        for v in values:
+            running += v
+            peak = max(peak, running)
+            dd = max(dd, peak - running)
+        gains, losses = sum(max(v, 0) for v in values), -sum(min(v, 0) for v in values)
+        groups.append(dict(side=side, n=len(values), excluded=excluded, net=sum(values),
+                           expectancy=sum(rs)/len(rs) if rs else None,
+                           pf=gains/losses if losses else None, dd=dd))
+    return groups
+
+
+def market_map(rows):
+    """Completed UTC buckets only. Require every M1 minute (no gap interpolation)."""
+    bars = {}
+    for r in rows:
+        ts = parse_ts(r.get('Timestamp'))
+        vals = [parse_float(r.get(k)) for k in ('High', 'Low', 'Close', 'ATR')]
+        if ts and all(v is not None and math.isfinite(v) for v in vals[:3]):
+            bars[ts.replace(second=0, microsecond=0)] = vals
+    if not bars:
+        return None
+    last = max(bars)
+    price, atr = bars[last][2:]
+    result = dict(as_of=str(last), trends=[], levels=[])
+    for minutes in (15, 60):
+        buckets = {}
+        for ts in sorted(bars):
+            start = ts.replace(minute=(ts.minute // minutes)*minutes)
+            buckets.setdefault(start, []).append(ts)
+        complete = [(start, times) for start, times in sorted(buckets.items())
+                    if len(times) == minutes and start + timedelta(minutes=minutes) <= last]
+        # Four consecutive completed buckets; refuse outage-spanning momentum.
+        recent = complete[-4:]
+        valid = len(recent) == 4 and recent[-1][0] - recent[0][0] == timedelta(minutes=3*minutes)
+        valid = valid and recent[-1][0] + timedelta(minutes=2*minutes) > last
+        delta = bars[recent[-1][1][-1]][2] - bars[recent[0][1][-1]][2] if valid else None
+        result['trends'].append(dict(tf=f'M{minutes}' if minutes == 15 else 'H1', delta=delta))
+    prior = [ts.date() for ts in bars if ts.date() < last.date()]
+    if prior:
+        day = max(prior)
+        # Only publish a prior-day range if the read window includes its start.
+        if min(bars).date() < day:
+            values = [v for ts, v in bars.items() if ts.date() == day]
+            for label, level in ((f'{day} high', max(v[0] for v in values)),
+                                 (f'{day} low', min(v[1] for v in values))):
+                result['levels'].append(dict(label=label, price=level,
+                    distance=(price-level)/atr if atr and math.isfinite(atr) and atr > 0 else None))
+    return result
+
+
+def risk_read(status, quote_rows, now):
+    """Indicative closure warning, NOT a broker schedule or a trading gate."""
+    close = now.replace(hour=21, minute=0, second=0, microsecond=0)
+    while close <= now or close.weekday() >= 5:
+        close += timedelta(days=1)
+    entry = parse_ts(status.get('entry_time')) if status.get('trade_active') else None
+    remaining = max(0, MAX_HOLD_MINUTES - (now-entry).total_seconds()/60) if entry else None
+    quotes = []
+    for q in quote_rows:
+        ts, spread = parse_ts(q.get('ts_utc')), parse_float(q.get('spread'))
+        if ts and ts <= now and spread is not None and math.isfinite(spread) and spread >= 0 and (parse_float(q.get('n_ok')) or 0) > 0 and not q.get('flags'):
+            quotes.append((ts, spread))
+    quotes.sort()
+    quote = None
+    if quotes:
+        ts, spread = quotes[-1]
+        quote = dict(as_of=str(ts), spread=spread, age=int((now-ts).total_seconds()), stale=(now-ts).total_seconds()>120)
+    minutes = (close-now).total_seconds()/60
+    return dict(close=str(close), minutes=int(minutes), remaining=remaining,
+                spans=remaining is not None and remaining >= minutes,
+                quiet=market_quiet(now), quote=quote)
+
+
 def build(read_tail=True, now=None, log_rows=None, trades=None, skip_rows=None):
     """Everything the dashboard needs, in one call (all reads are read-only)."""
     now = now or datetime.now(timezone.utc).replace(tzinfo=None)
@@ -1141,6 +1229,8 @@ def build(read_tail=True, now=None, log_rows=None, trades=None, skip_rows=None):
     setup = setup_read(log_rows)
     return {
         "now": now,
+        "evidence": evidence_read(trades),
+        "map": market_map(tail_rows(LOG_FILE_PATH, 6000) if read_tail else log_rows),
         "pressure": pressure(log_rows),
         "setup": setup,
         "location": location_read(setup),
