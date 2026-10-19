@@ -425,3 +425,24 @@ stop is the first runtime change since 09-21 and it is a **reversible experiment
 commit, `git revert` if the bar fails. Stay paper-only and do **not** treat the bot as
 income. Capital decisions remain evidence-gated, not promised by the existing
 calendar timeline (§11).
+
+
+### 2026-10-19 — superseded dashboard-session snapshot
+
+## 1. Where things stand (as of **2026-10-19 — data collection 279**)
+
+**Current stance (2026-10-19, ~06:00 UTC):** paper-only; `engine.py` remains `TRADING_MODE = "FORWARD_TEST"`.
+
+**The book:** **624 closed trades** (122W/271L/229BE/2TIME; 31.0% decisive), engine ledger **$150.69**,
+true equity $133.71, net **−$615.89** at the assumed $0.40 round trip. The quote logger has **5/14
+complete days, 1/2 weekends** collected (first-look median spread $0.55) — **not enough to replace the
+$0.40 assumption**, which therefore stands.
+
+**The only open experiment** is the un-stacked **structural stop** (entries ≥ **2026-10-06 03:00 UTC**),
+now **n=127 closed** (37W/60L/29BE/1TIME) over 10 entry dates. Its mechanical guard is green
+(`check_structural_stop.py` **PASS** — **0 stops inside their level**, median clearance +0.50 ATR;
+replay recall 100.0/100.0), but the pre-registered **screen is NOT met**: **SL share 47.24% against the
+strict ≤47.0% bar**; the other four screen measures pass (SL/day 6.00 ≤ 6.5, scratch 22.83% ≤ 35%,
+R/trade −0.065R ≥ −0.10R, decisive WR 38.14% [29.1–48.1] ≥ 36%). A PASS is unreachable at n=127
+(Wilson LB 29.1% < the required 32.1%), and the era is negative after costs (−$98.30, −0.135R at $0.40).
+
