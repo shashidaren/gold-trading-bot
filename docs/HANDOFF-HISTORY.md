@@ -14,6 +14,102 @@ block or a REVIEW instead; that is what makes this file trustworthy. (Created 20
 
 ---
 
+## 2026-10-19 21:19 UTC — §1 before the scheduled structural-stop judgement
+
+**This is the complete HANDOFF §1 block as it stood for the latest checked-in data snapshot (log to 2026-10-19 18:10 UTC, 636 closes, structural-stop n=139), before the 21:00 UTC judgement was recorded.** The snapshot and interim state are historical; the current state is in HANDOFF §1 and the judgement is in `docs/REVIEW-2026-10-19-struct-stop-judgement.md`.
+
+### Replaced §1 block
+
+## 1. Where things stand (as of **2026-10-19 — data collection 287**)
+
+**Current stance (2026-10-19, checked-in data to 18:10 UTC):** paper-only; `engine.py` remains `TRADING_MODE = "FORWARD_TEST"`. Dashboard context and signal-outlook panels are display-only; this refresh makes no runtime or strategy change.
+
+**The book:** **636 closed trades** (124W/276L/234BE/2TIME; 31.0% decisive), engine ledger **$142.16**, true equity **$125.18**, net **−$629.22** at the assumed $0.40 round trip. No open trade in the checked-in status. The quote logger has collected 6.1 days (5 complete UTC days, 1/2 complete weekends), with a first-look median $0.55 spread/round trip; its 14-day/two-weekend target is not met, so $0.40 remains the registered cost assumption.
+
+**The only open experiment** is the un-stacked structural stop (entries ≥ **2026-10-06 03:00 UTC**): **n=139** (39W/65L/34BE/1TIME), 11 entry dates. Mechanical guard **PASS**: zero stops inside the tested level; 81.3% level-bound, median clearance +0.50 ATR, median risk 3.27 ATR.
+
+The latest interim read now has the full registered **SCREEN MET**: SL/day **5.91**, SL share **46.76%** (≤47.0%), scratch share **24.46%**, gross R/trade **−0.071R**, decisive WR **37.50% [28.8–47.1]**. This is not yet a PASS or the scheduled confirmatory judgement: PASS additionally requires **n≥150** and Wilson 95% lower bound **>32.1%**; at n=139 the lower bound is 28.8%, with 11 trades to n=150. Original thresholds remain binding.
+
+**The §7 closure-gap revert trigger remains at its threshold** — 2 of 2 post-cutover rides across daily closures (#595 on 10-14 and #610 on 10-15). Neither reopen gapped through the stop; neither exit printed worse than its stop/target; no weekend closure was ridden, and measured gap damage remains $0.00. The counting rule and trigger status must be explicitly resolved first at the scheduled judgement. Evidence: `docs/REVIEW-2026-10-19-struct-stop-screen.md` §3; reproduce with `python3 tools/check_gap_rides.py`.
+
+**Next eligible action:** the confirmatory judgement at **2026-10-19 21:00 UTC** or n=150, whichever comes first. Resolve the gap trigger and record the counting rule first; re-run the structural-stop guard, `strategy_lab.py --calib-only`, and `check_gap_rides.py`; then record the registered screen/PASS/revert decision. The already-registered 0.25 ATR level test remains blocked until that judgement permits it. No runtime rule changed in this refresh.
+
+**Accounting incident reconciled (2026-10-19):** malformed rows #626–645 were quarantined from backed-up evidence using `tools/repair_phantom_ledger.py`; the checked-in ledger has advanced to 636 valid closed trades and passes `check_data.py` (0 fail; 8 documented warnings). The raw-row reconciliation and evidence are in `docs/REVIEW-2026-10-19-negative-balance.md` and `incident_backups/`. **Host-side verification of the running executable/revision remains operator-only**; do not infer production process health from this checkout alone.
+
+**The dashboard pressure composite remains a side proxy, not a signal.** The latest re-join at n=139 is still collinear with side and has no within-side `against` bucket. The owner's manual pressure/hold observation remains a separate, unmeasured hypothesis. The signal-outlook re-read at n=139 still shows no directional edge after an 8/8 signal: 50.4% [42–59] trade-way at 30m (median +0.02R) and 50.7% [42–59] at 60m. These are base rates for manual context, never a forecast, entry gate, sizing, or hold-past-stop input.
+
+### Definitions (binding)
+
+| Term | Meaning |
+|------|---------|
+| **Decisive WR** | TP / (TP + SL). **Excludes** BE and TIME. |
+| **BE exit** | Scratch: SL was ratcheted to entry; P&L ≈ $0. Neutral for WR, cooldown, daily breaker. |
+| **TIME exit** | Max-hold close (`MAX_HOLD_MINUTES`). Neutral bucket like BE (own counter; excluded from decisive WR; ignored by SL streak / daily breaker). |
+| **0.75R era** | Entries with `Entry_Time ≥ 2026-09-15 06:00 UTC` (PR #9 deploy). |
+| **Max-hold era** | Entries after max-hold deploy (~2026-09-21 06:00 UTC autosync). **No counter reset** — falsification bar stays on the whole 0.75R book. |
+| **Ratchet geometry** | Reconstruct original SL/TP from `ATR_At_Entry` when `Stop_Loss == Entry_Price` (never key only on `Exit_Reason == "BE"` — some TPs also show that geometry). |
+| **R/trade (Rmult)** | `Profit ÷ actual risk`. Actual risk = \|Entry − Stop\|, recovered from the **reward leg** (`\|TP − Entry\| ÷ 1.5`) on rows whose stop was ratcheted to entry — never from `Exit_Reason == "BE"` alone. `tools/strategy_lab.py` and `tools/win_rate_report.py` both do this. **Backward-compatible:** before 2026-10-05 the engine always set risk = 2·ATR, so `Profit ÷ (2·ATR_At_Entry)` gives the identical number on every historical row (that was the definition used in REVIEW-2026-10-05); the two only diverge once `SL_CLEAR_ATR` can bind. |
+| **Structural stop / level-bound** | The stop is set by the 20-bar level rather than by `ATR_SL_MULT·ATR` (replay share under the new rule: **80.2%**). Checkable on any era with `tools/check_structural_stop.py`. |
+| **Clearance** | ATR by which the stop sits BEYOND the tested level (positive = the level must break for the stop to print). Pre-2026-10-05 median was **−0.42 ATR** (i.e. inside, stop fires on a retest); the rule requires ≥ 0 always and ≥ `SL_CLEAR_ATR` when level-bound. |
+| **Session band** | Entry hour in UTC: "Asia/rollover" = 23:00–06:59; "London/NY" = 07:00–22:59. Named 2026-10-05 §5a; **downgraded later the same day** — costed/cascade-aware replay shows the gap collapses from 0.268R to 0.085R once the stop is structural (it was a proxy for stop geometry). Never a live gate. |
+| **Struct-stop era** | Entries ≥ **2026-10-06 03:00 UTC** (`strategy_lab.LIVE_CUTOVER` — the autosync deploy time; the 10-05 21:00 in older text was the plan, corrected 10-13). A real isolation window (the rule changed), unlike the max-hold deploy which did not reset the counter. Judge per `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` §7 at n≥100; n<60 is not a result in either direction. |
+
+## 2026-10-19 18:10 UTC — §1 before the 636-trade refresh
+
+**This is the complete HANDOFF §1 block as it stood at the 2026-10-19 11:59 UTC snapshot** (data collection 282), moved here when §1 was refreshed in place under HANDOFF §11 rule 5. These numbers and the n=133 screen status are historical; the current state is in HANDOFF §1.
+
+### Replaced §1 block
+
+## 1. Where things stand (as of **2026-10-19 — data collection 282**)
+
+**Current stance (2026-10-19, data to 11:59 UTC):** paper-only; `engine.py` remains
+`TRADING_MODE = "FORWARD_TEST"`. Dashboard-only PR adds risk now, market map and
+costed evidence; see `docs/ANALYSIS-2026-10-19-dashboard-context.md` for scope. **New:** a **Simple Summary** tab (`pressure.py` volatility guard) translates ATR/spread/blackout/cooldown/breaker/closure/gaps into `🟢 Calm / 🟡 Caution / 🔴 Pause (avoid trading if volatile)` in plain English — display-only, never a gate.
+
+**The book:** **630 closed trades** (123W/276L/229BE/2TIME; 30.8% decisive), engine ledger
+**$137.42**, true equity $120.44, net **−$631.56** at the assumed $0.40 round trip.
+No open trade in the checked-in status. Quote sample remains insufficient to replace
+that registered assumption (last full review: 5 complete days, 1 weekend).
+
+**The only open experiment** is the un-stacked structural stop (entries ≥
+**2026-10-06 03:00 UTC**): **n=133** (38W/65L/29BE/1TIME), 11 entry dates.
+Mechanical guard PASS, zero stops inside the tested level. Screen remains **NOT MET**:
+SL share **48.87% > 47.0%**. Other screen checks pass: SL/day 5.91, scratch 21.80%,
+gross R/trade −0.080R, decisive WR 36.89% [28.2–46.5]. This dashboard work does not
+judge or modify the experiment; the scheduled review and original thresholds still govern.
+
+**The §7 closure-gap revert trigger is AT its threshold — 2 of 2 post-cutover rides over a daily market
+closure** (#595 on 10-14, #610 on 10-15; no weekend closure has been ridden, neither stop gapped
+through, $0.00 of gap damage so far). It is the **first item of the 21:00 judgement**, and the counting
+rule must be recorded there. Evidence and the decision procedure:
+`docs/REVIEW-2026-10-19-struct-stop-screen.md` §3; the count is reproducible with
+`python3 tools/check_gap_rides.py` (new, read-only).
+
+**Next eligible action:** the confirmatory judgement at **2026-10-19 21:00 UTC** (or n=150, whichever
+comes first), in §7 order — **(0)** resolve the gap trigger, **(a)** re-run the guard + `--calib-only` +
+`check_gap_rides.py`, **(b)** judge B/C, **(c)** only then consider the already-registered 0.25 ATR level
+test. **No runtime rule was changed in the 10-19 sessions**; the level test stays blocked behind it.
+
+**Accounting incident reconciled (2026-10-19):** twenty invalid rows (#626–645, 2026-10-18 23:05 –
+2026-10-19 02:23 UTC) had blank Entry_Time and zero Take_Profit, covering BUY TP and SELL TP/BE/SL
+variants; raw equity **−$58,393.96** was phantom accounting (twenty rows booked **−$58,544.65** from the
+$150.69 reference). Last valid ledger balance: **$150.69** after #625. Raw counts were 644 rows / 138 TP;
+the valid subset **624 rows / 122 TP** is restored via quarantine. The 20-row suffix was quarantined with
+continuity + status/numbering checks (`tools/repair_phantom_ledger.py`); the reconciled ledger passes
+`check_data.py` (0 fail) and `check_structural_stop.py` PASS (n=127) still holds. See `incident_backups/`
+for the quarantined evidence and `docs/REVIEW-2026-10-19-negative-balance.md` for the incident record.
+**Host-side verification is still open and operator-only**: the checked-in risk-sizer correction passes
+the smoke tests, but production deployment/process identity is **unverified** — do not assume the forward
+stream is healthy.
+
+**The dashboard pressure composite remains a side proxy, not a signal** (calibration: collinear with
+side, no within-side contrast). The owner's manual pressure/hold observation is a separate, unmeasured
+research hypothesis; do not change engine behavior from it. The owner's "where is it headed on a very
+strong signal?" question is now measured (`docs/ANALYSIS-2026-10-19-signal-outlook.md`, dashboard 🧭
+panel, `tools/signal_outlook.py`): after an 8/8 taken signal the 15–60 min direction is a **coin flip**
+(pooled 48.9% [41–57] @30m, live era) with a wide two-sided cone — the outlook is base rates + barrier
+odds for manual supervision, **never a forecast, gate, sizing or hold-past-stop input**.
+
 ## 2026-10-19 — §1 as it stood before the 10-19 early sessions (numbers as of data collection 276–279)
 
 **This is HANDOFF §1 exactly as it stood between the 2026-10-17 session and the 2026-10-19 early
