@@ -17,20 +17,20 @@ from the first commit.
 <!-- HANDOFF-SNAPSHOT machine-checked by tools/handoff_check.py; refresh with --update -->
 | key | value |
 |---|---|
-| as_of_utc | 2026-10-16 23:02 |
-| data_collection | 263 |
+| as_of_utc | 2026-10-18 23:59 |
+| data_collection | 276 |
 | closed_trades | 624 |
 | outcomes | 122W/271L/229BE/2TIME |
 | decisive_wr_pct | 31.0 |
-| engine_ledger_usd | 150.69 |
+| engine_ledger_usd | -41656.19 |
 | true_equity_usd | 133.71 |
 | cost_usd_per_side | 0.20 |
 | net_pnl_usd_at_cost | -615.89 |
 | cutover_utc | 2026-10-06 03:00 |
 | structstop_era_trades | 127 |
 | structstop_era_outcomes | 37W/60L/29BE/1TIME |
-| log_bars | 43621 |
-| log_last_bar_utc | 2026-10-16 20:57 |
+| log_bars | 43741 |
+| log_last_bar_utc | 2026-10-18 23:59 |
 | skip_rows | 1429 |
 | open_trade | none |
 <!-- /HANDOFF-SNAPSHOT -->
@@ -160,10 +160,18 @@ snapshot block, still said FRESH.
 | 2026-10-16 | **Dashboard market-context layer (display-only, no runtime change):** `pressure.py` + `tools/pressure_report.py` + `smoke_test.py` Scenario U; buy/sell pressure gauge, the engine's gates read back on the last bar, location/risk, §7 era card, feed health. Calibration says the composite is **collinear with side — not a signal**. `engine.py`/`trade_filter.py`/deploy path untouched; autosync restarts the dashboard only |
 | 2026-10-17 (merge 10-16 22:54:47; **deploy 10-16 23:01:54**) | **Risk sizer + gates (PR #34) deployed into a closed market** (624 closed, no trade affected), then **corrected in place the same session**: `size_lots` is LIVE-only (the ledger-based version skipped 76–91% of M1 setups and would have sized 0.02 lots at the $500 start), the trade is committed atomically after the sizer accepts (the old order logged phantom trades), LIVE never sizes off the paper ledger, and the **FOMC 17:55–18:30 blackout is reverted** (blackouts frozen, §6.1; it moved era R/trade by ~0.023R). Struct-stop window un-stacked; smoke Scenario V added |
 
-## 1. Where things stand (as of **2026-10-17 — data collection 263**)
+## 1. Where things stand (as of **2026-10-19 — data collection 276**)
 
-**Current stance (2026-10-17):** paper-only; `engine.py` remains `TRADING_MODE = "FORWARD_TEST"`.
-The 10-17 risk-sizer correction is LIVE-only and paper-inert, so the forward-test stream is unchanged.
+**Current stance (2026-10-19):** paper-only; `engine.py` remains `TRADING_MODE = "FORWARD_TEST"`.
+**Active accounting incident:** raw status equity is **−$41,656.19**, not a verified broker loss.
+Ten invalid rows (#626–635, 2026-10-18 23:05–23:58 UTC) have blank entry times, zero
+SL/TP/exit prices and negative P&L labelled TP; together they book **−$41,806.88**.
+Last valid ledger balance: **$150.69** after #625. Raw counts are 634 rows / 132 TP;
+the valid-analysis counts below exclude these ten rows. The snapshot mixes the raw
+status ledger with validated replay-loader metrics; FRESH does not mean data integrity passed.
+The checked-in risk-sizer correction passes smoke tests, but production deployment/process
+identity is **unverified**; do not assume the forward stream is healthy.
+See `docs/REVIEW-2026-10-19-negative-balance.md` for evidence and recovery prerequisites.
 The book has **624 closed trades** (122W/271L/229BE/2TIME; 31.0% decisive) and remains negative at
 the assumed $0.40 round-trip cost. The only open forward-test experiment is the un-stacked structural
 stop (127 trades since 2026-10-06 03:00 UTC). Its geometry check passes with zero stops inside the
@@ -339,6 +347,14 @@ Stale-feed guard still active. Feed price scale is the **broker demo GOLD
 feed** (~4.4k), not spot XAUUSD.
 
 ## 4. Current risk gates (trade_filter.py)
+
+**Recovery PR (2026-10-19):** candle/tick paper exits reject invalid/nonfinite/zero
+position geometry before booking P&L; startup retains finite negative/zero balances
+honestly. Backup-first `tools/repair_phantom_ledger.py` is dry-run by default and
+requires stopped engine/autosync before apply. No strategy thresholds changed.
+
+**2026-10-19 incident:** no gates or parameters changed. Invalid zero-target TP rows
+evade the SL-based breaker; that breaker is not a data-integrity safeguard.
 
 **Source of truth for live params** (do not change without a pre-registered bar + REVIEW/ANALYSIS doc):
 
@@ -567,6 +583,14 @@ that doc):
   alone).
 
 ## 6. Next steps (in order)
+
+**Priority incident blocker (2026-10-19):** recovery tool and safeguards are prepared
+for owner merge; full smoke + repair tests pass. Merge alone does not repair the host.
+ operator should pause the paper engine,
+preserve host CSV/status/journal and verify the running executable/revision before
+restarting corrected code. Reconcile/quarantine invalid rows only from backed-up evidence;
+do not reset to $500 or interpret raw negative equity as a broker loss. No live files
+were repaired in this session. See `docs/REVIEW-2026-10-19-negative-balance.md`.
 
 **Session execution queue:** `docs/EXECUTION-PLAN.md` is the concise, chronological
 sequence to follow when the owner says “Execute the plan.” This section retains

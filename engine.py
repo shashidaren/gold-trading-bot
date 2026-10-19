@@ -5,6 +5,7 @@ import json
 import time
 import sys
 import shutil
+import math
 import requests
 from collections import deque
 from datetime import datetime, timezone
@@ -418,7 +419,7 @@ class GoldEngine:
 
                     try:
                         bal = float(row.get("Balance_After", 0) or 0)
-                        if bal > 0:
+                        if math.isfinite(bal):
                             last_balance = bal
                     except (ValueError, TypeError):
                         pass
@@ -938,6 +939,22 @@ class GoldEngine:
         self.save_status()
         return True
 
+    def _validate_position_prices(self):
+        """Fail closed on corrupt paper positions; never book an exit at zero.
+
+        Keep the evidence/state intact for operator reconciliation rather than
+        silently clearing an unknown position or manufacturing a ledger repair.
+        """
+        prices = (self.entry_price, self.stop_loss, self.take_profit)
+        if (self.trade_type not in ("BUY", "SELL")
+                or any(not isinstance(p, (int, float)) or not math.isfinite(p) or p <= 0
+                       for p in prices)
+                or (self.trade_type == "BUY" and not
+                    self.stop_loss <= self.entry_price < self.take_profit)
+                or (self.trade_type == "SELL" and not
+                    self.take_profit < self.entry_price <= self.stop_loss)):
+            raise ValueError("Invalid paper position geometry; pause engine and reconcile status/ledger")
+
     def resolve_open_trade_on_candle(self, o: float, h: float, l: float, c: float):
         """Forward-test exit resolution for candle-driven data sources
         (MT5 sidecar): there are no tick events, so an open simulated
@@ -947,6 +964,7 @@ class GoldEngine:
         """
         if not self.trade_active:
             return
+        self._validate_position_prices()
         self._maybe_arm_breakeven(h=h, l=l)
         if self.trade_type == "BUY":
             if l <= self.stop_loss:
@@ -1376,6 +1394,9 @@ class GoldEngine:
         if not self.trade_active:
             return
 
+        self._validate_position_prices()
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError("Invalid paper exit price; refusing to book P&L")
         self._maybe_arm_breakeven(price=price)
 
         if self.trade_type == "BUY":
