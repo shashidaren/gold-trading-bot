@@ -3028,6 +3028,44 @@ check("V: the London kill-zone still blocks BUYs (positive control - the gate st
 blk_v3, why_v3 = REAL_IS_IN_BLACKOUT(datetime(2026, 10, 16, 8, 30, tzinfo=timezone.utc), "SELL")
 check("V: ...and still lets SELLs through (direction-aware, unchanged)", not blk_v3, why_v3)
 
+# V5. Corrupt/zero geometry must never reach P&L, on either exit path.
+eng_v.trade_active, eng_v.trade_type = True, "BUY"
+eng_v.entry_price, eng_v.stop_loss, eng_v.take_profit = 4178.94, 0.0, 0.0
+balance_v, wins_v = eng_v.balance, eng_v.wins
+for path_v in (lambda: eng_v.check_position(0.0),
+               lambda: eng_v.resolve_open_trade_on_candle(4179, 4180, 4177, 4179)):
+    rejected_v = False
+    try:
+        path_v()
+    except ValueError:
+        rejected_v = True
+    check("V: invalid zero-target position refuses exits without accounting mutation",
+          rejected_v and eng_v.balance == balance_v and eng_v.wins == wins_v
+          and v_rows() == 0 and eng_v.trade_active)
+for side_v, sl_v, tp_v in (("BUY", 4170., 4190.), ("SELL", 4190., 4170.)):
+    eng_v.trade_type, eng_v.stop_loss, eng_v.take_profit = side_v, sl_v, tp_v
+    for invalid_v in (0.0, float('nan'), float('inf')):
+        rejected_v = False
+        try:
+            eng_v.check_position(invalid_v)
+        except ValueError:
+            rejected_v = True
+        check("V: nonpositive/nonfinite tick refuses accounting", rejected_v
+              and eng_v.balance == balance_v and v_rows() == 0)
+
+# Negative/zero balances must survive restarts honestly, not select an older positive row.
+with open(engine.TRADES_LOG_PATH, 'w', newline='') as f_v:
+    w_v = csv.writer(f_v)
+    w_v.writerow(["Trade_Num", "Trade_Type", "Entry_Time", "Exit_Time", "Entry_Price",
+                  "Stop_Loss", "Take_Profit", "Exit_Price", "Exit_Reason", "Profit",
+                  "Balance_After", "RSI_At_Entry", "ATR_At_Entry", "Wick_Ratio_At_Entry",
+                  "EMA50_At_Entry", "EMA200_At_Entry"])
+    for num_v, bal_v in ((1, 150.69), (2, 0.0), (3, -4028.25)):
+        w_v.writerow([num_v, "BUY", "2026-10-18 23:00:00", "2026-10-18 23:01:00",
+                      4180, 4170, 4195, 4170, "SL", -10, bal_v, 50, 2, .4, 4180, 4170])
+eng_v.load_trade_stats()
+check("V: restart preserves latest finite negative balance", eng_v.balance == -4028.25)
+
 shutil.rmtree(tmp_v, ignore_errors=True)
 
 
