@@ -166,3 +166,21 @@ Scope, deferred data-dependent additions and limitations:
 `docs/ANALYSIS-2026-10-19-dashboard-context.md`. Refreshed snapshot to collection 282,
 630 closes and struct-stop n=133; no judgement or deploy claimed. Integrity 0 fail,
 smoke and four targeted tests (including Flask render) pass; compilation clean.
+
+## 2026-10-19 — signal outlook (read-only, no runtime change)
+
+Owner ask: manual direction-reading from 1-min candles is extremely hard — "could we
+have a rough estimate where it's headed given very strong signal?" Measured forward
+walks after every taken (8/8) signal in the bot's own ledger: direction at 15–60 min
+is a coin flip (pooled 48.9% [41–57] the trade's way @30m, struct-stop era n=135;
+median drift −0.02R), no better than a trend-anywhere baseline; target prints before
+stop ~32–34% of decisive 30–60m races vs the 40% driftless reference for +1.5R/−1R
+(~40% only over the full 240-min life); bigger rejection wicks did not follow through
+better (exploratory). Shipped as cone + base rates, not an arrow: `pressure.py`
+§5b (`signal_outlook`/`outlook_now`), `tools/signal_outlook.py`, dashboard 🧭 panel
+(applied cone when the last bar is 8/8), 9 hermetic tests in
+`tools/test_signal_outlook.py`. Full method/numbers/verdict:
+`docs/ANALYSIS-2026-10-19-signal-outlook.md`. Struct-stop window and its 21:00
+judgement untouched; no gate/sizing/hold use authorized. Verification: check_data
+0 fail · smoke PASSED (Scenario U AST still clean) · 13 unit tests incl. Flask
+render (venv flask in sandbox) · py_compile clean.

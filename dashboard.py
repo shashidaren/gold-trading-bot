@@ -475,6 +475,72 @@ HTML_TEMPLATE = """
         </div>
         {% endif %}
 
+        {% if ctx.outlook and ctx.outlook.ok %}
+        {% set o = ctx.outlook %}{% set n = o.now %}
+        <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 mb-6">
+            <div class="flex flex-wrap items-baseline justify-between gap-2 mb-2">
+                <h3 class="text-sm font-semibold text-slate-200">🧭 Strong-signal outlook — where did signals like this go?</h3>
+                <span class="text-[11px] text-slate-400">{{ o.era_label }} · n={{ o.n }} taken signals · median hold {{ "%.0f"|format(o.hold_median_min) }} min</span>
+            </div>
+            {% if n and n.ready_side %}
+            <p class="text-xs text-slate-300 mb-2">
+                <span class="font-semibold {{ 'text-emerald-400' if n.ready_side == 'BUY' else 'text-rose-400' }}">{{ n.ready_side }} passed all 8 gates on the last bar — very strong signal.</span>
+                Entry <span class="font-mono">${{ "%.2f"|format(n.entry) }}</span> ·
+                stop <span class="font-mono text-rose-300">${{ "%.2f"|format(n.stop) }}</span> ·
+                target <span class="font-mono text-emerald-300">${{ "%.2f"|format(n.target) }}</span> ·
+                risk <span class="font-mono">${{ "%.2f"|format(n.risk) }}</span>
+            </p>
+            <table class="w-full text-xs">
+                <thead class="text-slate-500">
+                    <tr><th class="text-left font-normal py-1">after</th><th class="text-right font-normal">historical median</th><th class="text-right font-normal">middle-50% cone</th><th class="text-right font-normal">closed {{ n.ready_side }}'s way</th><th class="text-right font-normal">target before stop</th></tr>
+                </thead>
+                <tbody class="divide-y divide-slate-700/70">
+                    {% for a in n.applied %}
+                    <tr>
+                        <td class="py-1.5">+{{ a.horizon }}m</td>
+                        <td class="py-1.5 text-right font-mono">${{ "%.2f"|format(a.cone_median) }}</td>
+                        <td class="py-1.5 text-right font-mono">${{ "%.2f"|format(a.cone_lo) }}–${{ "%.2f"|format(a.cone_hi) }}</td>
+                        <td class="py-1.5 text-right font-mono">{{ "%.0f"|format(a.fav_pct) }}% <span class="text-slate-500">[{{ "%.0f"|format(a.fav_ci[0]) }}–{{ "%.0f"|format(a.fav_ci[1]) }}] n={{ a.n }}</span></td>
+                        <td class="py-1.5 text-right font-mono">{% if a.tp_first_pct is none %}—{% else %}{{ "%.0f"|format(a.tp_first_pct) }}%{% endif %}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="text-xs text-slate-300 mb-2">
+                No 8/8 signal on the last bar{% if n and n.passed %} (BUY {{ n.passed.BUY }}/{{ n.total.BUY }} · SELL {{ n.passed.SELL }}/{{ n.total.SELL }} gates){% endif %}.
+                When one prints, this is what followed historically in the first {{ o.primary_horizon }} minutes:
+            </p>
+            <table class="w-full text-xs">
+                <thead class="text-slate-500">
+                    <tr><th class="text-left font-normal py-1">signal</th><th class="text-right font-normal">closed its way @{{ o.primary_horizon }}m</th><th class="text-right font-normal">median move</th><th class="text-right font-normal">target before stop</th><th class="text-right font-normal">n</th></tr>
+                </thead>
+                <tbody class="divide-y divide-slate-700/70">
+                    {% for side in ["BUY", "SELL"] %}{% set c = o.primary[side] %}
+                    <tr>
+                        <td class="py-1.5 {{ 'text-emerald-400' if side == 'BUY' else 'text-rose-400' }}">{{ side }} 8/8</td>
+                        <td class="py-1.5 text-right font-mono">{% if c.get("n") %}{{ "%.0f"|format(c.fav_pct) }}% <span class="text-slate-500">[{{ "%.0f"|format(c.fav_ci[0]) }}–{{ "%.0f"|format(c.fav_ci[1]) }}]</span>{% else %}—{% endif %}</td>
+                        <td class="py-1.5 text-right font-mono">{% if c.get("n") %}{{ "%+.2f"|format(c.drift_r_median) }}R{% else %}—{% endif %}</td>
+                        <td class="py-1.5 text-right font-mono">{% if c.get("tp_first_pct") is not none and c.get("tp_first_pct") is not undefined %}{{ "%.0f"|format(c.tp_first_pct) }}%{% else %}—{% endif %}</td>
+                        <td class="py-1.5 text-right font-mono">{{ c.get("n", 0) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+            <p class="text-[11px] text-slate-500 mt-2 leading-snug">
+                Past frequencies of this bot's own taken (8/8) signals — <span class="text-slate-300">not a forecast</span>.
+                ~50% with a wide interval = a coin flip the sample cannot call; read the cone, not the median.
+                “Target before stop” compares to {{ "%.0f"|format(o.barrier_reference_pct) }}%, not 50% — the target sits 1.5× further than the stop.
+                Cone = historical drift in R × today's risk. Full table: <span class="font-mono">tools/signal_outlook.py</span> · verdict: <span class="font-mono">docs/ANALYSIS-2026-10-19-signal-outlook.md</span>
+            </p>
+        </div>
+        {% elif ctx.outlook %}
+        <div class="bg-slate-800/60 border border-slate-700 rounded-xl p-4 mb-6 text-sm text-slate-400">
+            🧭 Strong-signal outlook unavailable — {{ ctx.outlook.reason }}
+        </div>
+        {% endif %}
+
         {% if ctx.era or ctx.book or ctx.feed %}
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
             {% if ctx.era %}
@@ -904,6 +970,41 @@ def calibration_context():
     return value
 
 
+_outlook_cache = {"key": None, "value": None, "at": 0.0}
+
+
+def _outlook_base():
+    """Cached era base rates for the outlook panel (full-log walk, 10-min cache)."""
+    import time as _time
+    key = (_file_key(LOG_FILE_PATH), _file_key(TRADES_FILE_PATH))
+    now = _time.time()
+    if _outlook_cache["value"] and (key == _outlook_cache["key"]
+                                     or (now - _outlook_cache["at"]) < CALIBRATION_CACHE_SECONDS):
+        return _outlook_cache["value"]
+    try:
+        value = PR.signal_outlook(PR.read_rows(LOG_FILE_PATH), PR.read_rows(TRADES_FILE_PATH))
+    except Exception as exc:
+        value = {"ok": False, "reason": f"outlook failed: {exc}"}
+    _outlook_cache.update({"key": key, "value": value, "at": now})
+    return value
+
+
+def outlook_context(setup):
+    """Strong-signal base rates + the cone applied to the last bar (display-only)."""
+    if PR is None:
+        return {"ok": False, "reason": f"pressure.py unavailable: {_PR_IMPORT_ERROR}"}
+    base = _outlook_base()
+    if not base.get("ok"):
+        return base
+    h = PR.OUTLOOK_PRIMARY_HORIZON
+    return {"ok": True, "era_label": base["era_label"], "n": base["n"],
+            "hold_median_min": base["hold_median_min"],
+            "barrier_reference_pct": base["barrier_reference_pct"],
+            "primary_horizon": h,
+            "primary": {s: base["sides"][s]["horizons"].get(h, {}) for s in ("BUY", "SELL")},
+            "now": PR.outlook_now(setup or {}, base)}
+
+
 def pressure_context():
     """One read-only snapshot of the tape / gates / book / feed for the page."""
     if PR is None:
@@ -913,6 +1014,7 @@ def pressure_context():
     except Exception as exc:
         return {"error": f"context build failed: {exc}"}
     ctx["calibration"] = calibration_context()
+    ctx["outlook"] = outlook_context(ctx.get("setup"))
     return ctx
 
 
