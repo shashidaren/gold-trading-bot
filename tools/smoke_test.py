@@ -3069,6 +3069,83 @@ check("V: restart preserves latest finite negative balance", eng_v.balance == -4
 shutil.rmtree(tmp_v, ignore_errors=True)
 
 
+# --- Scenario W ------------------------------------------------------------
+print("\nScenario W: gap-ride counter (tools/check_gap_rides.py) — the §7 extra revert "
+      "trigger (gap risk) must be MEASURABLE, not eyeballed")
+import check_gap_rides as CGR  # noqa: E402
+
+# W1: a scheduled closure is a closure; a hole in the feed is a different risk.
+for start_s, end_s, want_ in (
+        ("2026-10-09 20:57:04", "2026-10-11 22:00:06", "weekend"),       # the weekly close
+        ("2026-10-14 20:58:02", "2026-10-14 22:00:08", "daily-break"),    # the broker daily break
+        ("2026-10-19 02:34:02", "2026-10-19 02:49:10", "outage"),         # a 15-min feed hole
+        ("2026-09-03 08:36:00", "2026-09-03 11:18:00", "outage"),         # a 162-min feed hole
+        ("2026-09-06 20:00:02", "2026-09-06 21:11:00", "daily-break")):   # the old-era break
+    got_ = CGR.classify_gap(datetime.strptime(start_s, "%Y-%m-%d %H:%M:%S"),
+                            datetime.strptime(end_s, "%Y-%m-%d %H:%M:%S"))
+    check(f"W: classify_gap: {start_s} -> {end_s} is a {want_}", got_ == want_, f"got {got_}")
+check("W: only a scheduled closure counts as a §7 closure (a feed outage is not one)",
+      CGR.is_closure("daily-break") and CGR.is_closure("weekend")
+      and not CGR.is_closure("outage"))
+check("W: the registered trigger threshold stays 2 (a tool may not retune a pre-registered bar)",
+      CGR.TRIGGER_THRESHOLD == 2)
+
+# W2: the two mechanical facts the damage rows rest on.
+check("W: a BUY that reopens below its stop gapped through it",
+      CGR.gapped_through_stop("BUY", 4165.95, 4160.10)
+      and not CGR.gapped_through_stop("BUY", 4165.95, 4170.10))
+check("W: a SELL that reopens above its stop gapped through it",
+      CGR.gapped_through_stop("SELL", 4347.83, 4350.00)
+      and not CGR.gapped_through_stop("SELL", 4347.83, 4340.00))
+check("W: an exit worse than the stop is flagged; an exit AT the stop is not",
+      CGR.exit_beyond_stop("BUY", 4165.95, 4160.00)
+      and not CGR.exit_beyond_stop("BUY", 4165.95, 4165.95))
+check("W: the adverse excursion counts the move PAST the stop, not the move towards it",
+      CGR.adverse_excursion("BUY", 100.0, [(None, 0, 101.0, 99.5, 0, 0)]) == 0.5
+      and CGR.adverse_excursion("BUY", 100.0, [(None, 0, 103.0, 101.0, 0, 0)]) == 0.0
+      and CGR.adverse_excursion("SELL", 100.0, [(None, 0, 100.5, 99.0, 0, 0)]) == 0.5)
+
+# W3: end to end on a synthetic mini-book: two rides over one daily break.
+tmp_w = tempfile.mkdtemp(prefix="gold_smoke_w_")
+with open(os.path.join(tmp_w, "forward_test_log.csv"), "w", newline="") as f_w:
+    w_w = csv.writer(f_w)
+    w_w.writerow(["Timestamp", "Open", "High", "Low", "Close", "Volume"])
+    for k in range(9):                                  # 20:50 -> 20:58
+        w_w.writerow([f"2026-10-07 20:{50 + k:02d}:00", 4000, 4001, 3999, 4000, 30])
+    for k in range(11):                                 # 22:00 -> 22:10 (after the break)
+        w_w.writerow([f"2026-10-07 22:{k:02d}:00", 4000, 4001, 3999, 4000, 30])
+with open(os.path.join(tmp_w, "trades.csv"), "w", newline="") as f_w:
+    w_w = csv.writer(f_w)
+    w_w.writerow(["Trade_Num", "Trade_Type", "Entry_Time", "Exit_Time", "Entry_Price",
+                  "Stop_Loss", "Take_Profit", "Exit_Price", "Exit_Reason", "Profit",
+                  "Balance_After", "RSI_At_Entry", "ATR_At_Entry", "Wick_Ratio_At_Entry",
+                  "EMA50_At_Entry", "EMA200_At_Entry"])
+    w_w.writerow([1, "BUY", "2026-10-07 20:52:00", "2026-10-07 22:05:00", 4000, 3990, 4015,
+                  4015, "TP", 15, 515, 50, 2, 40, 4000, 4000])
+    w_w.writerow([2, "SELL", "2026-10-07 20:55:00", "2026-10-07 22:08:00", 4000, 4010, 3985,
+                  4010, "SL", -10, 505, 50, 2, 40, 4000, 4000])
+    w_w.writerow([3, "BUY", "2026-10-07 22:20:00", "2026-10-07 22:25:00", 4000, 3990, 4015,
+                  4015, "TP", 15, 520, 50, 2, 40, 4000, 4000])
+buf_w = io.StringIO()
+with contextlib.redirect_stdout(buf_w):
+    rc_w = CGR.main(["--root", tmp_w, "--json"])
+rep_w = json.loads(buf_w.getvalue())
+check("W: both synthetic rides are counted over the daily break",
+      len(rep_w["era_closure_rides"]) == 2, f"{len(rep_w['era_closure_rides'])} rides")
+check("W: the non-riding trade is not counted", len(rep_w["rides"]) == 2,
+      f"{len(rep_w['rides'])} rides")
+check("W: two rides reach the registered trigger (2) and the report says so",
+      rep_w["trigger_reached"] and rc_w == 0)
+check("W: neither synthetic ride damaged anything (no gap-through, no worse exit)",
+      len(rep_w["damage_rides"]) == 0)
+buf_w = io.StringIO()
+with contextlib.redirect_stdout(buf_w):
+    rc_w = CGR.main(["--root", tmp_w, "--strict"])
+check("W: --strict exits 1 once the trigger is reached (a pipeline can gate on it)",
+      rc_w == 1, f"exit {rc_w}")
+shutil.rmtree(tmp_w, ignore_errors=True)
+
+
 print()
 if FAILURES:
     print(f"SMOKE TEST FAILED: {FAILURES}")
