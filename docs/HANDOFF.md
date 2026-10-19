@@ -106,6 +106,7 @@ snapshot block, still said FRESH.
 | **Measured spreads / cost / server clock / contract spec** (once `mt5quotes-gold` runs) | `python3 tools/xm_quote_report.py` (`--quiet` = the digest line) |
 | **Large-N replay over broker M1 history** | `python3 tools/history_to_log.py mt5_history.csv --out history_utc.csv`, then `python3 tools/strategy_lab.py --bars history_utc.csv` |
 | **Market context (tape / gates / §7 era / calibration)** | `python3 tools/pressure_report.py` (`--root DIR`, `--era structstop|maxhold|075|all`, `--json`) — the same read-only layer the dashboard renders |
+| **Where did strong (8/8) signals head? (rough estimate)** | `python3 tools/signal_outlook.py --root .` (`--era structstop|075|all`, `--json`) — forward-walk cone + base rates per side/era; display-only, `docs/ANALYSIS-2026-10-19-signal-outlook.md` |
 | Loser features | `python3 tools/analyze_losers.py` |
 | Engine regression | `python3 tools/smoke_test.py` |
 | Force autosync now | `sudo /opt/gold/tools/autosync.sh` |
@@ -211,7 +212,11 @@ stream is healthy.
 
 **The dashboard pressure composite remains a side proxy, not a signal** (calibration: collinear with
 side, no within-side contrast). The owner's manual pressure/hold observation is a separate, unmeasured
-research hypothesis; do not change engine behavior from it.
+research hypothesis; do not change engine behavior from it. The owner's "where is it headed on a very
+strong signal?" question is now measured (`docs/ANALYSIS-2026-10-19-signal-outlook.md`, dashboard 🧭
+panel, `tools/signal_outlook.py`): after an 8/8 taken signal the 15–60 min direction is a **coin flip**
+(pooled 48.9% [41–57] @30m, live era) with a wide two-sided cone — the outlook is base rates + barrier
+odds for manual supervision, **never a forecast, gate, sizing or hold-past-stop input**.
 
 ### Definitions (binding)
 
