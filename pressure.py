@@ -189,11 +189,13 @@ def read_rows(path):
         return []
 
 
-def tail_rows(path, n=400):
+def tail_rows(path, n=400, window_bytes=128 * 1024):
     """Last n rows (oldest→newest) without reading the whole file.
 
     The 1-min log is multi-MB and grows forever; the dashboard refreshes every
-    15 s, so it must not re-read it end to end.
+    15 s, so it must not re-read it end to end. `window_bytes` widens the tail
+    for callers that need more than the default ~1100 rows (the box panel needs
+    a prior trading day, which can sit ~3000 bars back on a Monday).
     """
     if not path or not os.path.isfile(path):
         return []
@@ -204,7 +206,7 @@ def tail_rows(path, n=400):
             if not header_line:
                 return []
             header = header_line.decode("utf-8", errors="replace").strip().split(",")
-            chunk = 128 * 1024
+            chunk = max(128 * 1024, int(window_bytes))
             if size > chunk:
                 raw.seek(max(len(header_line), size - chunk))
                 data = raw.read().decode("utf-8", errors="replace")
@@ -1439,6 +1441,359 @@ def outlook_now(setup, outlook, horizon=OUTLOOK_PRIMARY_HORIZON):
                     "applied": applied,
                     "side_n": outlook["sides"][side]["n"]})
         break
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5c. BOX READ — where the boxes are, and whether a box trade's conditions line up
+# Display-only. Measured on this log on 2026-10-20: not one breakout or fade
+# geometry cleared its driftless reference (8 cells, 2 box sizes, 4 sessions),
+# and 74-75% of closes outside a box are back inside within 15 minutes.
+# So a box is a place to PUT A STOP, not a place to READ A PREDICTION
+# (docs/ANALYSIS-2026-10-20-box-theory-manual-trading.md). Nothing here is an
+# entry rule, a sizing rule or a reason to hold past a stop.
+# ─────────────────────────────────────────────────────────────────────────────
+
+BOX_SPREAD_USD = 0.55        # round trip, $/oz — the quote logger's measured median
+BOX_EDGE_ATR = 0.50          # "at an edge" = the close is within this many ATR
+BOX_BREAK_ATR = 0.10         # a close this far beyond an edge = confirmed break
+BOX_REJECT_ATR = 0.15        # wick through the edge + a close this far back inside = rejection
+BOX_CLEAR_ATR = 0.50         # stop clearance beyond the far edge
+BOX_COST_SHARE_OK = 10.0     # cost as % of R — below this, geometry is not the problem
+BOX_COST_SHARE_MAX = 20.0    # above this, the spread IS most of the trade
+BOX_GAP_MINUTES = 3.0        # a bar-to-bar gap this long splits the tape
+BOX_FRESH_BARS = 3           # a break only counts if price was inside that box recently
+BOX_SIZES = ((20, "20-bar level (engine's own)"),
+             (60, "last 1h (60 bars)"),
+             (240, "last 4h (240 bars)"))
+BOX_PRIOR_DAY_MIN_BARS = 600  # a Sunday evening is not a day to draw a box on
+BOX_FEED_STALE_SECONDS = 300
+
+# The measured verdict, copied from the 2026-10-20 analysis — printed wherever
+# the panel could otherwise be mistaken for a signal. Scenario U pins these.
+BOX_MEASURED = {
+    "source": "docs/ANALYSIS-2026-10-20-box-theory-manual-trading.md",
+    "cells": 8, "cleared": 0,
+    "false_break_pct_20": 74.0, "false_break_pct_60": 75.0,
+    "best": "stop outside the whole box + a 1-box target (near break-even, not an edge)",
+}
+
+
+def _box_bars(rows):
+    """(ts, high, low, close, atr) tuples, oldest first. Bad rows are dropped."""
+    bars = []
+    for r in rows:
+        ts = parse_ts(r.get("Timestamp"))
+        h = parse_float(r.get("High"))
+        l = parse_float(r.get("Low"))
+        c = parse_float(r.get("Close"))
+        if ts is None or h is None or l is None or c is None:
+            continue
+        bars.append((ts, h, l, c, parse_float(r.get("ATR"))))
+    bars.sort(key=lambda b: b[0])
+    return bars
+
+
+def _box_run_offsets(bars, gap_minutes=BOX_GAP_MINUTES):
+    """Index of the first bar of the contiguous run each bar belongs to."""
+    start = [0] * len(bars)
+    for i in range(1, len(bars)):
+        if (bars[i][0] - bars[i - 1][0]).total_seconds() / 60.0 > gap_minutes:
+            start[i] = i
+        else:
+            start[i] = start[i - 1]
+    return start
+
+
+def _box_bounds(bars, i, n, start):
+    """(high, low) of the n bars STRICTLY before i, like the engine's floor."""
+    if i - start[i] < n:
+        return None
+    prior = bars[i - n:i]
+    hi = max(b[1] for b in prior)
+    lo = min(b[2] for b in prior)
+    return (hi, lo) if hi > lo else None
+
+
+def _box_side_read(close, atr, box_hi, box_lo, edge, far, side, spread):
+    """Structural and far-edge numbers for one side of one box."""
+    engine_risk = structural_risk(close, atr, edge) if atr else None
+    far_risk = abs(close - far) + BOX_CLEAR_ATR * atr if atr else None
+    width = box_hi - box_lo
+    return {
+        "side": side, "edge": edge, "far": far,
+        "engine_risk": engine_risk, "engine_tp": (RR_TARGET * engine_risk) if engine_risk else None,
+        "far_risk": far_risk, "far_tp": (width if far_risk else None),   # measured move, 1 box
+        "far_rr": (width / far_risk) if far_risk else None,
+        "cost_share_pct": (100.0 * spread / far_risk) if far_risk else None,
+        "cost_share_engine_pct": (100.0 * spread / engine_risk) if engine_risk else None,
+        "cost_usd": spread,
+    }
+
+
+def box_geometry(rows, spread=BOX_SPREAD_USD):
+    """Every box the operator would draw, the nearest edge, and the trigger.
+
+    Pure geometry over the rows it is given (no clock, no portfolio) so the
+    dashboard can cache it and the CLI can reuse it.
+    """
+    bars = _box_bars(rows)
+    if len(bars) < 25:
+        return {"ok": False, "reason": "not enough bars for a box read"}
+    start = _box_run_offsets(bars)
+    i = len(bars) - 1
+    ts, _h, _l, close, atr = bars[i]
+    out = {"ok": True, "as_of": ts, "close": close, "atr": atr, "bars": len(bars), "boxes": []}
+    if not atr or atr <= 0:
+        return {"ok": False, "reason": "ATR unavailable on the last bar"}
+
+    specs = []
+    for n, name in BOX_SIZES:
+        bounds = _box_bounds(bars, i, n, start)
+        if bounds:
+            specs.append((name, bounds[0], bounds[1]))
+
+    # prior trading day: the most recent complete UTC date with enough bars
+    today = ts.date()
+    by_day = {}
+    for b in bars:
+        if b[0].date() < today:
+            by_day.setdefault(b[0].date(), []).append(b)
+    for d in sorted(by_day, reverse=True):
+        day_bars = by_day[d]
+        if len(day_bars) >= BOX_PRIOR_DAY_MIN_BARS:
+            specs.append((f"prior day {d} (UTC)",
+                          max(b[1] for b in day_bars), min(b[2] for b in day_bars)))
+            break
+
+    for name, hi, lo in specs:
+        width = hi - lo
+        box = {"name": name, "high": hi, "low": lo, "width": width,
+               "width_atr": width / atr,
+               "pos_pct": 100.0 * (close - lo) / width if width > 0 else None,
+               "dist_up_usd": hi - close, "dist_down_usd": close - lo,
+               "dist_up_atr": (hi - close) / atr, "dist_down_atr": (close - lo) / atr}
+        box["buy"] = _box_side_read(close, atr, hi, lo, hi, lo, "BUY", spread)
+        box["sell"] = _box_side_read(close, atr, hi, lo, lo, hi, "SELL", spread)
+        out["boxes"].append(box)
+
+    if not out["boxes"]:
+        return {"ok": False, "reason": "no box could be built (short or gappy tape)"}
+
+    # nearest edge, whichever box it belongs to
+    nearest = None
+    for box in out["boxes"]:
+        for side, edge, dist in (("BUY", box["high"], box["dist_up_atr"]),
+                                 ("SELL", box["low"], box["dist_down_atr"])):
+            d = abs(dist)
+            if nearest is None or d < nearest["distance_atr"]:
+                nearest = {"box": box["name"], "side": side, "edge": edge,
+                           "distance_usd": abs(edge - close), "distance_atr": d,
+                           "width": box["width"]}
+    out["nearest"] = nearest
+
+    # trigger on the last closed bar: a FRESH break or a rejection at an edge.
+    # "Fresh" matters: a box price left days ago is a fact about history, not a
+    # setup. A break only counts if a close inside that box happened within the
+    # last BOX_FRESH_BARS bars, so the crossing is the current event.
+    trigger = {"state": "none", "side": None, "box": None, "detail": "no edge tested on the last bar"}
+    best = None
+    for box in out["boxes"]:
+        hi, lo = box["high"], box["low"]
+        was_inside_hi = any(bars[i - k][3] <= hi for k in range(1, BOX_FRESH_BARS + 1))
+        was_inside_lo = any(bars[i - k][3] >= lo for k in range(1, BOX_FRESH_BARS + 1))
+        # (distance, state, side, tested edge, opposite edge, edge name)
+        candidates = []
+        if close >= hi + BOX_BREAK_ATR * atr and was_inside_hi:   # fresh close beyond the top
+            candidates.append(((close - hi) / atr, "break", "BUY", hi, lo, "high"))
+        if close <= lo - BOX_BREAK_ATR * atr and was_inside_lo:   # fresh close beyond the bottom
+            candidates.append(((lo - close) / atr, "break", "SELL", lo, hi, "low"))
+        if _h >= hi and close <= hi - BOX_REJECT_ATR * atr:       # wick through the top, close back in
+            candidates.append(((hi - close) / atr, "reject", "SELL", hi, lo, "high"))
+        if _l <= lo and close >= lo + BOX_REJECT_ATR * atr:       # wick through the bottom, close back in
+            candidates.append(((close - lo) / atr, "reject", "BUY", lo, hi, "low"))
+        for dist, state, side, edge, far, edge_name in candidates:
+            # the nearest edge wins: that is the box price is actually trading at
+            if best is None or dist < best[0]:
+                best = (dist, state, side, edge, far, edge_name, box)
+    if best:
+        dist, state, side, edge, far, edge_name, box = best
+        trigger = {"state": state, "side": side, "box": box["name"], "edge": edge, "far": far,
+                   "edge_name": edge_name, "strength_atr": dist,
+                   "detail": (f"{'closed beyond' if state == 'break' else 'rejected'} the "
+                              f"{box['name']} {edge_name} ({dist:.2f} ATR)")}
+        entry = close
+        if state == "break":
+            stop = far - BOX_CLEAR_ATR * atr if side == "BUY" else far + BOX_CLEAR_ATR * atr
+        else:                                  # fade back into the box
+            stop = edge + BOX_CLEAR_ATR * atr if side == "SELL" else edge - BOX_CLEAR_ATR * atr
+        risk = abs(entry - stop)
+        target = (entry + box["width"]) if side == "BUY" else (entry - box["width"])
+        reward = abs(target - entry)
+        engine_risk = structural_risk(entry, atr, edge)
+        trigger["setup"] = {
+            "side": side, "entry": entry, "stop": stop, "target": target,
+            "risk_usd": risk, "reward_usd": reward,
+            "rr": (reward / risk) if risk else None,
+            "cost_usd": spread, "cost_share_pct": (100.0 * spread / risk) if risk else None,
+            "box": box["name"], "edge": edge, "far": far, "state": state,
+            "edge_name": edge_name,
+            # the engine's own rule on the same edge, for comparison
+            "engine_risk": engine_risk,
+            "engine_tp": RR_TARGET * engine_risk,
+            "engine_cost_share_pct": (100.0 * spread / engine_risk) if engine_risk else None,
+        }
+    out["trigger"] = trigger
+    return out
+
+
+def box_status(geom, portfolio=None, feed=None, now=None, spread=BOX_SPREAD_USD):
+    """The condition checklist and the one-line verdict, over a cached geometry.
+
+    Every item is a measurement, not an instruction: the panel may say the
+    conditions line up, and it must still print that the measured base rate has
+    no edge. Nothing here can block or place a trade.
+    """
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    if not geom.get("ok"):
+        return {"ok": False, "reason": geom.get("reason", "no geometry"), "geometry": geom,
+                "checks": [], "verdict": {"code": "unavailable", "tone": "idle",
+                                          "headline": "Box read unavailable",
+                                          "detail": geom.get("reason", "")}}
+
+    nearest = geom["nearest"]
+    trig = geom["trigger"]
+    setup = trig.get("setup")
+    atr = geom["atr"]
+    checks = []
+
+    def add(key, label, state, detail):
+        checks.append({"key": key, "label": label, "state": state, "detail": detail})
+
+    # 1. location — is there anything to look at? A live trigger at an edge
+    # counts as being at the edge even when the nearest-line distance is larger.
+    loc_state = "pass" if (trig["state"] != "none" or nearest["distance_atr"] <= BOX_EDGE_ATR) else (
+        "warn" if nearest["distance_atr"] <= 1.0 else "fail")
+    add("location", "Location",
+        loc_state,
+        f"{abs(nearest['distance_atr']):.2f} ATR from the {nearest['box']} "
+        f"{'high' if nearest['side'] == 'BUY' else 'low'} (${nearest['edge']:.2f})"
+        + (" — at the edge" if loc_state == "pass" else
+           " — mid-box, nothing to do" if loc_state == "fail" else " — approaching"))
+
+    # 2. trigger — a closed bar beyond, or a rejection of, that edge
+    if trig["state"] == "none":
+        add("trigger", "Trigger", "fail", trig["detail"])
+    else:
+        add("trigger", "Trigger", "pass",
+            f"{trig['detail']} → {trig['side']} {trig['state']} candidate")
+
+    # 3. feed — a stale tape invalidates every number above. While the market is
+    # closed a stale bar is EXPECTED (the 2026-09-29 lesson: a weekend silence is
+    # not an outage), so the session check carries that verdict, not this one.
+    if feed and feed.get("ok"):
+        age = feed.get("age_seconds", 0)
+        if market_quiet(now):
+            add("feed", "Feed", "na",
+                f"market closed — the last bar {age // 60} min ago is expected")
+        else:
+            add("feed", "Feed", "pass" if age <= 120 else (
+                "warn" if age <= BOX_FEED_STALE_SECONDS else "fail"),
+                f"last bar {age // 60} min ago" if age >= 60 else f"last bar {age} s ago")
+    else:
+        add("feed", "Feed", "na", "feed health unavailable")
+
+    # 4. session — weekend / daily break / the engine's own blackouts
+    side = setup["side"] if setup else None
+    if market_quiet(now):
+        add("session", "Session", "fail",
+            f"market quiet at {now.strftime('%H:%M')} UTC (weekend or the daily break)")
+    else:
+        blocked = None
+        for s in ([side] if side else ["BUY", "SELL"]):
+            hit, label, _sides = _blackout_state(now, s)
+            if hit:
+                blocked = f"{label} blocks {s}"
+                break
+        add("session", "Session", "fail" if blocked else "pass",
+            blocked or f"{now.strftime('%H:%M')} UTC — outside every blackout window")
+
+    # 5. risk state — the engine's own portfolio gates
+    if portfolio:
+        cd = portfolio.get("cooldown_minutes_left") or 0
+        if portfolio.get("breaker_on"):
+            add("risk_state", "Risk state", "fail",
+                f"daily breaker on ({portfolio.get('daily_sls')} SLs today)")
+        elif cd:
+            add("risk_state", "Risk state", "fail",
+                f"SL cooldown, {cd} min left ({portfolio.get('cooldown_note') or 'after a stop'})")
+        else:
+            add("risk_state", "Risk state", "pass", "no cooldown, no daily breaker")
+    else:
+        add("risk_state", "Risk state", "na", "portfolio state unavailable")
+
+    # 6. volatility — the engine's ATR band, and a spike check against its median
+    if atr < MIN_ATR_TO_TRADE:
+        add("volatility", "Volatility", "fail",
+            f"ATR ${atr:.2f} < the engine's ${MIN_ATR_TO_TRADE:.2f} floor — it would not trade this")
+    elif atr > MAX_ATR_TO_TRADE:
+        add("volatility", "Volatility", "fail",
+            f"ATR ${atr:.2f} > the engine's ${MAX_ATR_TO_TRADE:.2f} ceiling")
+    else:
+        add("volatility", "Volatility", "pass",
+            f"ATR ${atr:.2f} inside the engine's ${MIN_ATR_TO_TRADE:.2f}-${MAX_ATR_TO_TRADE:.2f} band")
+
+    # 7. geometry — the one the 2026-10-20 measurement says actually matters
+    if setup:
+        share = setup["cost_share_pct"]
+        state = "pass" if share <= BOX_COST_SHARE_OK else (
+            "warn" if share <= BOX_COST_SHARE_MAX else "fail")
+        add("geometry", "Geometry", state,
+            f"stop ${setup['stop']:.2f} ({setup['risk_usd']:.2f} risk), target "
+            f"${setup['target']:.2f} ({setup['rr']:.1f}:1) — the ${spread:.2f} spread is "
+            f"{share:.0f}% of R")
+    else:
+        add("geometry", "Geometry", "na", "no setup to size")
+
+    by_key = {c["key"]: c for c in checks}
+    if by_key["location"]["state"] == "fail":
+        verdict = {"code": "no_setup", "tone": "idle", "headline": "No box setup — mid-box",
+                   "detail": "nothing to do until price reaches an edge; the checklist below is context"}
+    elif by_key["trigger"]["state"] == "fail":
+        verdict = {"code": "wait", "tone": "warn", "headline": "Waiting — at the edge, no trigger",
+                   "detail": "a box only answers WHERE. Wait for a close beyond the edge, or a rejection of it"}
+    elif by_key["feed"]["state"] == "fail":
+        verdict = {"code": "blocked", "tone": "block", "headline": "Blocked — the feed is stale",
+                   "detail": by_key["feed"]["detail"] + " while the market is open"}
+    elif by_key["session"]["state"] == "fail" or by_key["risk_state"]["state"] == "fail":
+        first = by_key["session"] if by_key["session"]["state"] == "fail" else by_key["risk_state"]
+        verdict = {"code": "blocked", "tone": "block", "headline": f"Blocked — {first['label'].lower()}",
+                   "detail": first["detail"]}
+    elif by_key["volatility"]["state"] == "fail":
+        verdict = {"code": "blocked", "tone": "block", "headline": "Blocked — volatility",
+                   "detail": by_key["volatility"]["detail"]}
+    elif by_key["geometry"]["state"] == "fail":
+        verdict = {"code": "wait", "tone": "warn", "headline": "Waiting — the stop is too tight for the spread",
+                   "detail": by_key["geometry"]["detail"] + " — measured: tight stops lose to cost"}
+    elif by_key["geometry"]["state"] == "warn":
+        verdict = {"code": "candidate_weak", "tone": "warn",
+                   "headline": "Candidate, weak geometry",
+                   "detail": by_key["geometry"]["detail"] + " — the spread is a large share of R"}
+    else:
+        verdict = {"code": "candidate", "tone": "ok",
+                   "headline": f"Candidate — {setup['side']} at the {setup['box']}" if setup else "Candidate",
+                   "detail": "conditions line up. Base rate still shows no edge: this is context, not a signal"}
+
+    return {"ok": True, "now": now, "geometry": geom, "checks": checks, "verdict": verdict,
+            "setup": setup, "nearest": nearest, "trigger": trig, "measured": BOX_MEASURED,
+            "spread_usd": spread}
+
+
+def box_read(rows, now=None, portfolio=None, feed=None, spread=BOX_SPREAD_USD):
+    """box_geometry + box_status in one call (library/CLI convenience)."""
+    geom = box_geometry(rows, spread=spread)
+    out = box_status(geom, portfolio=portfolio, feed=feed, now=now, spread=spread)
+    out["geometry"] = geom
     return out
 
 
