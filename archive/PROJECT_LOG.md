@@ -156,3 +156,13 @@ no strategy changes and no production ledger edits.
 - **No revert executed, deliberately:** the struct-stop window is open until it is judged (HANDOFF 6.1), the registered judgement point is 2026-10-19 21:00 UTC or n=150, a revert is a runtime change that reaches the host only through merge + autosync, and §7 registers a threshold but never a counting rule - the rule must be **stated in the judgement record**, not settled by which way a session happened to count. The review spells out the decision procedure; if the trigger is judged fired, the registered action is a single-commit revert of the structural stop **with the gap guard first**, and the 0.25 ATR level test does not proceed. Smoke **Scenario W** pins the counter (classification, the two mechanical gap facts, the threshold, and an end-to-end synthetic book).
 - Parallel tracks: quote logger **5/14 complete days, 1/2 weekends** (median spread $0.55, 98.5% of samples above the assumed $0.40; the $0.40 assumption stays in force) · pressure composite still *collinear with side - not a signal* (BUY 43.4% / SELL 56.6% on the last bar) · the negative-balance incident is reconciled in the ledger but the **host-side verification is still operator-only** · the large-N history path is still a first-run-on-the-box task.
 - Docs: new `docs/REVIEW-2026-10-19-struct-stop-screen.md`; HANDOFF §1 rewritten in place (current-state only) with the replaced block moved to `docs/HANDOFF-HISTORY.md` per §11 rule 5; era timeline, cheat sheet, §6.1, §7 and the §11 milestone table updated; this plan reconciled. An earlier 04:41 UTC draft of the review was **PR #38 — closed unmerged**, so none of it had reached `main`; this session re-derived every number from the data.
+
+## 2026-10-19 — read-only dashboard context PR
+
+Owner authorized risk/map/evidence upgrade and PR. Added labelled indicative closure
+countdown/hold overlap, logged-spread freshness, complete-bucket M15/H1 momentum,
+observed prior-day range and costed ALL/BUY/SELL evidence. No engine/filter changes.
+Scope, deferred data-dependent additions and limitations:
+`docs/ANALYSIS-2026-10-19-dashboard-context.md`. Refreshed snapshot to collection 282,
+630 closes and struct-stop n=133; no judgement or deploy claimed. Integrity 0 fail,
+smoke and four targeted tests (including Flask render) pass; compilation clean.

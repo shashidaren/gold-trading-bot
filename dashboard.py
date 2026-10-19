@@ -593,6 +593,54 @@ HTML_TEMPLATE = """
         </div>
         {% endif %}
 
+        {% if ctx and not ctx.error %}
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
+            <section class="bg-slate-800 p-4 rounded-xl border border-amber-800">
+                <h3 class="font-semibold text-amber-300 mb-3">🛡️ Risk now</h3>
+                {% set rn = ctx.risk_now %}
+                {% if rn %}
+                <p class="text-sm">Indicative next closure: {{ rn.close }} UTC ({{ rn.minutes }} min).</p>
+                {% if rn.quiet %}<p class="text-amber-300 text-sm">Quiet-window heuristic active; verify broker market status.</p>{% endif %}
+                {% if rn.remaining is not none %}<p class="text-sm">Hold cap remaining: {{ '%.0f'|format(rn.remaining) }} min.
+                {% if rn.spans %}<strong class="text-amber-300">Position could span closure.</strong>{% endif %}</p>{% endif %}
+                {% if rn.quote %}
+                <p class="text-sm mt-2">Latest valid logged spread: ${{ '%.2f'|format(rn.quote.spread) }}
+                    <span class="{{ 'text-amber-300' if rn.quote.stale else 'text-slate-400' }}">{{ 'STALE' if rn.quote.stale else 'recent' }} · {{ rn.quote.age }}s old</span></p>
+                <p class="text-xs text-slate-400">{{ rn.quote.as_of }} UTC · spread-only, not total execution cost.</p>
+                {% else %}<p class="text-amber-300 text-sm mt-2">Spread unavailable — no valid quote in today's tail.</p>{% endif %}
+                {% endif %}
+                {% if trade_read %}<p class="text-sm mt-2">Open trade: {{ '%+.2f'|format(trade_read.r_now) }}R at last logged close · SL ${{ '%.2f'|format(trade_read.to_sl) }} away.</p>{% endif %}
+                <p class="text-xs text-slate-400 mt-3">Closure uses existing 21:00 UTC quiet-window heuristic, not a verified broker schedule (DST/holidays may differ). Stops and hold caps cannot enforce a fill while closed. No automatic exit.</p>
+            </section>
+            <section class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                <h3 class="font-semibold text-slate-200 mb-3">🗺️ Market map</h3>
+                {% if ctx.map %}
+                <p class="text-xs text-slate-400">Log as of {{ ctx.map.as_of }} UTC</p>
+                {% for tf in ctx.map.trends %}
+                <p class="text-sm mt-2">{{ tf.tf }} 4-close momentum:
+                    {% if tf.delta is not none %}<strong>{{ 'UP' if tf.delta > 0 else 'DOWN' if tf.delta < 0 else 'FLAT' }}</strong> (${{ '%+.2f'|format(tf.delta) }})
+                    {% else %}unavailable (requires four consecutive complete buckets){% endif %}</p>
+                {% endfor %}
+                {% for level in ctx.map.levels %}<p class="text-sm mt-2">{{ level.label }}: ${{ '%.2f'|format(level.price) }}
+                    {% if level.distance is not none %}· price {{ '%+.2f'|format(level.distance) }} ATR from level{% endif %}</p>{% else %}<p class="text-sm mt-2">Prior trading-day levels unavailable in read window.</p>{% endfor %}
+                {% else %}<p class="text-sm">Market data unavailable.</p>{% endif %}
+                <p class="text-xs text-slate-400 mt-3">UTC M15/H1 buckets from logged M1 bars; incomplete buckets excluded. Prior-day levels are observed log ranges, not guaranteed full broker sessions. Direction is context, not an entry/hold signal.</p>
+            </section>
+            <section class="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                <h3 class="font-semibold text-slate-200 mb-3">📊 Costed evidence</h3>
+                <p class="text-xs text-slate-400 mb-2">Structural-stop era · entries since 2026-10-06 03:00 UTC · assumed $0.40 round trip on every exit, including BE.</p>
+                {% for group in ctx.evidence %}
+                <div class="text-sm border-t border-slate-700 py-2">
+                    <strong>{{ group.side }}</strong> · n={{ group.n }} · net ${{ '%+.2f'|format(group.net) }}<br>
+                    Expectancy {{ '%+.3fR'|format(group.expectancy) if group.expectancy is not none else '—' }} · PF {{ '%.2f'|format(group.pf) if group.pf is not none else '— (no losses)' }}<br>
+                    Max closed-trade drawdown ${{ '%.2f'|format(group.dd) }}{% if group.excluded %} · {{ group.excluded }} invalid rows excluded{% endif %}
+                </div>
+                {% endfor %}
+                <p class="text-xs text-slate-400 mt-2">R uses original TP-leg risk. All exits included; drawdown starts at zero and follows exit order. No open P/L, commissions or slippage beyond the assumption. Small, clustered samples are descriptive—not proof of edge.</p>
+            </section>
+        </div>
+        {% endif %}
+
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
                 <h3 class="text-sm font-semibold text-emerald-400 mb-3">📈 Buy (Long) Funnel</h3>
@@ -978,6 +1026,10 @@ def index():
     trades = recent_trades(TRADES_FILE_PATH, n=20)
     eras = compute_era_stats(TRADES_FILE_PATH)
     ctx = pressure_context()
+    if PR and not ctx.get("error"):
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        quotes = PR.tail_rows(os.path.join(DATA_DIR, "xm_data", "quotes-" + now.strftime("%Y-%m-%d") + ".csv"), 240)
+        ctx["risk_now"] = PR.risk_read(status, quotes, now)
     trade_read = open_trade_read(status, recent_rows)
     stale, stale_age = _stale_info(status.get("last_update"))
     hold_minutes = _hold_minutes(status.get("entry_time")) if status.get("trade_active") else None
