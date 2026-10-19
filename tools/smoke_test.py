@@ -2856,6 +2856,39 @@ try:
           and P.open_trade_read({"trade_active": False}, 4150.0) is None
           and P.open_trade_read({"trade_active": True, "entry_price": 4150.0}, 4150.0) is None)
 
+    # ── U11. the box read (Boxes tab) ──
+    from datetime import datetime as _dt
+    box_rows = u_rows(n=60, start=_dt(2026, 10, 7, 12, 0), atr=2.0)
+    for _i, _r in enumerate(box_rows):
+        _r["High"] = f"{float(_r['High']) + 0.30:.2f}"
+        _r["Low"] = f"{float(_r['Low']) - 0.30:.2f}"
+    _hi = max(float(r["High"]) for r in box_rows[-21:-1])
+    _lo = min(float(r["Low"]) for r in box_rows[-21:-1])
+    _bg = P.box_geometry(box_rows)
+    _b0 = _bg["boxes"][0]
+    check("U: the 20-bar box is built from the bars BEFORE the judged one and matches the engine's floor rule",
+          _bg["ok"] and abs(_b0["high"] - _hi) < 1e-9 and abs(_b0["low"] - _lo) < 1e-9,
+          f"{_b0.get('high')} vs {_hi}")
+    # a rejection at the high must quote the HIGH and offer the SELL fade
+    box_rows[-1].update({"High": f"{_hi + 0.2:.2f}", "Low": f"{_hi - 2.0:.2f}",
+                         "Close": f"{_hi - 0.5:.2f}", "Open": f"{_hi - 0.6:.2f}"})
+    _bg2 = P.box_geometry(box_rows)
+    check("U: a rejection at a box high is a SELL fade on THAT edge (the side is the trade, not the edge)",
+          _bg2["trigger"]["state"] == "reject" and _bg2["trigger"]["side"] == "SELL"
+          and abs(_bg2["trigger"]["edge"] - _hi) < 1e-9,
+          str(_bg2["trigger"].get("detail")))
+    _st = P.box_status(_bg2, now=_dt(2026, 10, 7, 14, 0))
+    _geo = [c for c in _st["checks"] if c["key"] == "geometry"][0]
+    check("U: the spread as a share of R is measured on every box setup, and a tight stop cannot pass it",
+          _geo["state"] in ("warn", "fail") and _st["verdict"]["code"] != "candidate",
+          f"{_geo['state']} {_geo['detail']}")
+    check("U: the measured box verdict (8 geometries, 0 cleared) travels with every box read",
+          _st["measured"]["cells"] == 8 and _st["measured"]["cleared"] == 0)
+    check("U: a closed market blocks the box verdict before any setup is offered",
+          P.box_status(_bg2, now=_dt(2026, 10, 10, 12, 0))["verdict"]["tone"] == "block")
+    check("U: the box read refuses a tape too short to build a box instead of inventing one",
+          not P.box_geometry(u_rows(n=10))["ok"] and not P.box_geometry([])["ok"])
+
     # ── U10. read-only by construction ──
     import ast as _ast
     u_tree = _ast.parse(open(os.path.join(ROOT, "pressure.py")).read())

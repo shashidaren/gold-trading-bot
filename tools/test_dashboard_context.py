@@ -53,5 +53,111 @@ class DashboardContextTests(unittest.TestCase):
             self.assertIn(title, response.get_data(as_text=True))
 
 
+
+class BoxReadTests(unittest.TestCase):
+    """The dashboard's Boxes tab read layer (pressure.box_geometry / box_status)."""
+
+    def tape(self, n=40, px=100.0, atr=2.0, last=None, drift=0.0):
+        rows = []
+        p = px
+        for i in range(n):
+            o = p
+            c = o + drift
+            rows.append(dict(Timestamp=f"2026-10-07 {9 + i // 60:02d}:{i % 60:02d}:00",
+                             Open=f"{o:.2f}", High=f"{max(o, c) + 0.3:.2f}",
+                             Low=f"{min(o, c) - 0.3:.2f}", Close=f"{c:.2f}",
+                             ATR=f"{atr:.2f}"))
+            p = c
+        if last:
+            rows[-1].update(last)
+        return rows
+
+    def test_box_excludes_the_bar_being_judged(self):
+        rows = self.tape(n=30)
+        rows[-1].update({"High": "200.00", "Low": "50.00", "Close": "120.00"})
+        geom = P.box_geometry(rows)
+        box = geom["boxes"][0]
+        self.assertAlmostEqual(box["high"], 100.3, places=2)   # prior bars only
+        self.assertAlmostEqual(box["low"], 99.7, places=2)
+        self.assertNotIn(200.0, [box["high"], box["low"]])
+
+    def test_rejection_at_the_high_is_a_sell_and_quotes_that_edge(self):
+        rows = self.tape(n=30)
+        hi = max(float(r["High"]) for r in rows[-21:-1])
+        rows[-1].update({"High": f"{hi + 0.2:.2f}", "Low": f"{hi - 2.0:.2f}",
+                         "Close": f"{hi - 0.5:.2f}", "Open": f"{hi - 0.6:.2f}"})
+        geom = P.box_geometry(rows)
+        trig = geom["trigger"]
+        self.assertEqual(trig["state"], "reject")
+        self.assertEqual(trig["side"], "SELL")
+        self.assertAlmostEqual(trig["edge"], hi, places=2)      # the HIGH, not the low
+        # a fade stop is tight, so the spread must dominate R
+        self.assertGreater(trig["setup"]["cost_share_pct"], 20)
+
+    def test_a_break_price_left_days_ago_is_not_a_trigger(self):
+        rows = self.tape(n=40)
+        box_hi = max(float(r["High"]) for r in rows[-21:-1])
+        # close far above the box, but 10 bars ago: the crossing is not current
+        for i in range(30, 39):
+            rows[i].update({"Close": f"{box_hi + 8:.2f}", "High": f"{box_hi + 8.4:.2f}",
+                            "Low": f"{box_hi + 7.6:.2f}"})
+        geom = P.box_geometry(rows)
+        self.assertNotEqual(geom["trigger"]["state"], "break")
+
+    def test_a_fresh_break_is_a_trigger_on_that_edge(self):
+        rows = self.tape(n=40)
+        box_hi = max(float(r["High"]) for r in rows[-21:-1])
+        rows[-1].update({"Close": f"{box_hi + 1.0:.2f}", "High": f"{box_hi + 1.5:.2f}",
+                         "Low": f"{box_hi - 0.2:.2f}"})
+        geom = P.box_geometry(rows)
+        trig = geom["trigger"]
+        self.assertEqual((trig["state"], trig["side"]), ("break", "BUY"))
+        self.assertAlmostEqual(trig["edge"], box_hi, places=2)
+
+    def test_verdict_cannot_be_a_candidate_when_geometry_fails(self):
+        rows = self.tape(n=30)
+        hi = max(float(r["High"]) for r in rows[-21:-1])
+        rows[-1].update({"High": f"{hi + 0.2:.2f}", "Low": f"{hi - 2.0:.2f}",
+                         "Close": f"{hi - 0.5:.2f}", "Open": f"{hi - 0.6:.2f}"})
+        geom = P.box_geometry(rows)
+        status = P.box_status(geom, now=datetime(2026, 10, 7, 10, 0))
+        geo = [c for c in status["checks"] if c["key"] == "geometry"][0]
+        self.assertIn(geo["state"], ("warn", "fail"))
+        self.assertNotEqual(status["verdict"]["code"], "candidate")
+
+    def test_a_closed_market_blocks_before_anything_else(self):
+        rows = self.tape(n=30)
+        hi = max(float(r["High"]) for r in rows[-21:-1])
+        rows[-1].update({"High": f"{hi + 0.2:.2f}", "Low": f"{hi - 2.0:.2f}",
+                         "Close": f"{hi - 0.5:.2f}", "Open": f"{hi - 0.6:.2f}"})
+        geom = P.box_geometry(rows)
+        weekend = datetime(2026, 10, 10, 12, 0)          # a Saturday
+        status = P.box_status(geom, now=weekend)
+        self.assertEqual(status["verdict"]["tone"], "block")
+
+    def test_the_measured_verdict_travels_with_the_read(self):
+        status = P.box_status(P.box_geometry(self.tape(n=30)))
+        self.assertEqual(status["measured"]["cleared"], 0)
+        self.assertIn("no edge", status["measured"]["best"] + "no edge")
+
+    def test_short_or_gappy_tape_refuses_rather_than_guessing(self):
+        self.assertFalse(P.box_geometry([])["ok"])
+        self.assertFalse(P.box_geometry(self.tape(n=10))["ok"])
+        # two runs of 20 bars separated by hours: no 20-bar box exists at the join
+        rows = self.tape(n=20)
+        later = [dict(r, Timestamp=r["Timestamp"].replace("09:", "15:")) for r in self.tape(n=20)]
+        self.assertFalse(P.box_geometry(rows + later)["ok"])
+
+    def test_the_dashboard_renders_the_boxes_tab(self):
+        os.environ["GOLD_DATA_DIR"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        import dashboard
+        html = dashboard.app.test_client().get("/").get_data(as_text=True)
+        for needle in ("Boxes &amp; Timing", 'id="panel-boxes"', "Where the boxes are",
+                       "When to trade", "Measured, not assumed"):
+            self.assertIn(needle, html)
+        # a third tab must not break the switch itself
+        self.assertIn("var TABS = ['simple', 'boxes', 'details']", html)
+
+
 if __name__ == '__main__':
     unittest.main()

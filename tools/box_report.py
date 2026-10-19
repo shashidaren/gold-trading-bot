@@ -289,62 +289,35 @@ def _median(values):
 
 
 # ------------------------------------------------------------- live boxes
-def live_boxes(bars, cost):
-    """Current boxes and where the last close sits in each, in $ and ATR."""
-    if not bars:
+def live_boxes(rows, cost):
+    """Current boxes and where the last close sits in each, in $ and ATR.
+
+    The geometry lives in pressure.box_geometry() so the dashboard panel and
+    this report can never disagree about where a box is.
+    """
+    geom = P.box_geometry(rows, spread=cost)
+    if not geom.get("ok"):
         return {}
-    last = bars[-1]
-    start = run_offsets(bars)
-    i = len(bars) - 1
-    atr = last["atr"]
-    out = {"last_bar": last["ts"].strftime("%Y-%m-%d %H:%M"), "close": last["c"],
-           "atr": atr, "boxes": []}
-
-    specs = []
-    box = box_at(bars, i, 20, start)
-    if box:
-        specs.append(("20-bar level (the engine's own)", box[0], box[1]))
-    box = box_at(bars, i, 60, start)
-    if box:
-        specs.append(("last 1h (60 bars)", box[0], box[1]))
-    box = box_at(bars, i, 240, start)
-    if box:
-        specs.append(("last 4h (240 bars)", box[0], box[1]))
-
-    # prior complete UTC day — the most recent one that actually traded.
-    # A Sunday evening (or a half session) is not a day to draw a box on, so a
-    # date needs 600+ bars before it can be called the prior day's range.
-    day = last["ts"].date()
-    by_day = {}
-    for b in bars:
-        if b["ts"].date() < day:
-            by_day.setdefault(b["ts"].date(), []).append(b)
-    for d in sorted(by_day, reverse=True):
-        pd_bars = by_day[d]
-        if len(pd_bars) >= 600:
-            specs.append((f"prior day {d} (UTC)",
-                          max(b["h"] for b in pd_bars), min(b["l"] for b in pd_bars)))
-            break
-
-    for name, hi, lo in specs:
-        width = hi - lo
-        pos = (last["c"] - lo) / width * 100.0 if width > 0 else None
-        row = {"name": name, "high": round(hi, 2), "low": round(lo, 2),
-               "width_usd": round(width, 2),
-               "width_atr": round(width / atr, 2) if atr else None,
-               "position_pct": round(pos, 1) if pos is not None else None,
-               "dist_to_high_usd": round(hi - last["c"], 2),
-               "dist_to_low_usd": round(last["c"] - lo, 2),
-               "dist_to_high_atr": round((hi - last["c"]) / atr, 2) if atr else None,
-               "dist_to_low_atr": round((last["c"] - lo) / atr, 2) if atr else None}
-        # what the repo's structural rule would put on each edge
-        for side, edge in (("BUY", hi), ("SELL", lo)):
-            risk = P.structural_risk(last["c"], atr, edge) if atr else None
-            row[f"{side.lower()}_structural_risk_usd"] = round(risk, 2) if risk else None
-            row[f"{side.lower()}_tp_usd"] = round(1.5 * risk, 2) if risk else None
-            row[f"{side.lower()}_cost_share_pct"] = (round(100.0 * cost / risk, 1)
-                                                     if risk else None)
-        out["boxes"].append(row)
+    out = {"last_bar": geom["as_of"].strftime("%Y-%m-%d %H:%M"), "close": geom["close"],
+           "atr": geom["atr"], "boxes": []}
+    for b in geom["boxes"]:
+        out["boxes"].append({
+            "name": b["name"], "high": round(b["high"], 2), "low": round(b["low"], 2),
+            "width_usd": round(b["width"], 2), "width_atr": round(b["width_atr"], 2),
+            "position_pct": round(b["pos_pct"], 1) if b["pos_pct"] is not None else None,
+            "dist_to_high_usd": round(b["dist_up_usd"], 2),
+            "dist_to_low_usd": round(b["dist_down_usd"], 2),
+            "dist_to_high_atr": round(b["dist_up_atr"], 2),
+            "dist_to_low_atr": round(b["dist_down_atr"], 2),
+            "buy_structural_risk_usd": round(b["buy"]["engine_risk"], 2) if b["buy"]["engine_risk"] else None,
+            "buy_tp_usd": round(b["buy"]["engine_tp"], 2) if b["buy"]["engine_tp"] else None,
+            "buy_cost_share_pct": (round(b["buy"]["cost_share_engine_pct"], 1)
+                                   if b["buy"]["cost_share_engine_pct"] else None),
+            "sell_structural_risk_usd": round(b["sell"]["engine_risk"], 2) if b["sell"]["engine_risk"] else None,
+            "sell_tp_usd": round(b["sell"]["engine_tp"], 2) if b["sell"]["engine_tp"] else None,
+            "sell_cost_share_pct": (round(b["sell"]["cost_share_engine_pct"], 1)
+                                    if b["sell"]["cost_share_engine_pct"] else None),
+        })
     return out
 
 
@@ -460,7 +433,7 @@ def main(argv=None):
     first = bars[0]["ts"].strftime("%Y-%m-%d %H:%M")
     last = bars[-1]["ts"].strftime("%Y-%m-%d %H:%M")
 
-    live = live_boxes(bars, args.spread)
+    live = live_boxes(rows, args.spread)
     scans = {n: scan(bars, n, HORIZONS[n], args.spread) for n in DEFAULT_N}
 
     if args.json:

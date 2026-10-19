@@ -14,7 +14,9 @@ the measured move (one box width)**. That is already what the engine's structura
 stop does with its 20-bar level. Boxes tell you *where*, never *when*.
 
 **Files:** `tools/box_report.py` (new, read-only, stdlib + `pressure`),
-`tools/test_box_report.py` (14 hermetic tests), `README.md`, `docs/HANDOFF.md`.
+`tools/test_box_report.py` (14 hermetic tests), the dashboard's **📦 Boxes & Timing**
+tab (`pressure.box_geometry` / `pressure.box_status`, §7), `README.md`,
+`docs/HANDOFF.md`.
 Method and numbers below are reproducible with
 `python3 tools/box_report.py` (add `--json`, `--root DIR`, `--spread …`).
 
@@ -194,7 +196,55 @@ Wilson bound above ~54%; at 1:1.5, above ~43%. Anything less is a good week.
   6.1 days of a 14-day target; $0.55 is its median, $0.40 is the registered
   model.
 
-## 6. Next steps (in order, all optional)
+## 6. The dashboard tab — "Boxes & Timing" (shipped 2026-10-20)
+
+`dashboard.py` now has a third tab (`?tab=boxes`, also remembered in
+`localStorage`). It is **display-only, exactly like the pressure/setup panels**:
+no order, no gate, no write, no engine import.
+
+What it shows, top to bottom:
+
+1. **Verdict banner** — one of
+   `No box setup — mid-box` · `Waiting — at the edge, no trigger` ·
+   `Blocked — session / risk state / volatility / feed` ·
+   `Candidate, weak geometry` · `Candidate — conditions line up (context only)`.
+   The banner never says "buy" or "sell"; the setup card does, and it is labelled
+   context.
+2. **Where the boxes are** — the engine's own 20-bar level, the last 1h (60 bars),
+   the last 4h (240 bars) and the prior *trading* day (a Sunday evening is not a
+   day to draw a box on), each with in-box position and $ distance to both edges.
+3. **When to trade — the check**, seven measured preconditions:
+   **Location** (≤ 0.5 ATR from an edge, or a live trigger at one) ·
+   **Trigger** (a *fresh* close beyond an edge, or a rejection of it) ·
+   **Feed** (last bar age; a closed market makes staleness expected, not a fault) ·
+   **Session** (weekend / daily break / the engine's direction-aware blackouts) ·
+   **Risk state** (SL cooldown, daily breaker) ·
+   **Volatility** (the engine's own $1.10–$4.50 ATR band) ·
+   **Geometry** (the spread as a share of R — the check that kills most box setups).
+4. **If you take it** — entry, stop (past the far edge), target (measured move),
+   risk, reward, R:R, the spread's share of R, and what the engine's structural
+   stop would do on the same edge.
+5. **Measured, not assumed** — the footer prints this document's verdict:
+   8 geometries, 0 cleared the reference; 74–75% of breaks fail within 15 min.
+
+**Why the checks and not a signal.** The measurement in §2 says a box breakout has
+no edge; a panel that simply said "BUY" at an edge would be a lie with a nice
+colour. The checklist answers the owner's actual question — *when* is a box trade
+worth considering — by naming the conditions that must be true, and it refuses to
+turn "all green" into a forecast. The geometry line is deliberately brutal: at
+today's ATR a fade's stop is $0.66 and the $0.55 spread is **83% of R**, which is
+the real reason most box trades lose.
+
+**Architecture.** The read layer is `pressure.box_geometry()` (pure, cacheable)
+plus `pressure.box_status()` (live checks). `pressure.py` stays stdlib-only and
+read-only — Scenario U's AST checks still pass. `tools/box_report.py` now calls
+the same `box_geometry()`, so the tab and the CLI cannot disagree about where a
+box is. Dashboard geometry is cached against the log file's size+mtime; the
+checks recompute on every request.
+
+---
+
+## 7. Next steps (in order, all optional)
 
 1. Run `python3 tools/box_report.py` at the start of a session — boxes + the
    honest verdicts, one screen, no writes.

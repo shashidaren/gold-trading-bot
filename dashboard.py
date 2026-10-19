@@ -82,8 +82,9 @@ HTML_TEMPLATE = """
         <!-- Simple / Details tabs -->
         <div class="flex items-center gap-2 mb-6 border-b border-slate-800 pb-2">
             <button id="tab-simple" onclick="showTab('simple')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-amber-500 text-slate-900">✨ Simple Summary</button>
+            <button id="tab-boxes" onclick="showTab('boxes')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📦 Boxes &amp; Timing</button>
             <button id="tab-details" onclick="showTab('details')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📊 Full Dashboard</button>
-            <span class="ml-auto text-[11px] text-slate-500 hidden md:inline">Simple is calm/volatile at a glance · Full shows every gate. Both are <span class="text-slate-300">paper only</span> — no real orders.</span>
+            <span class="ml-auto text-[11px] text-slate-500 hidden md:inline">Simple is calm/volatile at a glance · Boxes is location + the condition checklist · Full shows every gate. All <span class="text-slate-300">paper only</span> — no real orders.</span>
         </div>
 
         <!-- ================= SIMPLE TAB ================= -->
@@ -232,6 +233,139 @@ HTML_TEMPLATE = """
             {% endif %}
         </div>
         <!-- ================= END SIMPLE TAB ================= -->
+
+        <!-- ================= BOXES TAB ================= -->
+        <div id="panel-boxes" class="hidden">
+            {% if ctx.boxes and ctx.boxes.ok %}
+            {% set bx = ctx.boxes %}
+            {% set v = bx.verdict %}
+            <!-- Verdict -->
+            <div class="rounded-2xl border p-5 mb-5
+                {% if v.tone == 'ok' %} bg-emerald-950/30 border-emerald-700
+                {% elif v.tone == 'warn' %} bg-amber-950/30 border-amber-700
+                {% elif v.tone == 'block' %} bg-rose-950/30 border-rose-700
+                {% else %} bg-slate-800 border-slate-700 {% endif %}">
+                <div class="flex flex-col md:flex-row md:items-center gap-4">
+                    <div class="text-4xl">{% if v.tone == 'ok' %}📦{% elif v.tone == 'warn' %}⏳{% elif v.tone == 'block' %}⛔{% else %}💤{% endif %}</div>
+                    <div class="flex-1">
+                        <div class="text-xl font-semibold">{{ v.headline }}</div>
+                        <div class="text-sm text-slate-300 mt-1">{{ v.detail }}</div>
+                    </div>
+                    <div class="text-right text-xs text-slate-400 space-y-1">
+                        <div>last bar <span class="font-mono text-slate-200">{{ bx.geometry.as_of.strftime('%Y-%m-%d %H:%M') }}</span> UTC</div>
+                        <div>close <span class="font-mono text-slate-200">${{ "%.2f"|format(bx.geometry.close) }}</span> · ATR <span class="font-mono text-slate-200">${{ "%.2f"|format(bx.geometry.atr) }}</span></div>
+                        <div>assumed spread <span class="font-mono text-slate-200">${{ "%.2f"|format(bx.spread_usd) }}</span> round trip</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-5">
+                <!-- Boxes -->
+                <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+                    <div class="text-sm font-semibold text-slate-200 mb-1">📍 Where the boxes are</div>
+                    <div class="text-[11px] text-slate-500 mb-3">Nearest edge highlighted. The 20-bar level is the one <span class="font-mono">engine.py</span> itself tests.</div>
+                    <table class="w-full text-xs text-slate-300">
+                        <thead class="text-slate-400">
+                            <tr>
+                                <th class="text-left pb-1">box</th>
+                                <th class="text-right pb-1">high</th>
+                                <th class="text-right pb-1">low</th>
+                                <th class="text-right pb-1">width</th>
+                                <th class="text-right pb-1">in-box</th>
+                                <th class="text-right pb-1">to hi</th>
+                                <th class="text-right pb-1">to lo</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {% for b in bx.geometry.boxes %}
+                            <tr class="border-t border-slate-700/70 {% if b.name == bx.nearest.box %}bg-amber-500/10{% endif %}">
+                                <td class="py-1.5 pr-2">{{ b.name }}</td>
+                                <td class="text-right font-mono">{{ "%.2f"|format(b.high) }}</td>
+                                <td class="text-right font-mono">{{ "%.2f"|format(b.low) }}</td>
+                                <td class="text-right font-mono">{{ "%.2f"|format(b.width) }} <span class="text-slate-500">({{ "%.1f"|format(b.width_atr) }}a)</span></td>
+                                <td class="text-right font-mono {% if b.pos_pct is not none and (b.pos_pct < 0 or b.pos_pct > 100) %}text-rose-400{% endif %}">
+                                    {% if b.pos_pct is none %}—{% else %}{{ "%.0f"|format(b.pos_pct) }}%{% endif %}
+                                </td>
+                                <td class="text-right font-mono {% if b.dist_up_atr is not none and b.dist_up_atr|abs <= 0.5 %}text-amber-300{% endif %}">{{ "%.2f"|format(b.dist_up_usd) }}</td>
+                                <td class="text-right font-mono {% if b.dist_down_atr is not none and b.dist_down_atr|abs <= 0.5 %}text-amber-300{% endif %}">{{ "%.2f"|format(b.dist_down_usd) }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                    <div class="text-[11px] text-slate-500 mt-3">
+                        in-box = where the close sits inside that box (0% = at the low, 100% = at the high; outside is flagged).
+                        Distance columns are $ from the last close.
+                    </div>
+                </div>
+
+                <!-- Checklist -->
+                <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+                    <div class="text-sm font-semibold text-slate-200 mb-1">🎯 When to trade — the check</div>
+                    <div class="text-[11px] text-slate-500 mb-3">Every line is a measurement, not an order. A trade needs every one of them — and the last is the one that decides most box setups.</div>
+                    <div class="space-y-2">
+                    {% for c in bx.checks %}
+                        <div class="flex gap-2 items-start text-xs">
+                            <span class="text-base leading-none mt-[1px]">
+                                {% if c.state == 'pass' %}✅{% elif c.state == 'warn' %}⚠️{% elif c.state == 'fail' %}🚫{% else %}–{% endif %}
+                            </span>
+                            <div class="flex-1">
+                                <span class="font-semibold
+                                    {% if c.state == 'pass' %}text-emerald-400{% elif c.state == 'warn' %}text-amber-300{% elif c.state == 'fail' %}text-rose-400{% else %}text-slate-400{% endif %}">{{ c.label }}</span>
+                                <span class="text-slate-300"> — {{ c.detail }}</span>
+                            </div>
+                        </div>
+                    {% endfor %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- The setup, if there is one -->
+            {% if bx.setup %}
+            <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4 mt-5">
+                <div class="flex flex-col md:flex-row md:items-center gap-3">
+                    <div class="text-sm font-semibold text-slate-200">
+                        If you take it — <span class="{% if bx.setup.side == 'BUY' %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ bx.setup.side }}</span>
+                        at the {{ bx.setup.box }} {{ bx.setup.edge_name if bx.setup.edge_name else '' }} <span class="text-slate-500">({{ bx.setup.state }})</span>
+                    </div>
+                    <div class="text-[11px] text-slate-500 md:ml-auto">stop past the far edge, target the measured move — the only geometry that came near break-even</div>
+                </div>
+                <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mt-3 text-xs">
+                    <div><div class="text-slate-500">entry</div><div class="font-mono text-slate-200 text-sm">{{ "%.2f"|format(bx.setup.entry) }}</div></div>
+                    <div><div class="text-slate-500">stop</div><div class="font-mono text-slate-200 text-sm">{{ "%.2f"|format(bx.setup.stop) }}</div></div>
+                    <div><div class="text-slate-500">target</div><div class="font-mono text-slate-200 text-sm">{{ "%.2f"|format(bx.setup.target) }}</div></div>
+                    <div><div class="text-slate-500">risk</div><div class="font-mono text-slate-200 text-sm">${{ "%.2f"|format(bx.setup.risk_usd) }}</div></div>
+                    <div><div class="text-slate-500">reward</div><div class="font-mono text-slate-200 text-sm">${{ "%.2f"|format(bx.setup.reward_usd) }} <span class="text-slate-500">({{ "%.1f"|format(bx.setup.rr) }}:1)</span></div></div>
+                    <div><div class="text-slate-500">spread share of R</div>
+                        <div class="font-mono text-sm {% if bx.setup.cost_share_pct > 20 %}text-rose-400{% elif bx.setup.cost_share_pct > 10 %}text-amber-300{% else %}text-emerald-400{% endif %}">{{ "%.0f"|format(bx.setup.cost_share_pct) }}%</div></div>
+                </div>
+                <div class="text-[11px] text-slate-500 mt-3">
+                    The engine's own structural stop on that same edge would risk ${{ "%.2f"|format(bx.setup.engine_risk) }}
+                    for a ${{ "%.2f"|format(bx.setup.engine_tp) }} target — with the spread at
+                    {{ "%.0f"|format(bx.setup.engine_cost_share_pct) }}% of R.
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Honesty footer -->
+            <div class="mt-5 rounded-xl border border-slate-700/60 bg-slate-900/60 p-3 text-[11px] text-slate-500">
+                <span class="text-slate-300 font-semibold">Measured, not assumed:</span>
+                on this log (2026-10-20) {{ bx.measured.cells }} breakout/fade geometries were tested and
+                <span class="text-rose-400">{{ bx.measured.cleared }} cleared the no-edge reference</span>;
+                {{ "%.0f"|format(bx.measured.false_break_pct_20) }}–{{ "%.0f"|format(bx.measured.false_break_pct_60) }}% of closes outside a box were back inside within 15 minutes.
+                The checklist tells you when the <span class="text-slate-300">conditions</span> line up — it cannot make an edge appear.
+                <span class="text-slate-300">A box answers WHERE, not WHEN: a place to put the stop, not a prediction.</span>
+                Best measured geometry: {{ bx.measured.best }}.
+                Display-only, paper only — no order is placed. Method: <span class="font-mono">docs/ANALYSIS-2026-10-20-box-theory-manual-trading.md</span>
+            </div>
+            {% else %}
+            <div class="rounded-2xl border border-slate-700 bg-slate-800 p-5">
+                <div class="text-lg font-semibold text-slate-200">📦 Box read unavailable</div>
+                <div class="text-sm text-slate-400 mt-1">{{ ctx.boxes.reason if ctx.boxes else 'the read layer did not load' }}</div>
+            </div>
+            {% endif %}
+        </div>
+        <!-- ================= END BOXES TAB ================= -->
+
 
         <!-- ================= DETAILS TAB (original dashboard) ================= -->
         <div id="panel-details" class="hidden">
@@ -1019,36 +1153,35 @@ HTML_TEMPLATE = """
 
     </div>
     <script>
+    var TABS = ['simple', 'boxes', 'details'];
     function showTab(name) {
-        var simple = document.getElementById('panel-simple');
-        var details = document.getElementById('panel-details');
-        var tSimple = document.getElementById('tab-simple');
-        var tDetails = document.getElementById('tab-details');
-        if (name === 'simple') {
-            simple.classList.remove('hidden');
-            details.classList.add('hidden');
-            tSimple.className = "px-4 py-2 rounded-t-lg text-sm font-semibold bg-amber-500 text-slate-900";
-            tDetails.className = "px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700";
-            try { localStorage.setItem('gold_tab', 'simple'); } catch(e) {}
-        } else {
-            details.classList.remove('hidden');
-            simple.classList.add('hidden');
-            tDetails.className = "px-4 py-2 rounded-t-lg text-sm font-semibold bg-amber-500 text-slate-900";
-            tSimple.className = "px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700";
-            try { localStorage.setItem('gold_tab', 'details'); } catch(e) {}
-        }
+        TABS.forEach(function(t) {
+            var panel = document.getElementById('panel-' + t);
+            var btn = document.getElementById('tab-' + t);
+            if (!panel || !btn) return;
+            if (t === name) {
+                panel.classList.remove('hidden');
+                btn.className = "px-4 py-2 rounded-t-lg text-sm font-semibold bg-amber-500 text-slate-900";
+            } else {
+                panel.classList.add('hidden');
+                btn.className = "px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700";
+            }
+        });
+        try { localStorage.setItem('gold_tab', name); } catch(e) {}
     }
     (function() {
+        var start = 'simple';
         try {
             var saved = localStorage.getItem('gold_tab');
-            if (saved === 'details') showTab('details');
-            else showTab('simple');
-        } catch(e) { showTab('simple'); }
-        // Also allow ?tab=details deep link
+            if (TABS.indexOf(saved) >= 0) start = saved;
+        } catch(e) {}
+        // Also allow ?tab=simple|boxes|details deep links
         try {
             var params = new URLSearchParams(window.location.search);
-            if (params.get('tab') === 'details') showTab('details');
+            var wanted = params.get('tab');
+            if (TABS.indexOf(wanted) >= 0) start = wanted;
         } catch(e) {}
+        showTab(start);
     })();
     </script>
 </body>
@@ -1212,6 +1345,33 @@ def pressure_context():
     return ctx
 
 
+_box_cache = {"key": None, "geom": None}
+
+
+def box_context(portfolio=None, feed=None):
+    """Boxes + the condition checklist (display-only, cached geometry).
+
+    Geometry is rebuilt only when the log file changes; the checklist is live
+    (session, cooldown, feed age) because those are the parts that move minute
+    to minute. Nothing here is an entry rule — see pressure.box_status.
+    """
+    if PR is None:
+        return {"ok": False, "reason": f"pressure.py unavailable: {_PR_IMPORT_ERROR}"}
+    key = _file_key(LOG_FILE_PATH)
+    if _box_cache["geom"] is None or key != _box_cache["key"]:
+        try:
+            rows = PR.tail_rows(LOG_FILE_PATH, 9000, window_bytes=1024 * 1024)
+            _box_cache["geom"] = PR.box_geometry(rows)
+            _box_cache["key"] = key
+        except Exception as exc:
+            return {"ok": False, "reason": f"box geometry failed: {exc}"}
+    try:
+        return PR.box_status(_box_cache["geom"], portfolio=portfolio, feed=feed,
+                             now=datetime.now(timezone.utc).replace(tzinfo=None))
+    except Exception as exc:
+        return {"ok": False, "reason": f"box status failed: {exc}"}
+
+
 def open_trade_read(status, log_tail):
     """Unrealized progress of the open trade in $ and R (last logged close as price)."""
     if PR is None or not status.get("trade_active"):
@@ -1323,6 +1483,7 @@ def index():
     eras = compute_era_stats(TRADES_FILE_PATH)
     ctx = pressure_context()
     if PR and not ctx.get("error"):
+        ctx["boxes"] = box_context(ctx.get("portfolio"), ctx.get("feed"))
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         quotes = PR.tail_rows(os.path.join(DATA_DIR, "xm_data", "quotes-" + now.strftime("%Y-%m-%d") + ".csv"), 240)
         ctx["risk_now"] = PR.risk_read(status, quotes, now)

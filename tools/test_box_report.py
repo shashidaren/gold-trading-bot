@@ -124,13 +124,13 @@ class LiveRead(unittest.TestCase):
         rows = flat(0, n=700)                       # day 1
         rows += flat(1440, n=700)                   # day 2
         rows += flat(2880, n=100)                   # day 3, still trading
-        live = B.live_boxes(B.tape(rows), 0.55)
+        live = B.live_boxes(rows, 0.55)
         names = [b["name"] for b in live["boxes"]]
         self.assertTrue(any("day" in n for n in names))
         self.assertFalse(any("1970-01-01" in n for n in names))
 
     def test_boxes_carry_structural_risk_and_cost_share(self):
-        live = B.live_boxes(B.tape(flat(0, n=60)), 0.55)
+        live = B.live_boxes(flat(0, n=60), 0.55)
         box = live["boxes"][0]
         self.assertGreater(box["buy_structural_risk_usd"], 0)
         self.assertAlmostEqual(box["buy_tp_usd"], 1.5 * box["buy_structural_risk_usd"], delta=0.02)
