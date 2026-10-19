@@ -9,6 +9,10 @@ WHAT THIS IS
                                                     -> setup_read()
       3. "Is the book / this experiment in a state where that matters?"
                                                     -> portfolio_read(), book_read(), feed_read()
+      4. "Given a very strong signal, where did price actually head?"
+                                                    -> signal_outlook() / outlook_now()
+         (historical frequencies over the bot's own taken signals — a cone
+         and base rates, never a forecast; see the 5b banner below)
 
 WHAT THIS IS NOT
     It is NOT a strategy input. Nothing in here is imported by engine.py or
@@ -1129,6 +1133,299 @@ def calibration(log_rows, trades, cutover=STRUCT_STOP_CUTOVER):
         "verdict": verdict, "reliable": reliable, "reason": reason,
         "era_label": f"entries ≥ {cutover:%Y-%m-%d %H:%M} UTC",
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5b. SIGNAL OUTLOOK — "given a very strong signal, where did price head?"
+# Historical frequencies over this bot's own taken signals. Not a forecast.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# analysis choices (NOT engine mirrors — nothing here feeds a gate):
+OUTLOOK_HORIZONS = (15, 30, 60, 240)     # minutes ahead; 240 = MAX_HOLD lifetime
+OUTLOOK_PRIMARY_HORIZON = 30             # struct-era median hold ~25 min (whole book ~9)
+OUTLOOK_MAX_GAP_MIN = 5.0                # a bigger log hole censors the window
+OUTLOOK_TAIL_SLACK_MIN = 2.0             # last bar must reach the horizon (− slack)
+OUTLOOK_MIN_COVERAGE = 0.7               # need >= 70% of the horizon's 1-min bars
+OUTLOOK_COST_USD = 0.40                  # assumed round trip (registered, not measured)
+
+
+def _quantile(values, p):
+    """Linear-interpolated quantile of the non-None values (None when empty)."""
+    vals = sorted(v for v in values if v is not None)
+    if not vals:
+        return None
+    if len(vals) == 1:
+        return vals[0]
+    k = (len(vals) - 1) * p
+    f = int(k)
+    return vals[f] + (vals[f + 1] - vals[f]) * (k - f) if f + 1 < len(vals) else vals[f]
+
+
+def _outlook_bars(rows):
+    """Parsed, time-sorted OHLC bars for the forward walks (tolerant, like the rest)."""
+    bars = []
+    for r in rows:
+        ts = parse_ts(r.get("Timestamp"))
+        o, h, l, c = (parse_float(r.get(k)) for k in ("Open", "High", "Low", "Close"))
+        if ts is None or None in (o, h, l, c):
+            continue
+        bars.append({"ts": ts, "o": o, "h": h, "l": l, "c": c,
+                     "ema_fast": parse_float(r.get("EMA_50")),
+                     "ema_slow": parse_float(r.get("EMA_200")),
+                     "atr": parse_float(r.get("ATR"))})
+    bars.sort(key=lambda b: b["ts"])
+    return bars
+
+
+def _forward_window(bars, ts_list, start, horizon_min):
+    """Bars in (start, start+horizon], or None when the window is censored.
+
+    Censored (never guessed across): a log gap > OUTLOOK_MAX_GAP_MIN inside the
+    window, the tail falling short of the horizon (market closure / end of log),
+    or < OUTLOOK_MIN_COVERAGE of the expected 1-min bars present.
+    """
+    import bisect
+    end = start + timedelta(minutes=horizon_min)
+    w = bars[bisect.bisect_right(ts_list, start):bisect.bisect_right(ts_list, end)]
+    if not w:
+        return None
+    prev = start
+    for b in w:
+        if (b["ts"] - prev).total_seconds() / 60.0 > OUTLOOK_MAX_GAP_MIN:
+            return None
+        prev = b["ts"]
+    if (end - w[-1]["ts"]).total_seconds() / 60.0 > OUTLOOK_TAIL_SLACK_MIN:
+        return None
+    if len(w) < OUTLOOK_MIN_COVERAGE * horizon_min:
+        return None
+    return w
+
+
+def _forward_path(window, side, entry, risk, atr, cost):
+    """Signed forward facts for one signal. + always means 'the trade's way'.
+
+    Drift/MFE/MAE describe the raw price path over the full window (exits and
+    the BE ever-hit flags count touches anywhere in the window, while `race`
+    is the first of the +1.5R / −1R barriers to print ("AMB" when one 1-min
+    bar spans both — intrabar order is unknowable from this log). A SELL's
+    favourable extreme is the bar LOW (HANDOFF §8).
+    """
+    d = 1.0 if side == "BUY" else -1.0
+    drift = d * (window[-1]["c"] - entry)
+    if side == "BUY":
+        mfe = max(b["h"] for b in window) - entry
+        mae = entry - min(b["l"] for b in window)
+    else:
+        mfe = entry - min(b["l"] for b in window)
+        mae = max(b["h"] for b in window) - entry
+    tp_lvl = entry + d * RR_TARGET * risk
+    sl_lvl = entry - d * risk
+    be_lvl = entry + d * BE_TRIGGER_R * risk
+    ever = {"tp": False, "sl": False, "be": False}
+    race = None
+    for b in window:
+        if side == "BUY":
+            hit_tp, hit_sl, hit_be = b["h"] >= tp_lvl, b["l"] <= sl_lvl, b["h"] >= be_lvl
+        else:
+            hit_tp, hit_sl, hit_be = b["l"] <= tp_lvl, b["h"] >= sl_lvl, b["l"] <= be_lvl
+        ever["tp"] |= hit_tp
+        ever["sl"] |= hit_sl
+        ever["be"] |= hit_be
+        if race is None and (hit_tp or hit_sl):
+            race = "AMB" if (hit_tp and hit_sl) else ("TP" if hit_tp else "SL")
+    return {
+        "drift_usd": drift, "drift_r": drift / risk,
+        "drift_atr": (drift / atr) if atr else None,
+        "fav": drift > 0, "fav_cost": drift > cost,
+        "mfe_r": mfe / risk, "mae_r": mae / risk,
+        "ever_tp": ever["tp"], "ever_sl": ever["sl"], "ever_be": ever["be"],
+        "race": race,
+    }
+
+
+def _summarise_paths(paths):
+    """One horizon cell: how often, how far, which barrier first (Wilson CIs)."""
+    n = len(paths)
+    if not n:
+        return {"n": 0}
+    fav = sum(1 for p in paths if p["fav"])
+    fav_cost = sum(1 for p in paths if p["fav_cost"])
+    race_tp = sum(1 for p in paths if p["race"] == "TP")
+    race_sl = sum(1 for p in paths if p["race"] == "SL")
+    decisive = race_tp + race_sl
+    dr = [p["drift_r"] for p in paths]
+    return {
+        "n": n,
+        "fav_n": fav, "fav_pct": 100.0 * fav / n, "fav_ci": wilson_interval(fav, n),
+        "fav_cost_n": fav_cost, "fav_cost_pct": 100.0 * fav_cost / n,
+        "fav_cost_ci": wilson_interval(fav_cost, n),
+        "drift_r_median": _quantile(dr, 0.5), "drift_r_mean": sum(dr) / n,
+        "drift_r_q25": _quantile(dr, 0.25), "drift_r_q75": _quantile(dr, 0.75),
+        "drift_atr_median": _quantile([p["drift_atr"] for p in paths], 0.5),
+        "drift_usd_median": _quantile([p["drift_usd"] for p in paths], 0.5),
+        "mfe_r_median": _quantile([p["mfe_r"] for p in paths], 0.5),
+        "mae_r_median": _quantile([p["mae_r"] for p in paths], 0.5),
+        "ever_be_pct": 100.0 * sum(1 for p in paths if p["ever_be"]) / n,
+        "ever_tp_pct": 100.0 * sum(1 for p in paths if p["ever_tp"]) / n,
+        "ever_sl_pct": 100.0 * sum(1 for p in paths if p["ever_sl"]) / n,
+        "race_tp": race_tp, "race_sl": race_sl,
+        "race_amb": sum(1 for p in paths if p["race"] == "AMB"),
+        "race_none": sum(1 for p in paths if p["race"] is None),
+        "race_decisive": decisive,
+        "tp_first_pct": (100.0 * race_tp / decisive) if decisive else None,
+        "tp_first_ci": wilson_interval(race_tp, decisive) if decisive else (None, None),
+    }
+
+
+def signal_outlook(log_rows, trades, cutover=STRUCT_STOP_CUTOVER,
+                   horizons=OUTLOOK_HORIZONS, cost=OUTLOOK_COST_USD):
+    """Where price actually went after this bot's full (all-gates) signals.
+
+    The sample is the ledger itself: every closed trade IS a "very strong
+    signal" by the engine's own definition (all funnel gates + the risk layer
+    passed). Skipped signals are excluded on purpose — `skipped_trades.csv`
+    does not log a side, and reconstructing one would need a second funnel
+    implementation that can drift. The one-position rule also censors
+    overlapping signals; this measures the signals the bot acted on.
+
+    Risk is the reward leg (HANDOFF §8), so ratcheted rows keep their original
+    geometry. The path starts at the first bar stamped strictly after
+    Entry_Time (the signal bar's own range is never counted). Baseline =
+    non-overlapping every-Hth-bar drift in the EMA-trend direction over the
+    same era — "just follow the trend anywhere" — so the signal rows have
+    something honest to beat. Display-only: no number here is an entry
+    condition, a sizing input or a forecast (docs/HANDOFF.md §11).
+    """
+    if not log_rows or not trades:
+        return {"ok": False, "reason": "needs the log and the ledger"}
+    bars = _outlook_bars(log_rows)
+    if not bars:
+        return {"ok": False, "reason": "no parsable log bars"}
+    ts_list = [b["ts"] for b in bars]
+
+    sample, excluded = [], 0
+    for t in trades:
+        et = parse_ts(t.get("Entry_Time"))
+        side = (t.get("Trade_Type") or "").strip().upper()
+        entry = parse_float(t.get("Entry_Price"))
+        atr = parse_float(t.get("ATR_At_Entry"))
+        risk = trade_risk(t)
+        if et is None or et < cutover:
+            continue
+        if side not in ("BUY", "SELL") or entry is None or not risk or not atr:
+            excluded += 1
+            continue
+        xt = parse_ts(t.get("Exit_Time"))
+        sample.append({"side": side, "entry_t": et, "entry": entry, "risk": risk,
+                       "atr": atr, "reason": (t.get("Exit_Reason") or "").strip().upper(),
+                       "hold_min": ((xt - et).total_seconds() / 60.0) if xt else None})
+    if not sample:
+        return {"ok": False, "reason": f"no usable trades in the era (cutover {cutover:%Y-%m-%d %H:%M})"}
+
+    def group(rows):
+        counts = {"TP": 0, "SL": 0, "BE": 0, "TIME": 0, "other": 0}
+        for r in rows:
+            counts[r["reason"] if r["reason"] in counts else "other"] += 1
+        cells = {}
+        for h in horizons:
+            paths = []
+            for r in rows:
+                w = _forward_window(bars, ts_list, r["entry_t"], h)
+                if w is not None:
+                    paths.append(_forward_path(w, r["side"], r["entry"], r["risk"], r["atr"], cost))
+            cell = _summarise_paths(paths)
+            cell["censored"] = len(rows) - cell["n"]
+            cells[h] = cell
+        return {"n": len(rows), "outcomes": counts, "horizons": cells}
+
+    baseline = {}
+    for h in horizons:
+        drifts, i = [], 0
+        while i < len(bars):
+            b = bars[i]
+            i += h
+            if b["ts"] < cutover or None in (b["ema_fast"], b["ema_slow"]) or not b["atr"]:
+                continue
+            if b["ema_fast"] == b["ema_slow"]:
+                continue
+            w = _forward_window(bars, ts_list, b["ts"], h)
+            if w is None:
+                continue
+            d = 1.0 if b["ema_fast"] > b["ema_slow"] else -1.0
+            drifts.append(d * (w[-1]["c"] - b["c"]) / b["atr"])
+        fav = sum(1 for v in drifts if v > 0)
+        baseline[h] = {"n": len(drifts),
+                       "fav_pct": (100.0 * fav / len(drifts)) if drifts else None,
+                       "fav_ci": wilson_interval(fav, len(drifts)) if drifts else (None, None),
+                       "drift_atr_median": _quantile(drifts, 0.5)}
+
+    holds = [r["hold_min"] for r in sample if r["hold_min"] is not None]
+    return {
+        "ok": True, "cutover": cutover, "cost": cost, "horizons": tuple(horizons),
+        "era_label": f"entries ≥ {cutover:%Y-%m-%d %H:%M} UTC",
+        "n": len(sample), "excluded": excluded,
+        "hold_median_min": _quantile(holds, 0.5), "hold_p90_min": _quantile(holds, 0.9),
+        # driftless first-hit probability for +1.5R vs −1R (no ratchet/costs):
+        "barrier_reference_pct": 100.0 / (1.0 + RR_TARGET),
+        "pooled": group(sample),
+        "sides": {s: group([r for r in sample if r["side"] == s]) for s in ("BUY", "SELL")},
+        "baseline": baseline,
+    }
+
+
+def outlook_now(setup, outlook, horizon=OUTLOOK_PRIMARY_HORIZON):
+    """Apply the era base rates to the last bar IF a side is fully ready (8/8).
+
+    The cone transfers historical drift in R onto today's structural risk
+    (cone = entry ± drift-R quantile × today's risk) — an explicit assumption,
+    printed wherever the numbers are shown. Returns ready_side=None (with the
+    gate counts) when no side passed every gate: there is no "almost" read.
+    """
+    if not setup.get("ok"):
+        return {"ok": False, "reason": setup.get("reason", "setup unavailable")}
+    if not outlook.get("ok"):
+        return {"ok": False, "reason": outlook.get("reason", "outlook unavailable")}
+    out = {"ok": True, "horizon": horizon, "as_of": setup.get("as_of"),
+           "close": setup["close"], "ready_side": None,
+           "passed": {s: setup[s]["passed"] for s in ("BUY", "SELL")},
+           "total": {s: setup[s]["total"] for s in ("BUY", "SELL")}}
+    for side in ("BUY", "SELL"):
+        if not setup[side].get("ready"):
+            continue
+        level = setup[side]["level"]
+        risk = structural_risk(setup["close"], setup["atr"], level)
+        d = 1.0 if side == "BUY" else -1.0
+        cell = outlook["sides"][side]["horizons"].get(horizon, {})
+        pooled = outlook["pooled"]["horizons"].get(horizon, {})
+
+        def cone(c):
+            if not c.get("n") or c.get("drift_r_median") is None:
+                return None
+            return {"q25": setup["close"] + d * c["drift_r_q25"] * risk,
+                    "median": setup["close"] + d * c["drift_r_median"] * risk,
+                    "q75": setup["close"] + d * c["drift_r_q75"] * risk}
+
+        applied = []
+        for h in outlook["horizons"]:
+            c = outlook["sides"][side]["horizons"].get(h, {})
+            cn = cone(c)
+            if not cn:
+                continue
+            lo, hi = sorted((cn["q25"], cn["q75"]))
+            applied.append({"horizon": h, "n": c["n"], "fav_pct": c["fav_pct"],
+                            "fav_ci": c["fav_ci"], "tp_first_pct": c["tp_first_pct"],
+                            "tp_first_ci": c["tp_first_ci"],
+                            "drift_r_median": c["drift_r_median"],
+                            "cone_lo": lo, "cone_median": cn["median"], "cone_hi": hi})
+        out.update({"ready_side": side, "entry": setup["close"], "risk": risk,
+                    "level": level,
+                    "stop": setup["close"] - d * risk,
+                    "target": setup["close"] + d * RR_TARGET * risk,
+                    "cell": cell, "pooled_cell": pooled, "cone": cone(cell),
+                    "applied": applied,
+                    "side_n": outlook["sides"][side]["n"]})
+        break
+    return out
 
 
 def evidence_read(trades, cost=0.40):
