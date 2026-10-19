@@ -184,3 +184,39 @@ better (exploratory). Shipped as cone + base rates, not an arrow: `pressure.py`
 judgement untouched; no gate/sizing/hold use authorized. Verification: check_data
 0 fail · smoke PASSED (Scenario U AST still clean) · 13 unit tests incl. Flask
 render (venv flask in sandbox) · py_compile clean.
+
+## 2026-10-19 (data refresh, checked-in log through 18:10 UTC) — handoff refresh (docs only, no runtime change)
+
+The host-side `handoff_check.py --update` output supplied for this session reported
+data collection 287, 636 closed trades, and a log through 18:15 UTC (44,819 bars).
+The checked-in clone is five minutes behind on bars (18:10 UTC, 44,814 bars), but
+its ledger/outcomes, balances, structural-stop sample, skips and open-trade state
+match the host output. The handoff snapshot is kept aligned to the checkout's
+verifiable 18:10 timestamp; the collection number 287 is carried from the host
+report because this shallow checkout cannot derive that autosync commit number.
+
+Current ledger: **636 closed, 124W/276L/234BE/2TIME**, 31.0% decisive; engine
+ledger $142.16, true equity $125.18, net −$629.22 at the assumed $0.40 round trip.
+The structural-stop era is **n=139** (39W/65L/34BE/1TIME, 11 entry dates).
+`check_structural_stop.py` PASS (0 stops inside; 81.3% level-bound; median
+clearance +0.50 ATR; median risk 3.27 ATR). The fresh interim screen is **MET**
+(B1 5.91/day; B2 46.76%; B3 24.46%; C1 −0.071R; C2 37.50% [28.8–47.1]), but
+this is not the scheduled judgement or PASS: 11 trades short of n=150 and Wilson
+LB 28.8% < 32.1%. The §7 closure-gap count remains **2/2** (#595, #610), with no
+weekend ride or realized gap damage. The 2026-10-19 21:00 UTC judgement (or n=150,
+whichever comes first) remains pending; no strategy/risk rule was changed.
+
+The quote logger is at 6.1 days, 5/14 complete UTC days and 1/2 weekends, median
+$0.55; the $0.40 assumption stays. The pressure calibration re-join at n=139 is
+still collinear with side; the signal-outlook re-read remains a coin flip at 30m
+(50.4% [42–59], median +0.02R). Updated `docs/HANDOFF.md` §§1/4/5/6, the era
+timeline and milestones; archived the replaced §1 in `docs/HANDOFF-HISTORY.md`;
+reconciled `docs/EXECUTION-PLAN.md`.
+
+Verification: `check_data.py` 0 fail / 8 documented warnings; `handoff_check.py`
+FRESH (one advisory because this shallow clone cannot resolve collection #287);
+structural-stop guard PASS; `check_gap_rides.py` still at the registered count
+(its `--strict` exit 1 is expected because the threshold is reached); `pressure_report.py`
+SCREEN MET; `strategy_lab.py --calib-only` recall 99.8% (0.75R master) / 99.7%
+(max-hold); quote report 6.1 days; signal-outlook report n=139. No final judgement,
+deployment, or production-host process verification is claimed.

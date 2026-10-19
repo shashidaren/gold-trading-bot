@@ -14,6 +14,62 @@ block or a REVIEW instead; that is what makes this file trustworthy. (Created 20
 
 ---
 
+## 2026-10-19 18:10 UTC — §1 before the 636-trade refresh
+
+**This is the complete HANDOFF §1 block as it stood at the 2026-10-19 11:59 UTC snapshot** (data collection 282), moved here when §1 was refreshed in place under HANDOFF §11 rule 5. These numbers and the n=133 screen status are historical; the current state is in HANDOFF §1.
+
+### Replaced §1 block
+
+## 1. Where things stand (as of **2026-10-19 — data collection 282**)
+
+**Current stance (2026-10-19, data to 11:59 UTC):** paper-only; `engine.py` remains
+`TRADING_MODE = "FORWARD_TEST"`. Dashboard-only PR adds risk now, market map and
+costed evidence; see `docs/ANALYSIS-2026-10-19-dashboard-context.md` for scope. **New:** a **Simple Summary** tab (`pressure.py` volatility guard) translates ATR/spread/blackout/cooldown/breaker/closure/gaps into `🟢 Calm / 🟡 Caution / 🔴 Pause (avoid trading if volatile)` in plain English — display-only, never a gate.
+
+**The book:** **630 closed trades** (123W/276L/229BE/2TIME; 30.8% decisive), engine ledger
+**$137.42**, true equity $120.44, net **−$631.56** at the assumed $0.40 round trip.
+No open trade in the checked-in status. Quote sample remains insufficient to replace
+that registered assumption (last full review: 5 complete days, 1 weekend).
+
+**The only open experiment** is the un-stacked structural stop (entries ≥
+**2026-10-06 03:00 UTC**): **n=133** (38W/65L/29BE/1TIME), 11 entry dates.
+Mechanical guard PASS, zero stops inside the tested level. Screen remains **NOT MET**:
+SL share **48.87% > 47.0%**. Other screen checks pass: SL/day 5.91, scratch 21.80%,
+gross R/trade −0.080R, decisive WR 36.89% [28.2–46.5]. This dashboard work does not
+judge or modify the experiment; the scheduled review and original thresholds still govern.
+
+**The §7 closure-gap revert trigger is AT its threshold — 2 of 2 post-cutover rides over a daily market
+closure** (#595 on 10-14, #610 on 10-15; no weekend closure has been ridden, neither stop gapped
+through, $0.00 of gap damage so far). It is the **first item of the 21:00 judgement**, and the counting
+rule must be recorded there. Evidence and the decision procedure:
+`docs/REVIEW-2026-10-19-struct-stop-screen.md` §3; the count is reproducible with
+`python3 tools/check_gap_rides.py` (new, read-only).
+
+**Next eligible action:** the confirmatory judgement at **2026-10-19 21:00 UTC** (or n=150, whichever
+comes first), in §7 order — **(0)** resolve the gap trigger, **(a)** re-run the guard + `--calib-only` +
+`check_gap_rides.py`, **(b)** judge B/C, **(c)** only then consider the already-registered 0.25 ATR level
+test. **No runtime rule was changed in the 10-19 sessions**; the level test stays blocked behind it.
+
+**Accounting incident reconciled (2026-10-19):** twenty invalid rows (#626–645, 2026-10-18 23:05 –
+2026-10-19 02:23 UTC) had blank Entry_Time and zero Take_Profit, covering BUY TP and SELL TP/BE/SL
+variants; raw equity **−$58,393.96** was phantom accounting (twenty rows booked **−$58,544.65** from the
+$150.69 reference). Last valid ledger balance: **$150.69** after #625. Raw counts were 644 rows / 138 TP;
+the valid subset **624 rows / 122 TP** is restored via quarantine. The 20-row suffix was quarantined with
+continuity + status/numbering checks (`tools/repair_phantom_ledger.py`); the reconciled ledger passes
+`check_data.py` (0 fail) and `check_structural_stop.py` PASS (n=127) still holds. See `incident_backups/`
+for the quarantined evidence and `docs/REVIEW-2026-10-19-negative-balance.md` for the incident record.
+**Host-side verification is still open and operator-only**: the checked-in risk-sizer correction passes
+the smoke tests, but production deployment/process identity is **unverified** — do not assume the forward
+stream is healthy.
+
+**The dashboard pressure composite remains a side proxy, not a signal** (calibration: collinear with
+side, no within-side contrast). The owner's manual pressure/hold observation is a separate, unmeasured
+research hypothesis; do not change engine behavior from it. The owner's "where is it headed on a very
+strong signal?" question is now measured (`docs/ANALYSIS-2026-10-19-signal-outlook.md`, dashboard 🧭
+panel, `tools/signal_outlook.py`): after an 8/8 taken signal the 15–60 min direction is a **coin flip**
+(pooled 48.9% [41–57] @30m, live era) with a wide two-sided cone — the outlook is base rates + barrier
+odds for manual supervision, **never a forecast, gate, sizing or hold-past-stop input**.
+
 ## 2026-10-19 — §1 as it stood before the 10-19 early sessions (numbers as of data collection 276–279)
 
 **This is HANDOFF §1 exactly as it stood between the 2026-10-17 session and the 2026-10-19 early
