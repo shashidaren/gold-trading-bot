@@ -1,6 +1,6 @@
 # Gold bot execution plan
 
-**Status:** living session queue — reconciled 2026-10-17 UTC  
+**Status:** living session queue — reconciled 2026-10-19 UTC (early session; judgement due 2026-10-19 21:00 UTC)  
 **Purpose:** make progress consistent across sessions while the bot remains in paper/forward-test mode.
 
 ## The one-line prompt
@@ -30,9 +30,9 @@ Keep these guardrails in every phase:
 ## Current baseline (from the checked-in data on 2026-10-17)
 
 - **624 closed paper trades**; 122 wins, 271 stop losses, 229 breakeven exits and 2 time exits; decisive win rate 31.0%. At the assumed $0.40 round-trip cost, the overall ledger remains negative.
-- **Structural-stop window:** 127 trades since the verified 2026-10-06 03:00 UTC cutover (37W/60L/29BE/1TIME). `tools/check_structural_stop.py` passes: **zero** post-cutover stops inside the tested level.
-- The pre-registered screen is **not yet met**: the current pressure report has the SL-share check at 47.24% against a strict ≤47.0% bar; the other currently reported screen checks pass. This is a marginal miss, not a pass. The scheduled judgement remains 2026-10-19 21:00 UTC or the pre-registered n=150 gate, whichever comes first. The dated experiment document—not this summary—owns the exact verdict/revert bars.
-- **Quote-cost logging is active but incomplete:** the latest report covers 3.7 days (3 complete UTC days, 0 of 2 complete weekends), with a first-look median spread/round trip of about $0.55. The existing $0.40 round-trip assumption stays in force until the logger's 14-complete-day/two-weekend sample target is met and the results are reviewed.
+- **Structural-stop window:** 127 trades since the verified 2026-10-06 03:00 UTC cutover (37W/60L/29BE/1TIME; last era close #625, 2026-10-16 19:45 UTC; SELL #626 open in the synced status). `tools/check_structural_stop.py` passes: **zero** post-cutover stops inside the tested level.
+- The pre-registered screen is **not yet met**: the current pressure report has the SL-share check at 47.24% against a strict ≤47.0% bar; the other currently reported screen checks pass. This is a marginal miss, not a pass. The scheduled judgement remains 2026-10-19 21:00 UTC or the pre-registered n=150 gate, whichever comes first. The dated experiment document—not this summary—owns the exact verdict/revert bars. **Open item for that judgement:** the §7 closure-gap revert trigger has a literal count of 2 era rides across the daily closure (#595, #610) that no tool counts and prior "revert clear" notes did not evaluate — the judgement session must resolve it first (`docs/REVIEW-2026-10-19-struct-stop-screen.md` §3).
+- **Quote-cost logging is active but incomplete:** the latest report covers 5.5 days (5 complete UTC days, 1 of 2 complete weekends), with a first-look median spread/round trip of about $0.55. The existing $0.40 round-trip assumption stays in force until the logger's 14-complete-day/two-weekend sample target is met and the results are reviewed.
 - **Pressure calibration:** the bot's dashboard composite remains a side proxy, not a signal. The manual method described by the owner is not yet specified or recorded in the repo.
 - The engine remains `TRADING_MODE = "FORWARD_TEST"`. The measured/demo/account metadata is not permission to send real orders.
 
@@ -57,6 +57,10 @@ Use one row per eligible signal/stop event, including cases where the owner does
 `timestamp_utc, bot_trade_id, side, bot_entry, bot_sl, bot_tp, manual_entry, manual_exit, pressure_source, pressure_metric, pressure_timeframe, pressure_value_at_entry, pressure_value_at_stop_touch, last_closed_bar_utc, contemporaneous_action, reason_code, max_hold_or_exit_rule, post_stop_markout_horizons, mfe, mae, hypothetical_exit, estimated_cost, notes_without_account_identifiers`
 
 A trade that later touches its former target after the bot's stop is a **counterfactual mark-out**, not a win under the bot's current rules. The entry, stop event, and decision must be timestamped before looking at the recovery path.
+
+## Session log
+
+- **2026-10-19 ~04:41 UTC (early session, data collection 279):** every-session step done — check_data 0 fail, handoff FRESH, structural-stop guard PASS, replay recall 100.0%, smoke PASSED; complete interim screen computed at n=127: **SCREEN NOT MET** (B2 47.24% vs ≤47.0% only; PASS also unreachable: n<150, Wilson LB 29.1% vs >32.1%). Judgement **not** taken (due 21:00 UTC tonight or n=150). Found the uncounted closure-gap revert count at its literal threshold (#595/#610) and recorded it for the judgement. No runtime change. Evidence: `docs/REVIEW-2026-10-19-struct-stop-screen.md`. Next eligible action: the 21:00 UTC judgement session, starting with the gap trigger.
 
 ## Session checklist
 

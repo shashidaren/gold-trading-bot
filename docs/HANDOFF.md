@@ -17,8 +17,8 @@ from the first commit.
 <!-- HANDOFF-SNAPSHOT machine-checked by tools/handoff_check.py; refresh with --update -->
 | key | value |
 |---|---|
-| as_of_utc | 2026-10-19 02:33 |
-| data_collection | unknown |
+| as_of_utc | 2026-10-19 02:59 |
+| data_collection | 279 |
 | closed_trades | 624 |
 | outcomes | 122W/271L/229BE/2TIME |
 | decisive_wr_pct | 31.0 |
@@ -29,10 +29,10 @@ from the first commit.
 | cutover_utc | 2026-10-06 03:00 |
 | structstop_era_trades | 127 |
 | structstop_era_outcomes | 37W/60L/29BE/1TIME |
-| log_bars | 43895 |
-| log_last_bar_utc | 2026-10-19 02:33 |
+| log_bars | 43907 |
+| log_last_bar_utc | 2026-10-19 02:59 |
 | skip_rows | 1433 |
-| open_trade | none |
+| open_trade | SELL #626 @ 4175.02 |
 <!-- /HANDOFF-SNAPSHOT -->
 
 This block is the **only machine-checked part of the file**: `python3 tools/handoff_check.py`
@@ -66,8 +66,8 @@ snapshot block, still said FRESH.
    **2026-10-06 03:00 UTC** (era n=127 as of 2026-10-17, not 82) and the guard is green; the BTC-port verdicts are in
    `docs/ANALYSIS-2026-10-13-btc-port-assessment.md` §3 (context: the 10-13 block in `docs/HANDOFF-HISTORY.md`).
    The quote logger is now collecting in the synced `xm_data/` files; check
-   `python3 tools/xm_quote_report.py` for its current sample (as of 2026-10-17:
-   3.7 days, 3 complete UTC days, 0/2 complete weekends — not enough to replace
+   `python3 tools/xm_quote_report.py` for its current sample (as of 2026-10-19:
+   5.5 days, 5 complete UTC days, 1/2 complete weekends — not enough to replace
    the cost assumption). The large-N history dump/convert/replay is still a
    first-run-on-the-box task: `docs/ACCELERATE-TESTING.md` §2.
    The dashboard now carries that read layer itself (`🌡️ Tape pressure`, `🎯 Setup read`, `📍 Location`,
@@ -159,6 +159,7 @@ snapshot block, still said FRESH.
 | 2026-10-15 (docs) | **HANDOFF restored + consolidated** (no runtime change): the daily doc job truncated the file at 14:06 UTC (`43884e1` wrote `PLACEHOLDER - will replace`), losing **§2–§11**; content recovered from `712d106`, §1 history split out to `docs/HANDOFF-HISTORY.md`, `handoff_check.py` now checks section structure, not just freshness. |
 | 2026-10-16 | **Dashboard market-context layer (display-only, no runtime change):** `pressure.py` + `tools/pressure_report.py` + `smoke_test.py` Scenario U; buy/sell pressure gauge, the engine's gates read back on the last bar, location/risk, §7 era card, feed health. Calibration says the composite is **collinear with side — not a signal**. `engine.py`/`trade_filter.py`/deploy path untouched; autosync restarts the dashboard only |
 | 2026-10-17 (merge 10-16 22:54:47; **deploy 10-16 23:01:54**) | **Risk sizer + gates (PR #34) deployed into a closed market** (624 closed, no trade affected), then **corrected in place the same session**: `size_lots` is LIVE-only (the ledger-based version skipped 76–91% of M1 setups and would have sized 0.02 lots at the $500 start), the trade is committed atomically after the sizer accepts (the old order logged phantom trades), LIVE never sizes off the paper ledger, and the **FOMC 17:55–18:30 blackout is reverted** (blackouts frozen, §6.1; it moved era R/trade by ~0.023R). Struct-stop window un-stacked; smoke Scenario V added |
+| 2026-10-19 (early) | **Struct-stop interim screen (analysis/docs only, no runtime change):** full §7 screen at n=127 — SCREEN NOT MET on B2 only, PASS unreachable, R4/R5/R7 clear; the uncounted closure-gap revert trigger found at its literal count of 2 (#595/#610) and reserved for tonight's 21:00 UTC judgement (`docs/REVIEW-2026-10-19-struct-stop-screen.md`). Quote logger at 5/14 days, 1/2 weekends |
 
 ## 1. Where things stand (as of **2026-10-19 — data collection 276**)
 
@@ -183,6 +184,14 @@ the assumed $0.40 round-trip cost. The only open forward-test experiment is the 
 stop (127 trades since 2026-10-06 03:00 UTC). Its geometry check passes with zero stops inside the
 level, but the screen is **not met**: the current SL share is 47.24% against a strict ≤47.0% bar;
 the other four screen measures pass. Review at 2026-10-19 21:00 UTC or n=150, whichever comes first.
+**2026-10-19 early session (collection 279, interim — not the judgement):** the full §7 screen was
+recomputed at n=127 (`docs/REVIEW-2026-10-19-struct-stop-screen.md`): A1–A5 ✔, B1 6.00 ✔, B3 22.83% ✔,
+C1 −0.065R ✔, C2 38.14% ✔, B2 47.24% ✘ → **SCREEN NOT MET**; PASS unreachable (n=127 < 150 and Wilson
+LB 29.1% vs >32.1%); R4/R5/R7 revert triggers clear (avg SL $5.85 vs $8.60; era DD $93.38 vs $250), **but**
+the §7 closure-gap revert trigger — which no tool counts — has a literal count of **2** era trades open
+across the daily closure (#595 TP 2026-10-14, #610 SL 2026-10-15, both across the 20:58→22:00 break; no
+weekend rides). Tonight's judgement must resolve that trigger first, on the record, before B/C; until
+then no verdict (PASS/KEEP/REVERT) exists and the 0.25 ATR level test stays blocked.
 The dashboard pressure composite remains a **side proxy, not a signal**. The owner's manual
 pressure/hold observation is a separate, unmeasured research hypothesis; do not change engine behavior
 from it.
@@ -638,6 +647,10 @@ of truth for experiment thresholds; always refresh from current data.
    > 2.2× pre-change, or the era drawdown exceeds $250, or 2+ trades ride a closure gap.
    Re-review **2026-10-19 21:00 UTC** or n=150, whichever comes first. No other strategy/param
    change inside this window (that includes the session band and the level-test re-scale).
+   **Judgement order tonight starts with the closure-gap revert trigger** (literal count 2:
+   #595/#610 across the daily break — `docs/REVIEW-2026-10-19-struct-stop-screen.md` §3);
+   `pressure.py` counts only R4/R5/R7, so resolve the gap count on the record before B/C and
+   do not edit §7's thresholds to settle it.
 2. **Max-hold isolation: CLOSED 10-05** (`docs/REVIEW-2026-10-05.md`). Verdict:
    n=209, 1 TIME exit (the 49.1-h weekend-gap hold #476), **the cap never bound
    an in-session trade** (longest non-TIME hold 68.0 min) → keep it as cheap
@@ -714,8 +727,8 @@ of truth for experiment thresholds; always refresh from current data.
    *Done (on the branch):* machine-checked handoff + digest line, `docs/AUTOSYNC.md`, the guard/harness fixes,
    `win_rate_report.py --spread`, the GOLD quote + spec logger and report, the large-N history path.
    *Owner decided:* leave `NOTIFY` as it is.
-   *Quote logger in progress (synced data, checked 2026-10-17):* `python3 tools/xm_quote_report.py` reports
-   3.7 days collected, 3 complete UTC days and 0/2 complete weekends; first-look median spread/round trip is
+   *Quote logger in progress (synced data, checked 2026-10-19):* `python3 tools/xm_quote_report.py` reports
+   5.5 days collected, 5 complete UTC days and 1/2 complete weekends; first-look median spread/round trip is
    about $0.55. Keep the $0.40 assumption until the report reaches 14 complete days including 2 weekends, then
    re-cost with `win_rate_report.py --spread` / `strategy_lab.py --cost`. Spread alone does not measure all
    slippage/commission. Verify the observed server offset around the 2026-10-25 DST change; do not guess.
