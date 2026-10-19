@@ -154,6 +154,7 @@ snapshot block, still said FRESH.
 | When | What |
 |------|------|
 | 2026-10-19 (dashboard PR) | Read-only risk/map/costed-evidence panels; no runtime change or deploy claimed. |
+| 2026-10-19 (dashboard) | **Simple Summary tab + Volatility Guard (display-only, no runtime change):** `pressure.py` `volatility_guard`/`simple_summary` (ATR/spread/blackout/cooldown/breaker/closure/trend/gaps/range checklist, verdict green/amber/red), `dashboard.py` tab switch (Simple ↔ Full, localStorage + `?tab=`), preview with `GOLD_DATA_DIR=.`. No engine/filter/gate change. |
 | 2026-09-10 ~12:34 | BE ratchet 0.30R + London BUY-only + trend-side daily breaker (PR #7) |
 | 2026-09-15 ~06:00 | `BE_TRIGGER_R` → **0.75** (PR #9 deploy) |
 | 2026-09-17 | Falsification bar tripped (−$0.40/trade at n≥60) |
@@ -172,7 +173,7 @@ snapshot block, still said FRESH.
 
 **Current stance (2026-10-19, data to 11:59 UTC):** paper-only; `engine.py` remains
 `TRADING_MODE = "FORWARD_TEST"`. Dashboard-only PR adds risk now, market map and
-costed evidence; see `docs/ANALYSIS-2026-10-19-dashboard-context.md` for scope and limitations.
+costed evidence; see `docs/ANALYSIS-2026-10-19-dashboard-context.md` for scope. **New:** a **Simple Summary** tab (`pressure.py` volatility guard) translates ATR/spread/blackout/cooldown/breaker/closure/gaps into `🟢 Calm / 🟡 Caution / 🔴 Pause (avoid trading if volatile)` in plain English — display-only, never a gate.
 
 **The book:** **630 closed trades** (123W/276L/229BE/2TIME; 30.8% decisive), engine ledger
 **$137.42**, true equity $120.44, net **−$631.56** at the assumed $0.40 round trip.
@@ -820,7 +821,7 @@ tools/             other analysis / integrity / report scripts (not on the hot p
   `docs/XM-LOGGER.md` — `mt5quotes-gold.service` (read-only quote/spec logger; autosync commits its `xm_data/` and
   the digest shows `📡 xm logger: …`; a ⚠️ means the logger is down, not that gold is shut).
 - A `dashboard.py` / `pressure.py` change is a **dashboard-only** deploy (`DASH_CHANGED`): the dashboard
-  service restarts, `goldbot` does not. For a local render, point the reader at a checkout instead of the
+  service restarts, `goldbot` does not. Tabs are `Simple` (default, plain-English volatility guard — green/amber/red, `should I trade now?`) ↔ `Full` (all gates); preference is stored in `localStorage` + `?tab=details` deep link. For a local render, point the reader at a checkout instead of the
   live root: `GOLD_DATA_DIR=. python3 dashboard.py` (also `GOLD_LOG_FILE`, `GOLD_TRADES_FILE`,
   `GOLD_SKIP_FILE`, `GOLD_STATUS_FILE`); defaults stay `/opt/gold/*`.
 - Logs: `journalctl -u goldbot -f`; autosync log `/var/log/gold_autosync.log`.
