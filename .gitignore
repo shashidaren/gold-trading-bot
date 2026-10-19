@@ -38,3 +38,6 @@ drive_c/
 # === Research history pulls (tools/mt5_history_dump.py -> tools/history_to_log.py): large, derived, never committed ===
 mt5_history*.csv
 history_*.csv
+
+# Private, backup-first paper-ledger incident evidence
+incident_backups/

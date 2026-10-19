@@ -135,3 +135,15 @@ For a BUY signal to trigger, ALL of the following must be true:
 - Found and fixed a replay bug: `strategy_lab.py` blackout end boundary was inclusive by minute; live is `<=` on the full timestamp. Replay now matches live on the struct-stop era (39.3% vs 39.1% decisive).
 - Level-test re-scale (0.25 ATR) is the strongest queued lever; pre-registered on paper in `docs/PREREG-2026-10-15-level-test-0.25.md`. Not deployed; judged only after the 10-19 review.
 - Docs: `docs/ANALYSIS-2026-10-15-stop-loss-rate.md`, `docs/HANDOFF.md` §1/§5/§6/§8.
+
+## 2026-10-19 — negative-balance investigation
+
+Confirmed ten malformed phantom TP rows (#626–635) booking −$41,806.88; raw paper
+equity −$41,656.19 versus last valid $150.69. Checked-in correction passes smoke;
+host process/deployment unverified. No ledger or runtime changes. Evidence and
+recovery prerequisites: `docs/REVIEW-2026-10-19-negative-balance.md`.
+
+Recovery PR follow-up: added paper-exit geometry guards, honest finite-negative
+startup accounting and a strict dry-run/backup/quarantine repair CLI. Full smoke,
+three hermetic recovery tests and compilation pass. Host apply remains operator-only;
+no strategy changes and no production ledger edits.
