@@ -115,11 +115,10 @@ $0.20/side cost can be measured; it never touches orders or the engine. See `doc
 1. **`docs/HANDOFF.md` first** — current ledger, definitions, next steps, ops
    (`docs/HANDOFF-HISTORY.md` only if you need the history behind something).
 2. Latest `docs/REVIEW-*.md` / `docs/ANALYSIS-*.md` if the handoff points at them
-   (most recent: `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` — the stop-loss-rate
-   question, the structural stop that shipped for it, and its pre-registered bar; before that
-   `docs/REVIEW-2026-10-05.md` and `docs/ANALYSIS-2026-09-28-falling-gold-win-rate.md` — the
-   "does the bot do better when gold falls?" question, its refutations, and the
-   registered `H-side-awareness` bar).
+   (current structural-stop decision: `docs/REVIEW-2026-10-19-struct-stop-judgement.md`; its
+   binding thresholds remain in `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` §7. The
+   earlier n=127 interim record is `docs/REVIEW-2026-10-19-struct-stop-screen.md`; display-only
+   dashboard context and signal-outlook methods are documented in the two 2026-10-19 analysis files).
 3. `git log --oneline` — what changed recently.
 4. `python3 tools/check_data.py` before drawing conclusions from the CSVs.
 5. Answer "does X look like Y?" questions with a dated `docs/ANALYSIS-*.md` (CIs,
