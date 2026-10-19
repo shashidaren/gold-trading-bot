@@ -109,6 +109,20 @@ REVERT_SL_MULTIPLE = 2.2          # avg SL loss vs PRE_CHANGE_AVG_SL_USD
 REVERT_DD_USD = 250.0
 REVIEW_DUE = datetime(2026, 10, 19, 21, 0)   # scheduled judgement (or n=150)
 
+# ── display-only volatility guard (human advice, never a trade gate) ──
+# Thresholds are deliberately conservative and match the dashboard's language.
+# They DO NOT change engine.py / trade_filter.py behaviour. Scenario U does NOT
+# pin them — they are free to evolve without a deploy gate.
+VOLATILITY_ATR_ELEVATED = 2.5     # ATR above this = choppy / elevated
+VOLATILITY_ATR_HIGH = 3.5         # ATR above this = volatile
+VOLATILITY_ATR_SPIKE_RATIO = 1.5  # ATR vs its 60-bar median
+VOLATILITY_SPREAD_WARN = 0.45     # $ spread — caution
+VOLATILITY_SPREAD_BLOCK = 0.60    # $ spread — bot blocks (>60 pts)
+VOLATILITY_MOMENTUM_WARN_ATR = 2.0
+VOLATILITY_MOMENTUM_HIGH_ATR = 3.0
+VOLATILITY_RANGE_WARN_ATR = 25.0
+VOLATILITY_RANGE_HIGH_ATR = 35.0
+
 # tape-pressure window (bars) and the composite weights
 PRESSURE_WINDOW = 60
 PRESSURE_WEIGHTS = {
@@ -1537,6 +1551,506 @@ def build(read_tail=True, now=None, log_rows=None, trades=None, skip_rows=None):
         "book": book_read(trades, now),
         "feed": feed_read(log_rows, now),
     }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. SIMPLE SUMMARY + VOLATILITY GUARD — human-friendly tab, never a gate
+# Display-only. Every threshold here is advisory and explicitly NOT enforced by
+# engine.py / trade_filter.py. The engine already blocks ATR/spread extremes on
+# its own; this layer translates those blocks (and softer warnings) into plain
+# English so the operator knows whether to leave the bot alone, stay cautious,
+# or sit out. See docs/ANALYSIS-2026-10-16-dashboard-pressure.md section 1.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _atr_median(log_rows, window=60):
+    """Median ATR over the last window bars, or None when warming up."""
+    vals = []
+    for r in log_rows[-window:]:
+        atr = parse_float(r.get("ATR"))
+        if atr is not None and math.isfinite(atr) and atr > 0:
+            vals.append(atr)
+    return _median(vals) if vals else None
+
+
+def _factor(name, label, detail, level, value_text="", advice=""):
+    """One volatility / risk factor row: level 0 ok, 1 watch, 2 block/high."""
+    icons = {0: "🟢", 1: "🟡", 2: "🔴"}
+    colors = {0: "emerald", 1: "amber", 2: "rose"}
+    level_names = {0: "OK", 1: "Caution", 2: "High / Blocked"}
+    return {
+        "key": name, "name": label, "detail": detail, "level": level,
+        "level_name": level_names.get(level, "—"),
+        "icon": icons.get(level, "⚪"), "color": colors.get(level, "slate"),
+        "value": value_text, "advice": advice,
+    }
+
+
+def volatility_guard(log_rows=None, portfolio=None, feed=None, risk=None, mkt=None, setup=None, now=None):
+    """Plain-English volatility / risk checklist (display-only).
+
+    Each factor is evaluated independently against display thresholds (VOLATILITY_*).
+    The overall verdict is the worst factor, softened so a single transient caution
+    does not paint everything red — counts matter. This function never raises: missing
+    inputs degrade to unknown rows, never to an exception.
+    """
+    try:
+        now = now or datetime.now(timezone.utc).replace(tzinfo=None)
+        factors = []
+
+        # ATR (engine already blocks outside 1.10-4.50)
+        atr = None
+        atr_median = None
+        if setup and setup.get("ok"):
+            atr = setup.get("atr")
+        if log_rows:
+            atr_median = _atr_median(log_rows, 60)
+        if atr is None:
+            factors.append(_factor("atr", "Market Volatility (ATR)",
+                                   "Unknown — last bar still warming up", 0,
+                                   "—", "Not enough data yet."))
+        else:
+            if atr < MIN_ATR_TO_TRADE:
+                factors.append(_factor("atr", "Market Volatility (ATR)",
+                                       f"Very quiet — ATR ${atr:.2f} is below the ${MIN_ATR_TO_TRADE:.2f} trading floor",
+                                       1, f"${atr:.2f}",
+                                       "Bot will skip new entries until volatility picks up. Nothing is broken — just a calm patch."))
+            elif atr > MAX_ATR_TO_TRADE:
+                factors.append(_factor("atr", "Market Volatility (ATR)",
+                                       f"Extreme — ATR ${atr:.2f} exceeds the ${MAX_ATR_TO_TRADE:.2f} news filter",
+                                       2, f"${atr:.2f}",
+                                       "Auto-blocked: the bot will not enter. Sit out — spreads and slippage are worst here."))
+            elif atr >= VOLATILITY_ATR_HIGH:
+                factors.append(_factor("atr", "Market Volatility (ATR)",
+                                       f"High — ATR ${atr:.2f} — large bars, fast moves, elevated risk",
+                                       2, f"${atr:.2f}",
+                                       "Consider skipping new entries. If you do trade, expect bigger swings."))
+            elif atr >= VOLATILITY_ATR_ELEVATED:
+                factors.append(_factor("atr", "Market Volatility (ATR)",
+                                       f"Elevated — ATR ${atr:.2f} — choppy day, wider swings than normal",
+                                       1, f"${atr:.2f}",
+                                       "Trade with extra caution, or wait for calmer conditions."))
+            else:
+                spike = (atr / atr_median) if (atr_median and atr_median > 0) else None
+                if spike and spike >= 2.0:
+                    factors.append(_factor("atr", "Market Volatility (ATR)",
+                                           f"Spiking — ATR ${atr:.2f} is {spike:.1f}x its 60-bar median (${atr_median:.2f})",
+                                           1, f"${atr:.2f}",
+                                           "Volatility is accelerating. Let it settle before trusting new levels."))
+                elif spike and spike >= VOLATILITY_ATR_SPIKE_RATIO:
+                    factors.append(_factor("atr", "Market Volatility (ATR)",
+                                           f"Slightly spiking — ATR ${atr:.2f} is {spike:.1f}x its recent median",
+                                           0, f"${atr:.2f}",
+                                           "Worth watching, but still within normal bounds."))
+                else:
+                    factors.append(_factor("atr", "Market Volatility (ATR)",
+                                           f"Normal — ATR ${atr:.2f} is in the sweet spot for this strategy",
+                                           0, f"${atr:.2f}",
+                                           "Conditions are calm enough for normal operation."))
+
+        # Spread
+        spread = None
+        spread_stale = False
+        spread_age = None
+        if risk and risk.get("quote"):
+            spread = risk["quote"].get("spread")
+            spread_stale = bool(risk["quote"].get("stale"))
+            spread_age = risk["quote"].get("age")
+        if spread is None:
+            factors.append(_factor("spread", "Spread (cost to enter)",
+                                   "Unknown — no recent quote from the broker feed",
+                                   0, "—",
+                                   "Bot assumes $0.40 round-trip until the logger has 14 days. No block today."))
+        else:
+            ago = f"{spread_age}s ago" if spread_age is not None else ""
+            if spread >= VOLATILITY_SPREAD_BLOCK:
+                factors.append(_factor("spread", "Spread (cost to enter)",
+                                       f"Wide — spread ${spread:.2f} ({ago}) — costs eat the edge",
+                                       2, f"${spread:.2f}",
+                                       "Bot blocks entries above $0.60. Let the spike pass."))
+            elif spread >= VOLATILITY_SPREAD_WARN:
+                factors.append(_factor("spread", "Spread (cost to enter)",
+                                       f"Elevated — spread ${spread:.2f} ({ago}) — trading is more expensive right now",
+                                       1, f"${spread:.2f}",
+                                       "Be cautious with new entries; the cost headwind is higher than normal."))
+            else:
+                stale_note = " · quote is stale" if spread_stale else ""
+                factors.append(_factor("spread", "Spread (cost to enter)",
+                                       f"Normal — spread ${spread:.2f}{stale_note}",
+                                       0, f"${spread:.2f}",
+                                       "Cost headwind is normal for this market."))
+
+        # Blackout / session windows
+        if portfolio:
+            if portfolio.get("blackout_any"):
+                blocked = []
+                for sd, msg in portfolio.get("sides_blocked", {}).items():
+                    if msg:
+                        blocked.append(f"{sd}: {msg}")
+                blocked_txt = "; ".join(blocked) or "both sides blocked"
+                factors.append(_factor("blackout", "News / Session Window",
+                                       f"In blackout now — {blocked_txt}",
+                                       2, "BLOCKED",
+                                       "Auto-blocked: the bot will skip. These windows are where whipsaws cluster."))
+            else:
+                nxt = portfolio.get("next_window")
+                if nxt:
+                    label, sides, start = nxt
+                    mins = (start - now).total_seconds() / 60.0
+                    side_str = ", ".join(sides)
+                    if mins <= 15:
+                        factors.append(_factor("blackout", "News / Session Window",
+                                               f"Next blackout in {mins:.0f} min — {label} blocks {side_str}",
+                                               1, f"{mins:.0f} min",
+                                               "A new position opened now could be caught in the window. Wait until it passes if you can."))
+                    elif mins <= 60:
+                        factors.append(_factor("blackout", "News / Session Window",
+                                               f"Next blackout in {mins:.0f} min — {label}",
+                                               0, f"{mins:.0f} min",
+                                               "Normal — still time before the next risky window."))
+                    else:
+                        factors.append(_factor("blackout", "News / Session Window",
+                                               "No blackout for at least an hour", 0, "clear",
+                                               "Session risk is low right now."))
+                else:
+                    factors.append(_factor("blackout", "News / Session Window", "No upcoming blackout found", 0, "—", ""))
+        else:
+            factors.append(_factor("blackout", "News / Session Window", "Unknown — no portfolio state", 0, "—", ""))
+
+        # Cooldown
+        if portfolio and portfolio.get("cooldown_minutes_left"):
+            mins = portfolio["cooldown_minutes_left"]
+            note = portfolio.get("cooldown_note") or ""
+            extra = f" ({note})" if note else ""
+            factors.append(_factor("cooldown", "Cooldown After Loss",
+                                   f"Cooling down — {mins} min left{extra}",
+                                   1, f"{mins} min",
+                                   "The bot auto-pauses after stop-losses to avoid revenge entries. This is protection, not a fault."))
+        else:
+            factors.append(_factor("cooldown", "Cooldown After Loss",
+                                   "No cooldown — ready for next valid setup", 0, "clear",
+                                   "The bot will not re-enter the same losing pattern immediately."))
+
+        # Daily breaker
+        if portfolio is not None:
+            dls = portfolio.get("daily_sls", 0)
+            breaker = bool(portfolio.get("breaker_on"))
+            if breaker:
+                mom = portfolio.get("momentum_side") or "unknown trend"
+                factors.append(_factor("breaker", "Daily Loss Limit",
+                                       f"Limit hit — {dls}/{MAX_DAILY_LOSSES} stop-losses today -> trend-side-only ({mom})",
+                                       2, f"{dls}/{MAX_DAILY_LOSSES}",
+                                       "The bot now takes only trend-aligned setups. Expect fewer trades today."))
+            elif dls >= 7:
+                factors.append(_factor("breaker", "Daily Loss Limit",
+                                       f"Getting close — {dls}/{MAX_DAILY_LOSSES} stop-losses today",
+                                       1, f"{dls}/{MAX_DAILY_LOSSES}",
+                                       "If a few more losses hit, the bot will tighten to trend-only. Consider smaller or no manual adds."))
+            else:
+                factors.append(_factor("breaker", "Daily Loss Limit",
+                                       f"Healthy — {dls}/{MAX_DAILY_LOSSES} stop-losses today", 0,
+                                       f"{dls}/{MAX_DAILY_LOSSES}",
+                                       "Plenty of headroom today."))
+        else:
+            factors.append(_factor("breaker", "Daily Loss Limit", "Unknown", 0, "—", ""))
+
+        # Market closure
+        if risk:
+            mins = risk.get("minutes")
+            remaining = risk.get("remaining")
+            spans = bool(risk.get("spans"))
+            if mins is not None:
+                hrs = mins / 60.0
+                if remaining is not None and spans:
+                    factors.append(_factor("closure", "Market Closure Risk",
+                                           f"Heads up — market closes in {mins:.0f} min and your current max-hold ({remaining:.0f} min left) would span the close",
+                                           2, f"{mins:.0f} min to close",
+                                           "A position held through the daily break is not protected — gap risk. No auto-exit is set."))
+                elif mins <= 30:
+                    factors.append(_factor("closure", "Market Closure Risk",
+                                           f"Market closes in {mins:.0f} min — a fresh position would ride the daily break",
+                                           1, f"{mins:.0f} min",
+                                           "Avoid opening new positions right before the 21:00 UTC close."))
+                elif mins <= 90:
+                    factors.append(_factor("closure", "Market Closure Risk",
+                                           f"Market closes in {hrs:.1f}h — normal, but watch the clock for new entries",
+                                           0, f"{hrs:.1f}h",
+                                           "Still enough time for a 4-hour max-hold, but a late entry will span the break."))
+                else:
+                    factors.append(_factor("closure", "Market Closure Risk",
+                                           f"Market closes in {hrs:.1f}h — plenty of time", 0, f"{hrs:.1f}h",
+                                           "No close risk for at least the next hour."))
+            else:
+                factors.append(_factor("closure", "Market Closure Risk", "Unknown — no closure estimate", 0, "—", ""))
+        else:
+            factors.append(_factor("closure", "Market Closure Risk", "Unknown — no quote/closure feed", 0, "—", ""))
+
+        # Trend speed
+        if mkt and mkt.get("trends"):
+            atr_val = (setup.get("atr") if setup and setup.get("atr") else None)
+            deltas = [t.get("delta") for t in mkt.get("trends", []) if t.get("delta") is not None]
+            if deltas and atr_val:
+                largest = max(deltas, key=abs)
+                atrs = abs(largest) / atr_val if atr_val else 0
+                if atrs >= VOLATILITY_MOMENTUM_HIGH_ATR:
+                    factors.append(_factor("trend", "Trend Speed",
+                                           f"Very fast move — price swung ${abs(largest):.2f} ({atrs:.1f}x ATR) on the last hour",
+                                           1, f"{atrs:.1f}x ATR",
+                                           "Fast trends often snap back. The bot levels may be stale — let the move settle."))
+                elif atrs >= VOLATILITY_MOMENTUM_WARN_ATR:
+                    factors.append(_factor("trend", "Trend Speed",
+                                           f"Elevated — price moved ${abs(largest):.2f} ({atrs:.1f}x ATR) recently",
+                                           1, f"{atrs:.1f}x ATR",
+                                           "Market is energetic. Setups near fresh levels are higher risk."))
+                else:
+                    dir_word = "up" if largest > 0 else "down" if largest < 0 else "flat"
+                    factors.append(_factor("trend", "Trend Speed",
+                                           f"Calm — trending {dir_word} ${abs(largest):.2f} on the hour ({atrs:.1f}x ATR)",
+                                           0, f"{atrs:.1f}x ATR",
+                                           "Trend speed is normal."))
+            else:
+                factors.append(_factor("trend", "Trend Speed",
+                                       "Unknown — not enough complete hourly buckets yet", 0, "—",
+                                       "Needs four full 15-min buckets. Try again in a few minutes."))
+        else:
+            factors.append(_factor("trend", "Trend Speed", "Unknown — no market map", 0, "—", ""))
+
+        # Gaps / feed health
+        if feed and feed.get("ok"):
+            gaps = feed.get("gaps", 0)
+            largest = feed.get("largest_gap_minutes", 0) or 0
+            if gaps > 0:
+                lvl = 2 if largest >= 30 else 1
+                factors.append(_factor("gaps", "Recent Gaps / Feed Health",
+                                       f"{gaps} open-market gap(s) recently — largest {largest:.0f} open-min lost",
+                                       lvl, f"{gaps} gap(s)",
+                                       "The feed had a stall. Price history may have holes — verify the engine log before trusting signals."))
+            else:
+                age_m = (feed.get("age_seconds") or 0) / 60.0
+                if age_m > 5:
+                    factors.append(_factor("gaps", "Recent Gaps / Feed Health",
+                                           f"No gaps, but last bar is {age_m:.0f} min old — possible stall building",
+                                           1, f"{age_m:.0f} min old",
+                                           "The feed may be lagging. Check engine heartbeat."))
+                else:
+                    factors.append(_factor("gaps", "Recent Gaps / Feed Health",
+                                           "Healthy — no open-market gaps in the last hour", 0, "0 gaps",
+                                           "Data feed is current."))
+        else:
+            reason = (feed.get("reason") if feed else "no feed") or "no feed"
+            factors.append(_factor("gaps", "Recent Gaps / Feed Health",
+                                   f"Unknown — {reason}", 0, "—",
+                                   "Feed health could not be checked."))
+
+        # Day range
+        if mkt and mkt.get("levels"):
+            try:
+                levels = mkt.get("levels") or []
+                if len(levels) >= 2 and setup and setup.get("atr"):
+                    hi = max(l.get("price") for l in levels if l.get("price") is not None)
+                    lo = min(l.get("price") for l in levels if l.get("price") is not None)
+                    rng = hi - lo
+                    atr_val = setup.get("atr")
+                    ratio = rng / atr_val if atr_val else 0
+                    if ratio >= VOLATILITY_RANGE_HIGH_ATR:
+                        factors.append(_factor("range", "Day Range",
+                                               f"Very wide day — prior range ${rng:.2f} ({ratio:.0f}x ATR)",
+                                               1, f"{ratio:.0f}x ATR",
+                                               "Big-range days often mean news-driven, choppy conditions."))
+                    elif ratio >= VOLATILITY_RANGE_WARN_ATR:
+                        factors.append(_factor("range", "Day Range",
+                                               f"Wide — prior range ${rng:.2f} ({ratio:.0f}x ATR)",
+                                               0, f"{ratio:.0f}x ATR",
+                                               "Above average but not extreme."))
+                    else:
+                        factors.append(_factor("range", "Day Range",
+                                               f"Normal — prior range ${rng:.2f} ({ratio:.0f}x ATR)",
+                                               0, f"{ratio:.0f}x ATR",
+                                               "Day range is typical."))
+                else:
+                    factors.append(_factor("range", "Day Range", "Unknown — not enough history for prior-day levels", 0, "—", ""))
+            except Exception:
+                factors.append(_factor("range", "Day Range", "Unknown — could not compute range", 0, "—", ""))
+        else:
+            factors.append(_factor("range", "Day Range", "Unknown — no market map", 0, "—", ""))
+
+        # overall verdict
+        reds = sum(1 for f in factors if f["level"] == 2)
+        ambers = sum(1 for f in factors if f["level"] == 1)
+        vol_red_keys = {"atr", "spread", "trend", "gaps", "closure"}
+        vol_reds = sum(1 for f in factors if f["level"] == 2 and f["key"] in vol_red_keys)
+        if reds >= 2 or vol_reds >= 1:
+            verdict = "red"
+            label = "Pause — conditions are risky right now"
+            icon = "🛑"
+            headline = "Market looks volatile or blocked — sitting out is the safe choice"
+            sub = "One or more risk flags are high. The bot will auto-skip extreme entries; you should too. Wait for a clearer window."
+            action = "Avoid new entries. Let the bots cooldown/blackout pass, and re-check after the next update."
+        elif reds == 1 or ambers >= 2:
+            verdict = "amber"
+            label = "Caution — choppy, trade carefully"
+            icon = "⚠️"
+            headline = "Conditions are a bit choppy — extra caution warranted"
+            sub = "No hard block right now, but a few warning lights are on. Smaller size or fewer trades makes sense."
+            action = "Trade cautiously if you must, or wait an hour for a cleaner tape. Follow the bots auto-skips."
+        else:
+            verdict = "green"
+            label = "Calm — normal operation"
+            icon = "✅"
+            headline = "Conditions look calm — normal rules apply"
+            sub = "No major volatility or session risk right now. The bot may take the next valid setup."
+            action = "Let the bot run normally. It will still auto-skip any bad setup."
+
+        return {
+            "verdict": verdict, "label": label, "icon": icon,
+            "headline": headline, "sub": sub, "action": action,
+            "factors": factors, "counts": {"red": reds, "amber": ambers, "green": len(factors) - reds - ambers},
+            "volatile": (verdict != "green"),
+            "should_avoid": (verdict == "red"),
+            "as_of": now.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    except Exception as exc:
+        return {
+            "verdict": "unknown", "label": "Check unavailable", "icon": "❓",
+            "headline": "Could not assess volatility right now",
+            "sub": str(exc), "action": "Refresh in a minute.",
+            "factors": [], "counts": {"red": 0, "amber": 0, "green": 0},
+            "volatile": False, "should_avoid": False,
+            "as_of": (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M:%S"),
+            "error": str(exc),
+        }
+
+
+def simple_summary(status, ctx, volatility=None, now=None):
+    """High-level, human-friendly summary for the Simple tab (display-only).
+
+    status is the engines status.json dict, ctx is the output of build(),
+    volatility is the output of volatility_guard(). All are optional — missing
+    pieces degrade to friendly unknown lines rather than errors.
+    """
+    try:
+        now = now or datetime.now(timezone.utc).replace(tzinfo=None)
+        equity = None
+        try:
+            equity = float(status.get("equity"))
+        except Exception:
+            pass
+        delta = (equity - 500.0) if equity is not None else None
+        trade_active = bool(status.get("trade_active"))
+        book = ctx.get("book") if ctx else None
+        era = ctx.get("era") if ctx else None
+        setup = ctx.get("setup") if ctx else None
+        mkt = ctx.get("map") if ctx else None
+        feed = ctx.get("feed") if ctx else None
+
+        market_sentences = []
+        if setup and setup.get("ok"):
+            atr_txt = f"ATR ${setup['atr']:.2f}" if setup.get("atr") else "ATR unknown"
+            if setup["atr"] and setup["atr"] < MIN_ATR_TO_TRADE:
+                market_sentences.append(f"Market is quiet right now ({atr_txt}). Bars are small, so the bot is waiting for more movement before it will enter.")
+            elif setup["atr"] and setup["atr"] > MAX_ATR_TO_TRADE:
+                market_sentences.append(f"Market is very volatile ({atr_txt}). The bots safety filter is blocking new entries until things settle.")
+            elif setup["atr"] and setup["atr"] >= VOLATILITY_ATR_HIGH:
+                market_sentences.append(f"Market is volatile ({atr_txt}). Expect bigger swings — new positions carry extra risk.")
+            elif setup["atr"] and setup["atr"] >= VOLATILITY_ATR_ELEVATED:
+                market_sentences.append(f"Market is a bit choppy ({atr_txt}). Not extreme, but wider than average.")
+            else:
+                market_sentences.append(f"Market volatility looks normal ({atr_txt}). Price action is within the usual range.")
+            if mkt and mkt.get("levels"):
+                try:
+                    hi = max(l["price"] for l in mkt["levels"] if l.get("price") is not None)
+                    lo = min(l["price"] for l in mkt["levels"] if l.get("price") is not None)
+                    market_sentences.append(f"Prior session ran ${lo:.2f} -> ${hi:.2f}. Price is ${setup['close']:.2f} inside that context.")
+                except Exception:
+                    pass
+            if mkt and mkt.get("trends"):
+                for tr in mkt["trends"]:
+                    d = tr.get("delta")
+                    if d is None:
+                        market_sentences.append(f"{tr['tf']} trend: not enough clean data to tell — a gap or incomplete hour.")
+                    elif abs(d) < 1.0:
+                        market_sentences.append(f"{tr['tf']} trend: basically flat (${d:+.2f}). No strong push either way.")
+                    else:
+                        dir_word = "up" if d > 0 else "down"
+                        market_sentences.append(f"{tr['tf']} trend: drifting {dir_word} (${d:+.2f} on the last hour).")
+            else:
+                market_sentences.append("Trend info is still building — check back after four full hourly buckets.")
+        else:
+            market_sentences.append("Market data is still warming up — a few more minutes needed before a read is available.")
+
+        bot_next = "Bot is idle between setups."
+        if setup and setup.get("ok"):
+            ready_sides = [s for s in ("BUY", "SELL") if setup.get(s, {}).get("ready")]
+            if ready_sides:
+                joined = " / ".join(ready_sides)
+                bot_next = f"Bot sees a clean {joined} setup on the last bar — if the risk gates allow it, it will enter on the next candle."
+            else:
+                misses = []
+                for side in ("BUY", "SELL"):
+                    miss = setup.get("nearest_miss", {}).get(side)
+                    if miss:
+                        misses.append(f"{side}: waiting for {miss}")
+                if misses:
+                    bot_next = "Bot is waiting: " + "; ".join(misses[:2]) + "."
+                else:
+                    bot_next = "No side is fully ready — the 20-bar level, wick or trend condition is still missing."
+            pf = ctx.get("portfolio") if ctx else None
+            if pf:
+                if pf.get("blackout_any"):
+                    bot_next += " However, a session blackout is active right now, so the bot will skip even a perfect setup."
+                elif pf.get("cooldown_minutes_left"):
+                    bot_next += f" Note: cooldown for {pf['cooldown_minutes_left']} min after the last stop — the bot is deliberately pausing."
+                elif pf.get("breaker_on"):
+                    bot_next += " Daily loss limit is active — only trend-side setups will be taken today."
+        if trade_active:
+            entry = status.get("entry_price")
+            tp = status.get("take_profit")
+            sl = status.get("stop_loss")
+            typ = status.get("trade_type") or "position"
+            bot_next = f"Bot is IN a {typ} trade from ${entry} -> TP ${tp} / SL ${sl}. It will manage the exit (BE ratchet + time stop) automatically."
+
+        human_tip = "Let the bot follow its rules. No manual override needed while conditions are calm."
+        if volatility:
+            if volatility.get("verdict") == "red":
+                human_tip = "Manual tip: sit out new entries until this clears. Volatility, spread or session risk is high — even the bots auto-skips cannot protect you from a gap."
+            elif volatility.get("verdict") == "amber":
+                human_tip = "Manual tip: if you trade by hand, use smaller size or wait 30-60 min for a cleaner window. Do not chase moves."
+
+        today_line = "No trades yet today."
+        if book:
+            n = book.get("n", 0)
+            if n:
+                c = book.get("counts", {})
+                pnl = book.get("pnl", 0)
+                today_line = f"Today: {n} closed — {c.get('TP',0)} wins / {c.get('SL',0)} losses / {c.get('BE',0)} scratches — P&L ${pnl:+.2f} (paper)."
+                streak = book.get("last_20") or ""
+                if streak:
+                    today_line += f" Last 20 exits (old->new): {streak}"
+
+        stale_note = None
+        if feed and feed.get("ok"):
+            age = feed.get("age_seconds") or 0
+            if age > 300:
+                stale_note = f"Data is {age//60} min old — the feed may be stalled. Treat signals as stale."
+
+        return {
+            "mode": "paper",
+            "equity": equity, "equity_delta": delta,
+            "trade_active": trade_active,
+            "trade_type": status.get("trade_type"),
+            "book": book, "era": era, "setup": setup,
+            "market_sentences": market_sentences,
+            "bot_next": bot_next,
+            "today_line": today_line,
+            "human_tip": human_tip,
+            "stale_note": stale_note,
+            "as_of": now.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    except Exception as exc:
+        return {
+            "mode": "paper", "equity": None, "market_sentences": [f"Summary unavailable: {exc}"],
+            "bot_next": "Check again in a minute.", "today_line": "—", "human_tip": "—",
+            "stale_note": None, "as_of": (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M:%S"), "error": str(exc),
+        }
+
 
 
 if __name__ == "__main__":  # pragma: no cover - convenience only

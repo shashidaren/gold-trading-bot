@@ -79,6 +79,163 @@ HTML_TEMPLATE = """
             </div>
         </header>
 
+        <!-- Simple / Details tabs -->
+        <div class="flex items-center gap-2 mb-6 border-b border-slate-800 pb-2">
+            <button id="tab-simple" onclick="showTab('simple')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-amber-500 text-slate-900">✨ Simple Summary</button>
+            <button id="tab-details" onclick="showTab('details')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📊 Full Dashboard</button>
+            <span class="ml-auto text-[11px] text-slate-500 hidden md:inline">Simple is calm/volatile at a glance · Full shows every gate. Both are <span class="text-slate-300">paper only</span> — no real orders.</span>
+        </div>
+
+        <!-- ================= SIMPLE TAB ================= -->
+        <div id="panel-simple">
+            {% if ctx.simple %}
+            <!-- Big verdict card -->
+            {% set vg = ctx.volatility %}
+            <div class="rounded-2xl border p-5 mb-6
+                {% if vg.verdict == 'red' %} bg-rose-950/40 border-rose-700
+                {% elif vg.verdict == 'amber' %} bg-amber-950/30 border-amber-700
+                {% elif vg.verdict == 'green' %} bg-emerald-950/30 border-emerald-700
+                {% else %} bg-slate-800 border-slate-700 {% endif %}">
+                <div class="flex flex-col md:flex-row items-start gap-4">
+                    <div class="text-4xl">{{ vg.icon if vg else '❓' }}</div>
+                    <div class="flex-1">
+                        <h2 class="text-xl font-bold
+                            {% if vg.verdict == 'red' %} text-rose-300
+                            {% elif vg.verdict == 'amber' %} text-amber-300
+                            {% elif vg.verdict == 'green' %} text-emerald-300
+                            {% else %} text-slate-200 {% endif %}">
+                            {{ vg.headline if vg else 'Summary unavailable' }}
+                        </h2>
+                        <p class="text-sm text-slate-300 mt-1">{{ vg.sub if vg else ctx.simple.bot_next }}</p>
+                        <p class="text-xs text-slate-400 mt-2">{{ vg.action if vg else '' }}</p>
+                        {% if ctx.simple.trade_active %}
+                        <p class="mt-3 text-sm font-semibold text-amber-300">🔥 Currently IN a {{ status.trade_type or 'position' }} — entry ${{ "%.2f"|format(status.entry_price or 0) }} · SL ${{ "%.2f"|format(status.stop_loss or 0) }} · TP ${{ "%.2f"|format(status.take_profit or 0) }}</p>
+                        {% endif %}
+                    </div>
+                    <div class="text-right shrink-0">
+                        <p class="text-xs text-slate-400">Equity (paper)</p>
+                        <p class="text-2xl font-bold {{ 'text-emerald-400' if status.equity >= 500 else 'text-rose-400' }}">${{ "%.2f"|format(status.equity) }}</p>
+                        <p class="text-xs {{ 'text-emerald-400' if (status.equity-500)>=0 else 'text-rose-400' }}">{{ equity_delta }} from $500 start</p>
+                        <p class="text-[11px] text-slate-500 mt-1">{{ ctx.simple.today_line }}</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick numbers -->
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                <div class="bg-slate-800 p-3 rounded-xl border border-slate-700">
+                    <p class="text-xs text-slate-400">Today P&amp;L</p>
+                    <p class="text-lg font-bold {% if ctx.book and ctx.book.pnl > 0 %}text-emerald-400{% elif ctx.book and ctx.book.pnl < 0 %}text-rose-400{% else %}text-slate-200{% endif %}">{{ "%+.2f"|format(ctx.book.pnl) if ctx.book else "—" }}</p>
+                    <p class="text-[11px] text-slate-500">{{ ctx.book.n if ctx.book else 0 }} closed today</p>
+                </div>
+                <div class="bg-slate-800 p-3 rounded-xl border border-slate-700">
+                    <p class="text-xs text-slate-400">Win rate (decisive)</p>
+                    <p class="text-lg font-bold text-blue-400">{{ status.win_rate }}% <span class="text-xs font-normal text-slate-500">all-in {{ "%.1f"|format(100 * (status.wins or 0) / (status.total_trades or 1)) }}%</span></p>
+                    <p class="text-[11px] text-slate-500">{{ status.wins }}W / {{ status.losses }}L / {{ status.be_exits or 0 }}BE</p>
+                </div>
+                <div class="bg-slate-800 p-3 rounded-xl border border-slate-700">
+                    <p class="text-xs text-slate-400">Next trade #</p>
+                    <p class="text-lg font-bold text-cyan-400">{{ status.next_trade_num or '—' }}</p>
+                    <p class="text-[11px] text-slate-500">Closed total: {{ status.total_trades }}</p>
+                </div>
+                <div class="bg-slate-800 p-3 rounded-xl border border-slate-700">
+                    <p class="text-xs text-slate-400">Data freshness</p>
+                    <p class="text-lg font-bold {% if stale %}text-rose-400{% else %}text-emerald-400{% endif %}">{% if stale %}STALE{% else %}Live{% endif %}</p>
+                    <p class="text-[11px] text-slate-500">{{ stale_age }} · log rows: {{ total }}</p>
+                </div>
+            </div>
+
+            <!-- Market now (plain English) -->
+            <div class="bg-slate-800 rounded-xl border border-slate-700 p-4 mb-6">
+                <h3 class="text-sm font-semibold text-slate-200 mb-2">🌤️ Market now — in plain English</h3>
+                <ul class="space-y-1 text-sm text-slate-300">
+                    {% for s in ctx.simple.market_sentences %}
+                    <li class="flex gap-2"><span class="text-slate-500">•</span><span>{{ s }}</span></li>
+                    {% endfor %}
+                    {% if ctx.simple.stale_note %}
+                    <li class="flex gap-2 text-amber-300"><span>⚠️</span><span>{{ ctx.simple.stale_note }}</span></li>
+                    {% endif %}
+                </ul>
+                <p class="text-xs text-slate-500 mt-3">ATR = average bar size. Bigger ATR = more volatile. The bot needs ATR 1.10–4.50 to trade — outside that, it auto-skips.</p>
+            </div>
+
+            <!-- Volatility guard — should I trade? -->
+            <div class="bg-slate-800 rounded-xl border border-slate-700 p-4 mb-6">
+                <div class="flex items-baseline justify-between mb-3">
+                    <h3 class="text-sm font-semibold text-slate-200">🛡️ Should I trade now? — Volatility guard</h3>
+                    <span class="text-[11px] px-2 py-0.5 rounded font-semibold
+                        {% if vg.verdict == 'red' %} bg-rose-900/60 text-rose-200
+                        {% elif vg.verdict == 'amber' %} bg-amber-900/60 text-amber-200
+                        {% elif vg.verdict == 'green' %} bg-emerald-900/60 text-emerald-200
+                        {% else %} bg-slate-700 text-slate-300 {% endif %}">
+                        {{ vg.label if vg else '—' }} · 🔴{{ vg.counts.red if vg else 0 }} 🟡{{ vg.counts.amber if vg else 0 }} 🟢{{ vg.counts.green if vg else 0 }}
+                    </span>
+                </div>
+                <p class="text-xs text-slate-400 mb-3">If this is <span class="text-rose-300 font-semibold">red</span>, sit out new entries. If <span class="text-amber-300 font-semibold">yellow</span>, trade smaller / wait. The bot already auto-skips blocked rows — this just tells you whether <em>you</em> should add risk.</p>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {% for f in vg.factors %}
+                    <div class="flex gap-3 p-3 rounded-lg border
+                        {% if f.level == 2 %} bg-rose-950/30 border-rose-800
+                        {% elif f.level == 1 %} bg-amber-950/20 border-amber-800
+                        {% else %} bg-slate-900/50 border-slate-700 {% endif %}">
+                        <div class="text-lg">{{ f.icon }}</div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-baseline justify-between gap-2">
+                                <span class="text-sm font-semibold text-slate-200">{{ f.name }}</span>
+                                <span class="text-xs font-mono text-slate-400">{{ f.value }}</span>
+                            </div>
+                            <p class="text-xs text-slate-300 leading-snug">{{ f.detail }}</p>
+                            <p class="text-[11px] text-slate-500 leading-snug mt-1">{{ f.advice }}</p>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <p class="text-[11px] text-slate-500 mt-3">Volatility guard is <strong class="text-slate-300">display-only</strong> — it never changes the bot's gates. Engine gates remain the authority (ATK bounds 1.10–4.50, spread block &gt;0.60, blackouts, cooldown, breaker). This translates them into "should <em>I</em> add manual risk?"</p>
+            </div>
+
+            <!-- What bot will do next -->
+            <div class="bg-slate-800 rounded-xl border border-slate-700 p-4 mb-6">
+                <h3 class="text-sm font-semibold text-slate-200 mb-2">🤖 What the bot will do next</h3>
+                <p class="text-sm text-slate-300">{{ ctx.simple.bot_next }}</p>
+                {% if ctx.setup and ctx.setup.ok %}
+                <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                    {% for side in ['BUY', 'SELL'] %}
+                    {% set s = ctx.setup[side] %}
+                    <div class="rounded-lg border p-2 {% if s.ready %} border-emerald-700/50 bg-emerald-950/20 {% else %} border-slate-700 bg-slate-900/40 {% endif %}">
+                        <span class="font-semibold {% if side == 'BUY' %}text-emerald-300{% else %}text-rose-300{% endif %}">{{ side }}</span>
+                        <span class="ml-1 text-slate-400">{{ s.passed }}/{{ s.total }} gates</span>
+                        {% if s.ready %}<span class="ml-1 text-emerald-400">✓ ready</span>{% else %}<span class="ml-1 text-slate-500">waiting</span>{% endif %}
+                        <span class="block text-slate-500 mt-1">Level ${{ "%.2f"|format(s.level) }} · {{ "%.2f"|format(s.level_dist_atr) }} ATR away</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                <p class="text-xs text-amber-300/90 mt-3">💡 {{ ctx.simple.human_tip }}</p>
+                <p class="text-[11px] text-slate-500 mt-1">Paper only — no real orders. Bot runs FORWARD_TEST with simulated $500 start. No amount shown here is spendable or withdrawable.</p>
+            </div>
+
+            <!-- Mini glossary -->
+            <div class="bg-slate-800/60 rounded-xl border border-slate-700 p-4 mb-6">
+                <h3 class="text-sm font-semibold text-slate-300 mb-2">📖 Quick glossary</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-slate-400">
+                    <div><span class="text-slate-300 font-semibold">ATR</span> — average bar size in dollars. Low = quiet, high = volatile.</div>
+                    <div><span class="text-slate-300 font-semibold">Spread</span> — broker cost to enter (ask − bid). Wide = expensive.</div>
+                    <div><span class="text-slate-300 font-semibold">TP / SL</span> — take-profit / stop-loss levels. TP = 1.5× risk from entry.</div>
+                    <div><span class="text-slate-300 font-semibold">BE</span> — breakeven scratch. Bot moved SL to entry at +0.75R, then got stopped flat.</div>
+                    <div><span class="text-slate-300 font-semibold">Cooldown</span> — bot pauses 30–60 min after a stop-loss to avoid chasing.</div>
+                    <div><span class="text-slate-300 font-semibold">Blackout</span> — known news/session window. Bot skips BUY or both sides there.</div>
+                </div>
+                <p class="text-[11px] text-slate-500 mt-2">Details, tests and the full evidence stay in <span class="font-mono">Full Dashboard</span> below. Nothing is hidden — just layered.</p>
+            </div>
+            {% else %}
+            <div class="bg-rose-900/30 border border-rose-700 rounded-xl p-4 mb-6 text-sm text-rose-200">Simple summary unavailable — {{ ctx.error if ctx.error else 'no context yet' }}. Switch to Full Dashboard or refresh.</div>
+            {% endif %}
+        </div>
+        <!-- ================= END SIMPLE TAB ================= -->
+
+        <!-- ================= DETAILS TAB (original dashboard) ================= -->
+        <div id="panel-details" class="hidden">
+
         <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-4 mb-6">
             <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
                 <p class="text-xs text-slate-400">Closed Trades</p>
@@ -856,7 +1013,44 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
+        </div>
+        </div>
+        <!-- ================= END DETAILS TAB ================= -->
+
     </div>
+    <script>
+    function showTab(name) {
+        var simple = document.getElementById('panel-simple');
+        var details = document.getElementById('panel-details');
+        var tSimple = document.getElementById('tab-simple');
+        var tDetails = document.getElementById('tab-details');
+        if (name === 'simple') {
+            simple.classList.remove('hidden');
+            details.classList.add('hidden');
+            tSimple.className = "px-4 py-2 rounded-t-lg text-sm font-semibold bg-amber-500 text-slate-900";
+            tDetails.className = "px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700";
+            try { localStorage.setItem('gold_tab', 'simple'); } catch(e) {}
+        } else {
+            details.classList.remove('hidden');
+            simple.classList.add('hidden');
+            tDetails.className = "px-4 py-2 rounded-t-lg text-sm font-semibold bg-amber-500 text-slate-900";
+            tSimple.className = "px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700";
+            try { localStorage.setItem('gold_tab', 'details'); } catch(e) {}
+        }
+    }
+    (function() {
+        try {
+            var saved = localStorage.getItem('gold_tab');
+            if (saved === 'details') showTab('details');
+            else showTab('simple');
+        } catch(e) { showTab('simple'); }
+        // Also allow ?tab=details deep link
+        try {
+            var params = new URLSearchParams(window.location.search);
+            if (params.get('tab') === 'details') showTab('details');
+        } catch(e) {}
+    })();
+    </script>
 </body>
 </html>
 """
@@ -1132,6 +1326,23 @@ def index():
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         quotes = PR.tail_rows(os.path.join(DATA_DIR, "xm_data", "quotes-" + now.strftime("%Y-%m-%d") + ".csv"), 240)
         ctx["risk_now"] = PR.risk_read(status, quotes, now)
+        # Simple tab: volatility guard + plain-English summary (display-only, never a gate)
+        try:
+            # ATR median needs the raw tail; reuse the rows we already have plus a longer tail for median
+            log_tail_60 = PR.tail_rows(LOG_FILE_PATH, 400)
+            ctx["volatility"] = PR.volatility_guard(
+                log_rows=log_tail_60,
+                portfolio=ctx.get("portfolio"),
+                feed=ctx.get("feed"),
+                risk=ctx.get("risk_now"),
+                mkt=ctx.get("map"),
+                setup=ctx.get("setup"),
+                now=now,
+            )
+            ctx["simple"] = PR.simple_summary(status, ctx, ctx["volatility"], now)
+        except Exception as exc:
+            ctx["volatility"] = {"verdict": "unknown", "label": "Check unavailable", "icon": "❓", "headline": f"Simple summary failed: {exc}", "sub": "", "action": "", "factors": [], "counts": {"red":0,"amber":0,"green":0}, "volatile": False, "should_avoid": False, "as_of": ""}
+            ctx["simple"] = {"mode": "paper", "equity": status.get("equity"), "market_sentences": [f"Simple summary failed: {exc}"], "bot_next": "—", "today_line": "—", "human_tip": "—", "stale_note": None, "as_of": ""}
     trade_read = open_trade_read(status, recent_rows)
     stale, stale_age = _stale_info(status.get("last_update"))
     hold_minutes = _hold_minutes(status.get("entry_time")) if status.get("trade_active") else None
