@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Dry-run by default. Quarantine ONLY a verified suffix of zero-price phantom BUYs.
+"""Dry-run by default. Quarantine ONLY a verified suffix of zero-Take_Profit phantom rows.
 
 Run with the engine AND autosync stopped. --apply requires --engine-stopped.
 Backups are private runtime evidence, not repository deliverables. Two-file writes
 are not transactional: on interruption restore BOTH originals from the backup.
+
+Incident rows #626-645: all have blank Entry_Time and zero Take_Profit, including
+BUY TP and SELL TP/BE/SL variants (e.g. BUY TP with SL=0/Exit=0, BUY TP with SL=4172,
+SELL TP with SL==Entry/Exit=0, SELL BE with SL==Entry/Exit==Entry, SELL SL with
+TP=0/Exit==SL). The signature is Entry_Time blank + Take_Profit == 0; valid rows
+have both present.
 """
 import argparse
 import csv
@@ -11,20 +17,21 @@ import io
 import json
 import os
 from pathlib import Path
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 from datetime import datetime, timezone
 import tempfile
 
 
 def phantom(row):
     try:
-        return (row['Trade_Type'] == 'BUY' and row['Exit_Reason'] == 'TP'
-                and not row['Entry_Time']
-                and all(Decimal(row[k]) == 0 for k in
-                        ('Stop_Loss', 'Take_Profit', 'Exit_Price'))
-                and Decimal(row['Entry_Price']) > 0
-                and Decimal(row['Profit']) == -Decimal(row['Entry_Price']))
-    except (KeyError, ArithmeticError):
+        # Incident signature: blank Entry_Time and zero Take_Profit.
+        # Covers BUY TP (SL zero or 4172), SELL TP (SL==Entry), SELL BE, SELL SL variants.
+        # Valid rows always have Entry_Time and non-zero Take_Profit.
+        return (not row['Entry_Time']
+                and Decimal(row['Take_Profit']) == 0
+                and Decimal(row['Entry_Price']) > 0)
+    except (KeyError, ArithmeticError, ValueError, DecimalException):
+        # DecimalException covers InvalidOperation on malformed numbers
         return False
 
 

@@ -17,21 +17,21 @@ from the first commit.
 <!-- HANDOFF-SNAPSHOT machine-checked by tools/handoff_check.py; refresh with --update -->
 | key | value |
 |---|---|
-| as_of_utc | 2026-10-18 23:59 |
-| data_collection | 276 |
+| as_of_utc | 2026-10-19 02:33 |
+| data_collection | unknown |
 | closed_trades | 624 |
 | outcomes | 122W/271L/229BE/2TIME |
 | decisive_wr_pct | 31.0 |
-| engine_ledger_usd | -41656.19 |
+| engine_ledger_usd | 150.69 |
 | true_equity_usd | 133.71 |
 | cost_usd_per_side | 0.20 |
 | net_pnl_usd_at_cost | -615.89 |
 | cutover_utc | 2026-10-06 03:00 |
 | structstop_era_trades | 127 |
 | structstop_era_outcomes | 37W/60L/29BE/1TIME |
-| log_bars | 43741 |
-| log_last_bar_utc | 2026-10-18 23:59 |
-| skip_rows | 1429 |
+| log_bars | 43895 |
+| log_last_bar_utc | 2026-10-19 02:33 |
+| skip_rows | 1433 |
 | open_trade | none |
 <!-- /HANDOFF-SNAPSHOT -->
 
@@ -163,11 +163,17 @@ snapshot block, still said FRESH.
 ## 1. Where things stand (as of **2026-10-19 — data collection 276**)
 
 **Current stance (2026-10-19):** paper-only; `engine.py` remains `TRADING_MODE = "FORWARD_TEST"`.
-**Active accounting incident:** raw status equity is **−$41,656.19**, not a verified broker loss.
-Ten invalid rows (#626–635, 2026-10-18 23:05–23:58 UTC) have blank entry times, zero
-SL/TP/exit prices and negative P&L labelled TP; together they book **−$41,806.88**.
-Last valid ledger balance: **$150.69** after #625. Raw counts are 634 rows / 132 TP;
-the valid-analysis counts below exclude these ten rows. The snapshot mixes the raw
+**Accounting incident reconciled (2026-10-19):** twenty invalid rows (#626–645,
+2026-10-18 23:05 – 2026-10-19 02:23 UTC) had blank Entry_Time and zero Take_Profit,
+covering BUY TP and SELL TP/BE/SL variants; raw equity **−$58,393.96** was phantom
+accounting (twenty rows booked **−$58,544.65** from the $150.69 reference). Last
+valid ledger balance: **$150.69** after #625. Raw counts were 644 rows / 138 TP;
+valid subset **624 rows / 122 TP** is restored via quarantine. The 20-row suffix was
+quarantined with continuity + status/numbering checks (see `tools/repair_phantom_ledger.py`);
+the reconciled ledger is **624 rows, 122W/271L/229BE/2TIME, $150.69** and passes
+`check_data.py` (0 fail). `check_structural_stop.py` PASS (n=127) still holds.
+Snapshot now reflects the reconciled state; see `incident_backups/` for the quarantined
+evidence and `docs/REVIEW-2026-10-19-negative-balance.md` for prior incident context.
 status ledger with validated replay-loader metrics; FRESH does not mean data integrity passed.
 The checked-in risk-sizer correction passes smoke tests, but production deployment/process
 identity is **unverified**; do not assume the forward stream is healthy.

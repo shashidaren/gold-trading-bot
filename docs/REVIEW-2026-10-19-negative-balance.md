@@ -17,6 +17,30 @@ No production-host access was available in this investigation.
 - The owner's approximately −$58,000 reading is not present in this synced snapshot.
   Later host rows could explain it, but that is unverified.
 
+### Update — extended to #626–645 (20 rows, 2026-10-19 02:33 UTC snapshot)
+
+Synced snapshot at **2026-10-19 02:33 UTC** extends the suffix to **20 rows #626–645**
+(2026-10-18 23:05:06 – 2026-10-19 02:23:04 UTC). All 20 share **blank Entry_Time and
+zero Take_Profit** — the canonical incident signature. Variants observed:
+
+- **BUY TP** with `SL=0.00/Exit=0.00/Profit=-Entry` (13 rows, #626–638)
+- **BUY TP** with `SL=4172.00/Exit=0.00/Profit=-Entry` (2 rows, #644–645)
+- **SELL TP** with `SL==Entry/TP=0/Exit=0/Profit=+Entry` (1 row, #639)
+- **SELL BE** with `SL==Entry/TP=0/Exit==Entry/Profit=0` (3 rows, #640–642)
+- **SELL SL** with `SL=4172/TP=0/Exit==SL/Profit=Entry-SL` (1 row, #643, −$4.31)
+
+Total phantom P&L = **−$58,544.65**; **$150.69 − $58,544.65 = −$58,393.96**, exactly the
+raw status equity at the 02:33 snapshot (644 rows, 138W/272L/232BE/2TIME; see
+`trades.csv` lines 626–645). The 20-row suffix is contiguous, Trade_Num sequential
+626→645, Balance_After continuous, and status `equity/total_trades` matches the ledger.
+Reconciled ledger remains **624 rows, 122W/271L/229BE/2TIME, $150.69** (same $150.69
+reference). The recovery tool now keys on `not Entry_Time and Take_Profit==0`,
+covering all BUY/SELL TP/BE/SL variants; prior BUY-only zero-price check is superseded.
+Evidence is preserved in `incident_backups/<UTC>/quarantined_trades.csv`
+(originals + forward_test_log.csv copied). The checked-in `tools/repair_phantom_ledger.py`
+was extended accordingly; `tools/test_repair_phantom_ledger.py` adds regression coverage
+for SELL TP/BE/SL and full-20-row reconciliation.
+
 ## Mechanism and confidence
 
 The malformed rows match the already documented PR #34 risk-sizer refusal bug
@@ -106,13 +130,15 @@ After merge/deploy, on the host (operator only):
    monitor status/first trade, and restore the autosync schedule.
 
 Validation: full smoke suite PASS (new zero-geometry, invalid-tick and negative-
-balance restart cases), three hermetic repair tests PASS (including backup/apply,
-repeat-apply refusal and dry-run), py_compile PASS. Real snapshot dry-run identifies
-10 rows and $150.69 reference equity. No production data was changed.
+balance restart cases), seven hermetic repair tests PASS (including SELL TP/BE/SL,
+BUY with SL 4172, full-20-row ledger, backup/apply, repeat-apply refusal and dry-run),
+py_compile PASS. Real snapshot dry-run identifies **20 rows** and $150.69 reference equity.
 
 End-to-end rehearsal on a temporary copy of all four synced runtime files:
-backup/apply quarantined 10 rows, restored $150.69, and check_data reported
-**0 fail, 8 warn** (historical informational warnings). The repository's original
-trades.csv/status.json remain unchanged. Replay calibration still reports
+backup/apply quarantined 20 rows, restored $150.69, and check_data reported
+**0 fail, 8 warn** (historical informational warnings). The repository's reconciled
+trades.csv/status.json (624 rows, $150.69) replaces the corrupted snapshot; originals
+preserved in `incident_backups/` (private, git-ignored). Replay calibration still reports
 100% entry-stream / side+price recall for the 0.75R master and max-hold books;
 structural-stop guard PASS. No experiment thresholds or cutovers changed.
+No strategy parameters were altered; the engine was stopped for the repair.
