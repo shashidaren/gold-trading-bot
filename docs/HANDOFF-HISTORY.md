@@ -14,6 +14,34 @@ block or a REVIEW instead; that is what makes this file trustworthy. (Created 20
 
 ---
 
+## 2026-10-20 11:57 UTC — §1 before the post-gate data refresh
+
+**This is the complete HANDOFF §1 block as it stood for the 2026-10-19 18:10 UTC snapshot (636 closes, structural-stop n=139), written just after the 21:19 judgement.** Superseded on 2026-10-20 when the synced data reached 08:59 UTC with 644 closes and the era at n=147 — see `docs/REVIEW-2026-10-20-post-gate-refresh.md`. Nothing below is current.
+
+### Replaced §1 block
+
+## 1. Where things stand (as of **2026-10-19 — latest data through 18:10 UTC**)
+
+**Current stance (judgement recorded 2026-10-19 21:19 UTC; latest synced data to 18:10 UTC):** paper-only; `engine.py` remains `TRADING_MODE = "FORWARD_TEST"`. No engine, filter, parameter, gate or deployment change was made. The checked-in data is the latest available snapshot, not a host heartbeat; production process/revision and any unsynced rows after 18:10 remain operator-only and unverified.
+
+**The book:** **636 closed trades** (124W/276L/234BE/2TIME; 31.0% decisive), engine ledger **$142.16**, true equity **$125.18**, net **−$629.22** at the assumed $0.40 round trip. No open trade in the checked-in status. Quote logging has 6.1 days (5/14 complete UTC days, 1/2 weekends) and a first-look median $0.55 spread/round trip; the sample target is not met, so $0.40 remains the registered cost assumption.
+
+**The structural-stop evaluation reached its registered time gate at 21:00 UTC.** The latest checked-in snapshot is still through 18:10 UTC: **n=139** (39W/65L/34BE/1TIME; 11 entry dates), so the n=150 arm was not reached. The mechanical guard passes: 0 post-cutover stops inside the tested level, 81.3% level-bound, median clearance +0.50 ATR, median risk 3.27 ATR. Replay calibration is 99.8% on the 0.75R master and 99.7% on max-hold.
+
+The registered **SCREEN MET** on that snapshot: SL/day **5.91**, SL share **46.76%** (≤47.0%), scratch share **24.46%**, gross R/trade **−0.071R**, decisive WR **37.50% [28.8–47.1]**. **PASS was not met**: n=139 <150 and the Wilson 95% lower bound 28.8% is not >32.1%. Gross era P&L is **−$56.01**; at the assumed $0.40 round trip it is **−$111.61 (−0.142R/trade)**. There is no demonstrated edge.
+
+**The separate §7 closure-gap REVERT trigger FIRED.** Counting a post-cutover trade open across a >5-minute log hole classified as a scheduled daily/weekly closure gives **2/2** (#595, #610). Neither reopened through its stop or exited worse; one stop was ratcheted to entry, and no weekend closure was ridden. These damage facts do not add a condition to the registered count. The bar and counting rule are recorded in `docs/REVIEW-2026-10-19-struct-stop-judgement.md` §3.
+
+The pre-registered response is **REVERT with the gap guard first**; therefore the 0.25 ATR level test is not eligible. The guard is not operationally specified (no approved cutoff or open-position policy), and the production host/data state is unverified. This session records the fired trigger but does **not** invent a guard, revert code, or deploy. **Next eligible action:** owner-defined and dated pre-registration of the guard (including cutoff, schedule source, and whether it blocks new entries or also closes open paper positions), then a reviewed guard change and the prescribed revert in order; verify fresh host data and executable before any deployment. Until then, the checked-in engine still contains the structural stop and remains paper-only.
+
+**Accounting incident reconciled (2026-10-19):** malformed rows #626–645 were quarantined from backed-up evidence using `tools/repair_phantom_ledger.py`; the checked-in ledger has advanced to 636 valid closed trades and passes `check_data.py` (0 fail; 8 documented warnings). The raw-row reconciliation and evidence are in `docs/REVIEW-2026-10-19-negative-balance.md` and `incident_backups/`. **Host-side verification of the running executable/revision remains operator-only**; do not infer production process health from this checkout alone.
+
+**The dashboard pressure composite remains a side proxy, not a signal.** The latest re-join at n=139 is still collinear with side and has no within-side `against` bucket. The owner's manual pressure/hold observation remains a separate, unmeasured hypothesis. The signal-outlook re-read at n=139 still shows no directional edge after an 8/8 signal: 50.4% [42–59] trade-way at 30m (median +0.02R) and 50.7% [42–59] at 60m. These are base rates for manual context, never a forecast, entry gate, sizing, or hold-past-stop input.
+
+**Box theory (manual, unmeasured in the ledger):** asked 2026-10-20 whether boxes can be used for manual trades. Measured on the same tape (`tools/box_report.py`, `docs/ANALYSIS-2026-10-20-box-theory-manual-trading.md`): breakout and fade entries land on or below the driftless reference at both box sizes, and 74–75% of breaks close back inside within 15 min. **Verdict: box = a place to put a stop, not a signal.** Display/advice only — no gate, no runtime change; manual box trades are not in `trades.csv` and are not evidence until logged (bar: n≥100, positive after spread). The dashboard renders the same read in its **📦 Boxes & Timing** tab (`?tab=boxes`) — boxes, the seven-condition checklist, the setup card and the measured footer.
+
+---
+
 ## 2026-10-19 21:19 UTC — §1 before the scheduled structural-stop judgement
 
 **This is the complete HANDOFF §1 block as it stood for the latest checked-in data snapshot (log to 2026-10-19 18:10 UTC, 636 closes, structural-stop n=139), before the 21:00 UTC judgement was recorded.** The snapshot and interim state are historical; the current state is in HANDOFF §1 and the judgement is in `docs/REVIEW-2026-10-19-struct-stop-judgement.md`.
