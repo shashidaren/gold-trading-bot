@@ -259,6 +259,33 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
+            <!-- Manual watch references: no orders, probability or entry recommendation. -->
+            <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4 mb-5">
+                <h3 class="text-lg font-semibold">Manual trade watch — price levels</h3>
+                <p class="text-xs text-slate-400 mt-1">Breakout watch only, not a buy/sell signal. Levels roll with each closed candle; rejection candidates in the checklist below are separate.</p>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                    {% for card in bx.watch_cards %}
+                    <div class="rounded-xl border border-slate-600 bg-slate-900/50 p-4">
+                        <div class="font-semibold {% if card.side == 'BUY' %}text-emerald-300{% else %}text-rose-300{% endif %}">{{ card.side }} WATCH {{ 'above' if card.side == 'BUY' else 'below' }} ${{ '%.2f'|format(card.threshold) }}</div>
+                        <div class="text-xs text-slate-400 mt-1">{{ card.box }} · boundary ${{ '%.2f'|format(card.edge) }} · confirmation buffer ${{ '%.2f'|format((card.threshold - card.edge)|abs) }}</div>
+                        <div class="text-sm text-amber-300 mt-2">{{ card.state }}</div>
+                        <div class="text-xs text-slate-300 mt-2">Close {{ 'meets' if card.confirmed else 'has not met' }} the buffered boundary. Reference bar: {{ bx.geometry.as_of.strftime('%Y-%m-%d %H:%M') }} UTC · {{ card.age_seconds }}s old.</div>
+                        <dl class="grid grid-cols-2 gap-3 mt-3 text-xs">
+                            <div><dt class="text-slate-400">{{ 'Last close reference' if card.confirmed else 'Hypothetical trigger reference' }}</dt><dd class="font-mono">${{ '%.2f'|format(card.entry) }}</dd></div>
+                            <div><dt class="text-slate-400">Invalidation / hypothetical stop</dt><dd class="font-mono">${{ '%.2f'|format(card.stop) }}</dd></div>
+                            <div><dt class="text-slate-400">Measured-move target (1 box)</dt><dd class="font-mono">${{ '%.2f'|format(card.target) }}</dd></div>
+                            <div><dt class="text-slate-400">Gross → costed reward/risk</dt><dd class="font-mono">{{ '%.2f'|format(card.gross_rr) }} → {{ '%.2f'|format(card.net_rr) }}:1</dd></div>
+                        </dl>
+                        <p class="text-xs text-slate-400 mt-3">Extension beyond edge: {{ '%.2f'|format(card.extension_atr) }} ATR. Do-not-chase warning above 1 ATR (unvalidated display heuristic).</p>
+                        {% if card.limited_reward %}<p class="text-xs text-amber-300 mt-2">Limited reward: costed reward is less than risk.</p>{% endif %}
+                        {% for reason in card.reasons %}<p class="text-xs text-rose-300 mt-2">{{ reason }}</p>{% endfor %}
+                        <p class="text-xs text-slate-400 mt-2">Retest: not tracked. Verify manually against a fixed box; do not infer a held retest from these rolling levels.</p>
+                    </div>
+                    {% endfor %}
+                </div>
+                <p class="text-xs text-slate-400 mt-3">Confirmation includes the existing box breakout ATR buffer, not a wick touch. Costed ratio = (reward − assumed round-trip spread) / (risk + spread), using ${{ '%.2f'|format(bx.spread_usd) }}/oz; excludes slippage, commission and swap. These are bar-close references, not current executable bid/ask quotes. Recheck actual price and spread before any manual decision. No edge has been validated.</p>
+            </div>
+
             <div class="grid grid-cols-1 xl:grid-cols-2 gap-5">
                 <!-- Boxes -->
                 <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4">

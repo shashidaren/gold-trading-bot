@@ -262,3 +262,12 @@ not a registered `N`, and nothing was implemented. Consequence: the structural s
 checked-in engine, the bot stays paper-only, and the prescribed "revert with the gap guard first"
 remains blocked pending the owner's own dated pre-registration. Recorded in
 `docs/REVIEW-2026-10-20-post-gate-refresh.md` §4 so the next session quotes it rather than re-asking.
+
+
+## 2026-10-20 — manual dashboard watch cards
+
+Added read-only BUY/SELL watch price cards to Boxes & Timing: buffered breakout
+references, hypothetical invalidation/target, gross and costed payoff, stale/unknown
+health overrides and a labelled >1 ATR chase heuristic. Retests are not tracked;
+no engine or filter changes. See `docs/REVIEW-2026-10-20-box-watch-cards.md`.
+Also recorded the requested live-readiness estimate separately; no go-live approval.

@@ -71,3 +71,11 @@ At the end of each execution session:
 2. Update `docs/HANDOFF.md` where current state or next steps changed; run `python3 tools/handoff_check.py --update` only after checking the underlying files.
 3. Record any conclusion in a dated review/pre-registration, not only in chat.
 4. List the next eligible action and any owner/production-host blocker in the final response.
+
+### 2026-10-20 dashboard-only follow-up
+
+Added manual BUY/SELL watch references, costed geometry and health/chase warnings;
+see `docs/REVIEW-2026-10-20-box-watch-cards.md`. No strategy work was advanced,
+no guard definition was invented, and no deployment or real orders were authorized.
+Live-readiness estimate is recorded separately in
+`docs/REVIEW-2026-10-20-live-readiness-timeline.md`.
