@@ -223,3 +223,51 @@ structural-stop guard PASS; `check_gap_rides.py` still at the registered count
 SCREEN MET; `strategy_lab.py --calib-only` recall 99.8% (0.75R master) / 99.7%
 (max-hold); quote report 6.1 days; signal-outlook report n=139. No final judgement,
 deployment, or production-host process verification is claimed.
+
+## 2026-10-20 — "execute the plan": post-gate data refresh (docs only, no runtime change)
+
+Ran the plan's every-session queue against the checked-in snapshot (collection 294, ledger
+and log through 2026-10-20 08:59 UTC) and completed its refresh duties. No engine, filter,
+parameter, gate, exit or deploy change: `engine.py` stays `TRADING_MODE = "FORWARD_TEST"`.
+
+Current state: **644 closed** (128W/277L/237BE/2TIME, 31.6% decisive), engine ledger $174.73,
+true equity $157.76, net **−$599.84** at the assumed $0.40 round trip; open paper trade
+SELL #646 @ $4120.28. The eight post-judgement trades (#638–#645, 4TP/1SL/3BE, +$32.58 gross)
+moved the structural-stop era from n=139 to **n=147** (43W/66L/37BE/1TIME) with the guard still
+PASS (0 stops inside the level, 81.6% level-bound, +0.50 ATR median clearance, 3.29 ATR median
+risk) and the §7 closure-gap count unchanged at **2/2**, so the REVERT trigger remains fired.
+
+Ruling recorded (interpretation, not a new threshold): the n=150 confirmatory arm **lapsed**
+when the 2026-10-19 21:00 UTC time gate came first, so growing past 150 must not be used to
+re-judge SCREEN/PASS on a later snapshot; post-gate era numbers are observations only. A
+re-opened arm would need a new dated pre-registration written before the data is used.
+
+Quote logger 6.7 days, 6/14 complete UTC days, 1/2 weekends, median $0.55 — the $0.40 assumption
+stays. Broker-clock DST still unverified (single +3 h offset); discriminating window opens
+2026-10-25 01:00 UTC. Pressure composite still collinear with side at n=147 (display-only).
+
+Verification: `check_data.py` 0 fail / 8 documented warnings; `handoff_check.py` FRESH before and
+after `--update` (0 advisory drift after); `check_structural_stop.py` PASS; `check_gap_rides.py`
+2/2 (threshold reached, as registered); `strategy_lab.py --calib-only` recall 99.8% / 99.7%;
+`win_rate_report.py --spread 0.40` net −$599.84; `xm_quote_report.py` 6/14 days;
+`pressure_report.py --root .` all screen bars inside their thresholds. Files: `docs/HANDOFF.md`,
+`docs/HANDOFF-HISTORY.md`, `docs/EXECUTION-PLAN.md`, `docs/REVIEW-2026-10-20-post-gate-refresh.md`,
+this log. No deployment, host-process verification or production conclusion is claimed.
+
+**Addendum (same session): owner was asked for the gap-guard definition.** Three scoping questions
+(guard scope, pre-close cutoff, closure schedule source) put to the owner; answers: scope "leave it
+blocked for now", schedule source "not sure yet", cutoff 30 minutes *if* a window is ever adopted.
+Recorded as **no rule approved** — the 30-minute answer is a preference attached to no adopted scope,
+not a registered `N`, and nothing was implemented. Consequence: the structural stop stays in the
+checked-in engine, the bot stays paper-only, and the prescribed "revert with the gap guard first"
+remains blocked pending the owner's own dated pre-registration. Recorded in
+`docs/REVIEW-2026-10-20-post-gate-refresh.md` §4 so the next session quotes it rather than re-asking.
+
+
+## 2026-10-20 — manual dashboard watch cards
+
+Added read-only BUY/SELL watch price cards to Boxes & Timing: buffered breakout
+references, hypothetical invalidation/target, gross and costed payoff, stale/unknown
+health overrides and a labelled >1 ATR chase heuristic. Retests are not tracked;
+no engine or filter changes. See `docs/REVIEW-2026-10-20-box-watch-cards.md`.
+Also recorded the requested live-readiness estimate separately; no go-live approval.

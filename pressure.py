@@ -1647,6 +1647,62 @@ def box_geometry(rows, spread=BOX_SPREAD_USD):
     return out
 
 
+def box_watch_cards(geom, checks, now, spread=BOX_SPREAD_USD):
+    """Display-only breakout references; never executable quotes or entry signals.
+
+    Use the trigger's box when present, otherwise the nearest box. Freeze neither
+    orders nor retests: these rolling levels are recomputed with each closed bar.
+    Costed payoff assumes the displayed close/reference, not a future fill.
+    """
+    if not geom.get("ok"):
+        return []
+    name = geom["trigger"].get("box") or geom["nearest"]["box"]
+    box = next(b for b in geom["boxes"] if b["name"] == name)
+    close, atr = geom["close"], geom["atr"]
+    age = max(0, (now - geom["as_of"]).total_seconds())
+    # Do not show an actionable-looking status when health is unknown.
+    health = {c["key"]: c for c in checks}
+    reasons = []
+    for key in ("feed", "session", "risk_state", "volatility"):
+        item = health.get(key)
+        if not item or item["state"] != "pass":
+            reasons.append(item["detail"] if item else f"{key} unavailable")
+    if age > 120:
+        reasons.append("closed-bar reference is older than 2 minutes")
+    cards = []
+    for side, sign, edge, far in (("BUY", 1, box["high"], box["low"]),
+                                   ("SELL", -1, box["low"], box["high"])):
+        threshold = edge + sign * BOX_BREAK_ATR * atr
+        confirmed = sign * (close - threshold) >= 0
+        fresh = geom["trigger"]["state"] == "break" and geom["trigger"]["side"] == side
+        extension = max(0.0, sign * (close - edge) / atr)
+        # One ATR is an explicit display heuristic, not a tested strategy gate.
+        chasing = confirmed and extension > 1.0
+        entry = close if confirmed else threshold
+        stop = far - sign * BOX_CLEAR_ATR * atr
+        target = entry + sign * box["width"]
+        risk = sign * (entry - stop)
+        reward = box["width"]
+        net_rr = (reward - spread) / (risk + spread)
+        if reasons:
+            state = "WAIT — health / risk check"
+        elif chasing:
+            state = "WAIT — do not chase"
+        elif confirmed and not fresh:
+            state = "WAIT — already outside; no fresh break"
+        elif confirmed:
+            state = "Closed-bar breakout observed — not an entry signal"
+        else:
+            state = "WAIT — no breakout close"
+        cards.append(dict(side=side, box=name, edge=edge, threshold=threshold,
+                          confirmed=confirmed, entry=entry, stop=stop, target=target,
+                          risk=risk, reward=reward, gross_rr=reward / risk,
+                          net_rr=net_rr, extension_atr=extension, chasing=chasing,
+                          state=state, reasons=reasons, age_seconds=int(age),
+                          limited_reward=net_rr < 1.0))
+    return cards
+
+
 def box_status(geom, portfolio=None, feed=None, now=None, spread=BOX_SPREAD_USD):
     """The condition checklist and the one-line verdict, over a cached geometry.
 
@@ -1786,7 +1842,8 @@ def box_status(geom, portfolio=None, feed=None, now=None, spread=BOX_SPREAD_USD)
 
     return {"ok": True, "now": now, "geometry": geom, "checks": checks, "verdict": verdict,
             "setup": setup, "nearest": nearest, "trigger": trig, "measured": BOX_MEASURED,
-            "spread_usd": spread}
+            "spread_usd": spread,
+            "watch_cards": box_watch_cards(geom, checks, now, spread)}
 
 
 def box_read(rows, now=None, portfolio=None, feed=None, spread=BOX_SPREAD_USD):

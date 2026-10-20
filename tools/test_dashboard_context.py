@@ -153,7 +153,8 @@ class BoxReadTests(unittest.TestCase):
         import dashboard
         html = dashboard.app.test_client().get("/").get_data(as_text=True)
         for needle in ("Boxes &amp; Timing", 'id="panel-boxes"', "Where the boxes are",
-                       "When to trade", "Measured, not assumed"):
+                       "When to trade", "Measured, not assumed", "BUY WATCH", "SELL WATCH",
+                       "costed reward/risk", "Retest: not tracked", "No edge has been validated"):
             self.assertIn(needle, html)
         # a third tab must not break the switch itself
         self.assertIn("var TABS = ['simple', 'boxes', 'details']", html)
