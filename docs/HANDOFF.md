@@ -187,7 +187,7 @@ Post-gate readings on n=147 (observation only — the recorded decision is the n
 
 **The separate §7 closure-gap REVERT trigger remains FIRED.** Counting a post-cutover trade open across a >5-minute log hole classified as a scheduled daily/weekly closure gives **2/2** (#595, #610); the eight post-gate trades added **no** new ride. Neither ride reopened through its stop or exited worse; one stop was ratcheted to entry, and no weekend closure has been ridden. These damage facts do not add a condition to the registered count. The bar and counting rule are recorded in `docs/REVIEW-2026-10-19-struct-stop-judgement.md` §3.
 
-The pre-registered response is **REVERT with the gap guard first**; therefore the 0.25 ATR level test is not eligible. The guard is still not operationally specified (no approved cutoff or open-position policy), and the production host/data state is unverified. This session records the refreshed state but does **not** invent a guard, revert code, or deploy. **Next eligible action:** owner-defined and dated pre-registration of the guard (including cutoff, schedule source, and whether it blocks new entries or also closes open paper positions), then a reviewed guard change and the prescribed revert in order; verify fresh host data and executable before any deployment. Until then, the checked-in engine still contains the structural stop and remains paper-only.
+The pre-registered response is **REVERT with the gap guard first**; therefore the 0.25 ATR level test is not eligible. The guard is still not operationally specified (no approved cutoff or open-position policy), and the production host/data state is unverified. **The owner was asked directly on 2026-10-20 and chose to leave it undefined for now:** scope "leave it blocked for now", schedule source "not sure yet", cutoff 30 min *if* a window is ever adopted — a preference attached to no adopted scope, **not** an approved `N` (`docs/REVIEW-2026-10-20-post-gate-refresh.md` §4; do not re-ask the same questions). This session records the refreshed state but does **not** invent a guard, revert code, or deploy. **Next eligible action:** the owner's own dated pre-registration of the guard (including cutoff, schedule source, and whether it blocks new entries or also closes open paper positions), then a reviewed guard change and the prescribed revert in order; verify fresh host data and executable before any deployment. Until then, the checked-in engine still contains the structural stop and remains paper-only.
 
 **Accounting incident reconciled (2026-10-19):** malformed rows #626–645 were quarantined from backed-up evidence using `tools/repair_phantom_ledger.py`; the checked-in ledger is now 644 valid closed trades and passes `check_data.py` (0 fail; 8 documented warnings). The raw-row reconciliation and evidence are in `docs/REVIEW-2026-10-19-negative-balance.md` and `incident_backups/`. **Host-side verification of the running executable/revision remains operator-only**; do not infer production process health from this checkout alone.
 
@@ -611,8 +611,13 @@ of truth for experiment thresholds; always refresh from current data.
    - (h) **Pre-close entry guard / flat-before-close** — named 10-05 from the
      #476 weekend hold (`docs/REVIEW-2026-10-05.md` §5b), **not yet operationally defined or adopted**.
      The new judgement makes a guard the required first step, but owner approval is needed for the
-     cutoff/schedule and whether only entries are blocked or open paper trades are flattened. A
-     **scheduled-news gate** remains a separate named, unadopted candidate.
+     cutoff/schedule and whether only entries are blocked or open paper trades are flattened.
+     **Asked 2026-10-20: owner left scope blocked ("leave it blocked for now") and the schedule
+     source unresolved ("not sure yet"), noting 30 min as the cutoff if a window is ever adopted.**
+     Nothing is approved — 30 min is a preference with no adopted scope, so it must not be coded,
+     quoted as the registered `N`, or treated as a decision to be re-litigated in the next session
+     (`docs/REVIEW-2026-10-20-post-gate-refresh.md` §4). A **scheduled-news gate** remains a separate
+     named, unadopted candidate.
    - Ratchet falsification: **TRIPPED** (09-17, −$0.595 at n=60; now −$0.581 at
      n=318 master). Max-hold fallback delivered **no** improvement to blame or
      credit (§1). Step 2 (ratchet-off) measured 10-05 and **rejected** — see above.
@@ -837,7 +842,7 @@ tools/             other analysis / integrity / report scripts (not on the hot p
 | Now | Edge not confirmed — remain paper-only. |
 | **Judged 2026-10-19 21:00 UTC (latest checked-in rows through 18:10; n=139)** | `docs/REVIEW-2026-10-19-struct-stop-judgement.md`: geometry PASS; SCREEN MET; PASS not met. The closure-gap count is 2/2 under the documented rule, so the extra §7 REVERT trigger FIRED. No runtime change was made because the required gap guard has no owner-approved cutoff or open-position policy; the checked-in engine remains on the structural stop, paper-only. |
 | **Post-gate refresh (2026-10-20 08:59 UTC; era n=147)** | `docs/REVIEW-2026-10-20-post-gate-refresh.md`: all session checks pass, era grew to n=147 with bars inside their thresholds and the gap count still 2/2. The n=150 arm **lapsed with the time gate** — do not re-judge PASS on the grown sample; a re-opened arm needs a new dated pre-registration. Blocker unchanged: owner-defined gap guard, then the prescribed revert. |
-| **Next: owner-defined gap guard, then prescribed REVERT** | Define and pre-register the closure guard's cutoff, schedule source, and action for open positions; verify current host rows and running executable. Only then review the guard change and structural-stop revert in the registered order. | The 0.25 ATR level-test is **blocked by the fired trigger**; do not proceed to it or guess/deploy a guard. |
+| **Next: owner-defined gap guard, then prescribed REVERT** | Define and pre-register the closure guard's cutoff, schedule source, and action for open positions; verify current host rows and running executable. Only then review the guard change and structural-stop revert in the registered order. **Asked 2026-10-20 — owner left scope blocked and the schedule unresolved (30 min noted only as a preference); no rule exists yet.** | The 0.25 ATR level-test is **blocked by the fired trigger**; do not proceed to it or guess/deploy a guard. |
 | ~2–4 months | Seek 100+ trades across multiple regimes for the first serious edge assessment. |
 | 6–12 months | Consider a separate live-readiness review only if durable positive expectancy after realistic costs is demonstrated and the owner explicitly approves. |
 

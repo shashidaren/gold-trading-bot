@@ -253,3 +253,12 @@ after `--update` (0 advisory drift after); `check_structural_stop.py` PASS; `che
 `pressure_report.py --root .` all screen bars inside their thresholds. Files: `docs/HANDOFF.md`,
 `docs/HANDOFF-HISTORY.md`, `docs/EXECUTION-PLAN.md`, `docs/REVIEW-2026-10-20-post-gate-refresh.md`,
 this log. No deployment, host-process verification or production conclusion is claimed.
+
+**Addendum (same session): owner was asked for the gap-guard definition.** Three scoping questions
+(guard scope, pre-close cutoff, closure schedule source) put to the owner; answers: scope "leave it
+blocked for now", schedule source "not sure yet", cutoff 30 minutes *if* a window is ever adopted.
+Recorded as **no rule approved** — the 30-minute answer is a preference attached to no adopted scope,
+not a registered `N`, and nothing was implemented. Consequence: the structural stop stays in the
+checked-in engine, the bot stays paper-only, and the prescribed "revert with the gap guard first"
+remains blocked pending the owner's own dated pre-registration. Recorded in
+`docs/REVIEW-2026-10-20-post-gate-refresh.md` §4 so the next session quotes it rather than re-asking.

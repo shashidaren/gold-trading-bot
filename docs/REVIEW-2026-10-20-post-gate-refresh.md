@@ -64,10 +64,17 @@ None of this changes the controlling fact: the **§7 closure-gap REVERT trigger 
 
 ## 4. Blockers (unchanged, owner/production-host)
 
-1. **Gap guard is undefined.** No owner-approved cutoff, schedule source, or policy for open
-   paper positions (block entries only vs flat-before-close). The plan's blocked row stands; no
-   guard, revert, 0.25 ATR test, or deployment is authorised from this checkout. This session did
-   not guess one.
+1. **Gap guard is undefined — owner asked this session, and chose to leave it undefined for now.**
+   The session asked three scoping questions (`ask_user`, 2026-10-20 12:0x UTC): guard **scope**,
+   **pre-close cutoff**, and **closure schedule source**. The owner selected **"leave it blocked for
+   now"** on scope and **"not sure yet"** on the schedule source, and indicated **30 minutes** as the
+   cutoff *if* a window is ever adopted. Recorded reading: **no rule is approved.** The cutoff answer
+   is a stated preference attached to no adopted scope, and the schedule question is open, so there is
+   still no cutoff/schedule/open-position policy to pre-register. Do not treat "30 minutes" as an
+   approved `N`, do not implement an entries-only guard on the strength of it, and do not re-ask the
+   same three questions next session as if nothing had been decided — quote this paragraph instead.
+   The plan's blocked row stands; no guard, revert, 0.25 ATR test, or deployment is authorised from
+   this checkout. Re-opening this needs the owner's own wording in a dated pre-registration.
 2. **Host state is unverified.** Process identity/revision, systemd hardening and any rows newer
    than 08:59 are operator-only. Do not infer engine health from a cloned snapshot.
 3. **Cost assumption not yet earned.** 6/14 complete UTC days and 1/2 weekends; $0.40 round trip
