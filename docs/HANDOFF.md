@@ -17,22 +17,22 @@ from the first commit.
 <!-- HANDOFF-SNAPSHOT machine-checked by tools/handoff_check.py; refresh with --update -->
 | key | value |
 |---|---|
-| as_of_utc | 2026-10-20 08:59 |
-| data_collection | 294 |
-| closed_trades | 644 |
-| outcomes | 128W/277L/237BE/2TIME |
+| as_of_utc | 2026-10-20 11:59 |
+| data_collection | unknown |
+| closed_trades | 645 |
+| outcomes | 128W/277L/238BE/2TIME |
 | decisive_wr_pct | 31.6 |
 | engine_ledger_usd | 174.73 |
 | true_equity_usd | 157.76 |
 | cost_usd_per_side | 0.20 |
-| net_pnl_usd_at_cost | -599.84 |
+| net_pnl_usd_at_cost | -600.24 |
 | cutover_utc | 2026-10-06 03:00 |
-| structstop_era_trades | 147 |
-| structstop_era_outcomes | 43W/66L/37BE/1TIME |
-| log_bars | 45642 |
-| log_last_bar_utc | 2026-10-20 08:59 |
+| structstop_era_trades | 148 |
+| structstop_era_outcomes | 43W/66L/38BE/1TIME |
+| log_bars | 45822 |
+| log_last_bar_utc | 2026-10-20 11:59 |
 | skip_rows | 1500 |
-| open_trade | SELL #646 @ 4120.28 |
+| open_trade | none |
 <!-- /HANDOFF-SNAPSHOT -->
 
 This block is the **only machine-checked part of the file**: `python3 tools/handoff_check.py`
@@ -502,6 +502,12 @@ that doc):
 ## 6. Next steps (in order)
 
 Dashboard PR: review read-only panels and limitations, then deploy dashboard-only after sign-off; no engine restart.
+The 2026-10-20 manual watch cards add BUY/SELL price references, hypothetical stop/target,
+costed payoff and stale/chase warnings. Retests are explicitly not tracked; rolling levels
+are not fixed-box retest evidence. No engine/gate/strategy change. See
+`docs/REVIEW-2026-10-20-box-watch-cards.md`. The machine snapshot now reflects 11:59 UTC
+(645 closed, n=148, no open trade); the earlier 08:59 narrative remains a dated assessment,
+not a new experiment judgement. The gap-guard blocker is unchanged.
 
 **Priority incident blocker (2026-10-19):** recovery tool and safeguards are prepared
 for owner merge; full smoke + repair tests pass. Merge alone does not repair the host.
