@@ -109,7 +109,7 @@ snapshot block, still said FRESH.
 | **Large-N replay over broker M1 history** | `python3 tools/history_to_log.py mt5_history.csv --out history_utc.csv`, then `python3 tools/strategy_lab.py --bars history_utc.csv` |
 | **Boxes now + does box theory pay?** | `python3 tools/box_report.py` (`--root DIR`, `--spread $`, `--json`) — live 20-bar/1h/4h/prior-day boxes with structural stop/TP per edge, plus the measured breakout/fade verdict. In the browser: the dashboard's **📦 Boxes & Timing** tab (`?tab=boxes`) renders the same read plus the condition checklist. Read-only, display-only (`docs/ANALYSIS-2026-10-20-box-theory-manual-trading.md` §6) |
 | **Box chop + retest + how loud the alert is** | `python3 tools/box_report.py --alert-scan` — the live boxes, the measured "is it choppy?" read (recent 24 h vs the span in view), the frozen-box retest state, and a replay of how many Telegram notices the current rule would have sent (`--alert-days N`). Read-only, ~25 s. `docs/ANALYSIS-2026-10-21-box-chop-retest-alerts.md` |
-| **Box-watch Telegram notice (optional sidecar)** | `python3 tools/box_alert.py --once --dry-run` (the decision + the exact text, nothing sent) · `--test` (prove the bot/chat) · `--quiet` (the autosync digest line) · `--loop` (what `deploy/boxalert.service` runs). Display-only: no order, and the only file it writes is its own state |
+| **Box-watch Telegram notice (optional sidecar)** | `python3 tools/box_alert.py --once --dry-run` (the decision + the exact text, nothing sent) · `--test` (prove the bot/chat) · `--quiet` (the autosync `🔔` line: `disabled` / `not configured` / `Telegram pair found · notifier not running` / `running` / `notifier STOPPED`, states in `docs/AUTOSYNC.md` §3) · `--loop` (what `deploy/boxalert.service` runs). Reads the pair and its knobs from `/opt/gold/.env` itself, so no `set -a` step. Display-only: no order, and the only file it writes is its own state (dedupe + heartbeat) |
 | **Market context (tape / gates / §7 era / calibration)** | `python3 tools/pressure_report.py` (`--root DIR`, `--era structstop|maxhold|075|all`, `--json`) — the same read-only layer the dashboard renders |
 | **Where did strong (8/8) signals head? (rough estimate)** | `python3 tools/signal_outlook.py --root .` (`--era structstop|075|all`, `--json`) — forward-walk cone + base rates per side/era; display-only, `docs/ANALYSIS-2026-10-19-signal-outlook.md` |
 | Loser features | `python3 tools/analyze_losers.py` |
@@ -158,6 +158,7 @@ snapshot block, still said FRESH.
 
 | When | What |
 |------|------|
+| 2026-10-21 ~23:00 UTC (**ops/tooling fix, no runtime change**) | **`🔔 box alerts: not configured` was false.** The 18:00 digest, the first to run the phase PR #49 added (deployed 17:46), reported no `TELEGRAM_BOT_TOKEN/CHAT_ID` in the very message that pair had delivered. `autosync.sh` keeps the pair in its own unexported `TG_TOKEN`/`TG_CHAT`, and `box_alert.py` read only its inherited environment. Fix: the tool reads its own keys from `$GOLD_DATA_DIR/.env` (environment wins, like the engine's `load_dotenv`), and autosync passes `GOLD_DATA_DIR=$GOLD_DIR`. The line now also says whether the notifier is **running** (a `--loop` heartbeat in its own state file); otherwise "pair found" would have read as a healthy notifier. Also fixed: the documented `GOLD_BOX_ALERT_GLOBAL_COOLDOWN_MIN` was never read, and the message footer ignored the knobs. A pre-existing failing test that read the live CSVs was made hermetic. `test_box_alert.py` 34 pass, smoke PASSED, sandboxed real `autosync.sh` shows every state. `engine.py`/`trade_filter.py`/`pressure.py`/`dashboard.py` untouched; the notifier remains **not installed** unless the owner installs it. |
 | 2026-10-21 11:59 UTC (session refresh, **docs only; no runtime change**) | Re-ran every session check on the 11:59 UTC snapshot (collection 303): `check_data.py` 0 fail / 8 warn; `handoff_check.py` FRESH after snapshot + §1 refresh; `check_structural_stop.py` PASS at n=160 (0 inside level); `check_gap_rides.py` still 2/2, 0 gapped through, 0 worse exit; `pressure_report.py` SCREEN MET on all five checks, era n=160 (44W/74L/41BE/1TIME), decisive WR 37.3% [29.1–46.3], R/trade −0.065; `xm_quote_report.py` 7.8 days (7/14 complete, 1/2 weekends), median spread $0.55 vs the $0.40 assumption. Snapshot block + §1 refreshed, old §1 archived to `docs/HANDOFF-HISTORY.md`. No guard, revert, test, or deploy. |
 | 2026-10-19 (dashboard PR) | Read-only risk/map/costed-evidence panels; no runtime change or deploy claimed. |
 | 2026-10-19 (dashboard) | **Simple Summary tab + Volatility Guard (display-only, no runtime change):** `pressure.py` `volatility_guard`/`simple_summary` (ATR/spread/blackout/cooldown/breaker/closure/trend/gaps/range checklist, verdict green/amber/red), `dashboard.py` tab switch (Simple ↔ Full, localStorage + `?tab=`), preview with `GOLD_DATA_DIR=.`. No engine/filter/gate change. |
@@ -514,7 +515,11 @@ are unchanged, and the 2026-10-21 session supersedes exactly one line of
 the break, with the measured verdict that waiting for the held retest showed no edge
 (`docs/ANALYSIS-2026-10-21-box-chop-retest-alerts.md`). The Telegram notifier is **optional
 and not installed by this change**; installing it is the owner's action, and `GOLD_BOX_ALERTS=0`
-disables it. The machine snapshot now reflects 2026-10-21 14:59 UTC (661 closed, n=164, no open
+disables it. **Digest-line fix (later 10-21):** the 18:00 digest's `🔔 box alerts: not configured`
+was a wiring bug (autosync never hands its Telegram pair to a child), not a missing pair. After the
+fix merges, expect `🔔 box alerts: Telegram pair found · notifier not running (optional: install
+deploy/boxalert.service)` until the owner installs the unit, then `running · …`
+(`docs/AUTOSYNC.md` §3). The machine snapshot now reflects 2026-10-21 14:59 UTC (661 closed, n=164, no open
 trade); the earlier 08:59/11:59 narratives remain dated assessments, not new experiment
 judgements. **The gap-guard blocker is unchanged** — no runtime change was made.
 
@@ -835,8 +840,11 @@ tools/             other analysis / integrity / report scripts (not on the hot p
   notifier. It is a *notification*, not part of the trading path — it places no order, imports no engine module
   and writes only `box_alert_state.json` (git-ignored). Not installed by default; `GOLD_BOX_ALERTS=0` disables it
   without uninstalling. Autosync restarts it when `tools/box_alert.py` **or** `pressure.py` changes and shows an
-  advisory `🔔 box alerts: …` line that never blocks a deploy. Test before installing:
-  `python3 tools/box_alert.py --once --dry-run`, then `--test`. Volume measured at **5.1 messages/day**
+  advisory `🔔 box alerts: …` line that never blocks a deploy. That line reads the pair and the knobs from
+  `/opt/gold/.env` (put overrides there, not in the unit), and says `running` only while the loop's heartbeat
+  is fresh: `Telegram pair found · notifier not running` = not installed, `notifier STOPPED` = it died (states:
+  `docs/AUTOSYNC.md` §3). Test before installing:
+  `python3 tools/box_alert.py --once --dry-run`, then `--test` (no `set -a; . ./.env` needed). Volume measured at **5.1 messages/day**
   (`tools/box_report.py --alert-scan`); `GOLD_BOX_ALERT_DAILY_CAP` is the knob that binds.
 - A `dashboard.py` / `pressure.py` change is a **dashboard-only** deploy (`DASH_CHANGED`): the dashboard
   service restarts, `goldbot` does not. Tabs are `Simple` (default, plain-English volatility guard — green/amber/red, `should I trade now?`) ↔ `Full` (all gates); preference is stored in `localStorage` + `?tab=details` deep link. For a local render, point the reader at a checkout instead of the

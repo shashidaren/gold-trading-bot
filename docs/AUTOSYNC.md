@@ -31,10 +31,12 @@ produces. Everything else in this file holds if these are true:
 | `python3` works from that cwd | smoke gate + `check_data.py` + `handoff_check.py` | `cd /opt/gold && python3 tools/check_data.py` |
 | `docs/HANDOFF.md` has its snapshot block | the advisory freshness check reads it | `cd /opt/gold && python3 tools/handoff_check.py --quiet` |
 | *(optional)* the quote logger `mt5quotes-gold` is running | autosync commits its `xm_data/` and reports its liveness; without it the digest just says `not collecting yet` | `systemctl status mt5quotes-gold` (install: `docs/XM-LOGGER.md` §3) |
+| *(optional)* the box notifier `boxalert-gold` is running | the `🔔` line reports it from the sidecar's heartbeat; without it the line says `notifier not running (optional …)` | `cd /opt/gold && python3 tools/box_alert.py --quiet` (install: `deploy/boxalert.service`) |
 | No **uncommitted hand-edits** in `engine.py` / `trade_filter.py` / `dashboard.py` / `tools/` | the script refuses to deploy over them | `cd /opt/gold && git status --short` |
 
 `/opt/gold/.env` is read for the Telegram token / chat id but is never committed or required —
-without it the script still runs, it just stays silent.
+without it the script still runs, it just stays silent. The script keeps the pair in its own unexported
+variables, so a child process does not inherit it. `tools/box_alert.py` reads the same file itself (§3, `🔔`).
 
 ---
 
@@ -133,6 +135,29 @@ the quote logger exists, `xm_data/` is part of every data commit.)
 
   Advisory by design, like the handoff line: it never blocks a deploy, and the phase runs *after* the deploy
   decision and assigns no deploy variable.
+- **🔔 box alerts** — `tools/box_alert.py --quiet`: is the **optional** box-watch Telegram notifier
+  (`deploy/boxalert.service`, `docs/ANALYSIS-2026-10-21-box-chop-retest-alerts.md`) switched on, does it have
+  the Telegram pair, and is it actually running? The tool reads the pair and its `GOLD_BOX_ALERT*` knobs from
+  the environment, then from `$GOLD_DATA_DIR/.env` (autosync passes `GOLD_DATA_DIR=$GOLD_DIR`). That is the
+  same `/opt/gold/.env` the engine loads and the unit's `EnvironmentFile=` reads. "Running" comes from the
+  heartbeat the sidecar's `--loop` stamps into its own `box_alert_state.json` every tick, not from systemd
+  (the 2026-09-29 lesson: a sidecar's own fresh output is the only reliable sign it is alive).
+
+  | Text | Meaning | Action |
+  |---|---|---|
+  | `Telegram pair found · notifier not running (optional: install deploy/boxalert.service)` | the pair is there but no `--loop` has ever run against this state file, i.e. the unit is not installed. **The default**: installing it is the owner's choice | none, or install it (`deploy/boxalert.service` header: `--once --dry-run`, `--test`, then `systemctl enable --now boxalert-gold`) |
+  | `running · N sent today · last MM-DD HH:MM UTC BUY` (`· a candidate is live now`) | the loop's heartbeat is fresh (≤ max(5 min, 3 ticks)); counts come from its state file | none |
+  | `notifier STOPPED (last heartbeat MM-DD HH:MM UTC) · …` | it **was** running and its heartbeat went stale: the unit died or was stopped | `systemctl status boxalert-gold`, `journalctl -u boxalert-gold -n 50`; trading is unaffected |
+  | `disabled (GOLD_BOX_ALERTS=0)` | switched off on purpose (environment or `.env`) | none |
+  | `not configured (no TELEGRAM_BOT_TOKEN/CHAT_ID in the environment or /opt/gold/.env)` | no pair anywhere. The digest itself needs the same pair, so you will usually see this only in `/var/log/gold_autosync.log` | add the pair to `/opt/gold/.env` |
+  | `report failed to run (<last line>)` | `box_alert.py` crashed (an import error, say) | run it by hand; advisory, the sync is unaffected |
+
+  **Before 2026-10-21's fix, the 18:00 UTC digest said `not configured (no TELEGRAM_BOT_TOKEN/CHAT_ID)` in the
+  very message the pair had just delivered.** This script keeps the pair in its own *unexported* `TG_TOKEN` /
+  `TG_CHAT` for `curl`, so a child process never inherits it, and the tool then read only its environment. The
+  line also could not tell "pair found" from "notifier running". Both are fixed, as above. Advisory by design:
+  it never blocks a deploy and never adds a ⚠️/🛑 line, even for `STOPPED`, because the notifier is opt-in and
+  not part of the trading path.
 - **💰 stats** — straight from `status.json`.
 
 ### Deploy states and what they mean
@@ -149,8 +174,8 @@ the quote logger exists, `xm_data/` is part of every data commit.)
 | `engine active but status.json looks STALE` | the unit is up but has not written state for 3+ minutes | check `journalctl -u goldbot` |
 
 Machine-readable history: `/var/log/gold_autosync.log` (each run's `done.` line ends with
-`handoff=[…] xm=[…]`). Per-run detail: `/tmp/autosync_smoke.log`, `/tmp/autosync_check.log`,
-`/tmp/autosync_handoff.log`, `/tmp/autosync_xm.log`.
+`handoff=[…] xm=[…] boxalert=[…]`). Per-run detail: `/tmp/autosync_smoke.log`, `/tmp/autosync_check.log`,
+`/tmp/autosync_handoff.log`, `/tmp/autosync_xm.log`, `/tmp/autosync_boxalert.log`.
 
 **Deploying a change to `autosync.sh` itself is safe.** The running bash holds the old file open and `git merge`
 replaces files by unlinking and re-creating them, so the in-flight run keeps reading the *old* copy to the end and
@@ -194,6 +219,7 @@ consequences for anyone adding a scenario:
 | `SMOKE_GATE` | `1` | `0` = deploy without the smoke test (**not recommended**) |
 | `NOTIFY` | `always` | `always` = a digest every run (8 a day at the 3-hour cadence); `quiet` = skip a run only when nothing changed (`no new data`, no deploy, push ok, no 🚨/⚠️/🛑) — which on gold is mostly weekends, because the minute log changes every run during market hours |
 | `ENGINE_SERVICE` / `DASHBOARD_SERVICE` | auto-detect | pin the systemd unit names if detection fails |
+| `BOXALERT_SERVICE` | auto-detect | pin the optional box-alert unit, restarted when `tools/box_alert.py` or `pressure.py` changes; absent = nothing to restart |
 | `LOCK_FILE` | `/var/lock/gold_autosync.lock` | `flock` guard; overlapping runs exit 0 |
 
 At eight messages a day the digest is chatty but not the flood BTC had (its 15-minute cron sent ~96 a
