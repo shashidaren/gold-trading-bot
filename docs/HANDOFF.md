@@ -17,22 +17,22 @@ from the first commit.
 <!-- HANDOFF-SNAPSHOT machine-checked by tools/handoff_check.py; refresh with --update -->
 | key | value |
 |---|---|
-| as_of_utc | 2026-10-20 11:59 |
-| data_collection | unknown |
-| closed_trades | 645 |
-| outcomes | 128W/277L/238BE/2TIME |
-| decisive_wr_pct | 31.6 |
-| engine_ledger_usd | 174.73 |
-| true_equity_usd | 157.76 |
+| as_of_utc | 2026-10-21 11:59 |
+| data_collection | 303 |
+| closed_trades | 657 |
+| outcomes | 129W/285L/241BE/2TIME |
+| decisive_wr_pct | 31.2 |
+| engine_ledger_usd | 138.86 |
+| true_equity_usd | 121.91 |
 | cost_usd_per_side | 0.20 |
-| net_pnl_usd_at_cost | -600.24 |
+| net_pnl_usd_at_cost | -640.89 |
 | cutover_utc | 2026-10-06 03:00 |
-| structstop_era_trades | 148 |
-| structstop_era_outcomes | 43W/66L/38BE/1TIME |
-| log_bars | 45822 |
-| log_last_bar_utc | 2026-10-20 11:59 |
-| skip_rows | 1500 |
-| open_trade | none |
+| structstop_era_trades | 160 |
+| structstop_era_outcomes | 44W/74L/41BE/1TIME |
+| log_bars | 47199 |
+| log_last_bar_utc | 2026-10-21 11:59 |
+| skip_rows | 1549 |
+| open_trade | BUY #659 @ 4132.76 |
 <!-- /HANDOFF-SNAPSHOT -->
 
 This block is the **only machine-checked part of the file**: `python3 tools/handoff_check.py`
@@ -156,6 +156,7 @@ snapshot block, still said FRESH.
 
 | When | What |
 |------|------|
+| 2026-10-21 11:59 UTC (session refresh, **docs only; no runtime change**) | Re-ran every session check on the 11:59 UTC snapshot (collection 303): `check_data.py` 0 fail / 8 warn; `handoff_check.py` FRESH after snapshot + §1 refresh; `check_structural_stop.py` PASS at n=160 (0 inside level); `check_gap_rides.py` still 2/2, 0 gapped through, 0 worse exit; `pressure_report.py` SCREEN MET on all five checks, era n=160 (44W/74L/41BE/1TIME), decisive WR 37.3% [29.1–46.3], R/trade −0.065; `xm_quote_report.py` 7.8 days (7/14 complete, 1/2 weekends), median spread $0.55 vs the $0.40 assumption. Snapshot block + §1 refreshed, old §1 archived to `docs/HANDOFF-HISTORY.md`. No guard, revert, test, or deploy. |
 | 2026-10-19 (dashboard PR) | Read-only risk/map/costed-evidence panels; no runtime change or deploy claimed. |
 | 2026-10-19 (dashboard) | **Simple Summary tab + Volatility Guard (display-only, no runtime change):** `pressure.py` `volatility_guard`/`simple_summary` (ATR/spread/blackout/cooldown/breaker/closure/trend/gaps/range checklist, verdict green/amber/red), `dashboard.py` tab switch (Simple ↔ Full, localStorage + `?tab=`), preview with `GOLD_DATA_DIR=.`. No engine/filter/gate change. |
 | 2026-09-10 ~12:34 | BE ratchet 0.30R + London BUY-only + trend-side daily breaker (PR #7) |
@@ -175,23 +176,23 @@ snapshot block, still said FRESH.
 | 2026-10-19 21:00 UTC (struct-stop time-gate judgement, **docs only; no runtime change**) | Judged the latest available synced snapshot at 18:10: n=139, geometry PASS, SCREEN MET, PASS not met. Recorded the explicit gap-ride counting rule; 2/2 scheduled-closure rides fire the pre-registered REVERT trigger despite $0 realized gap damage. The prescribed gap guard is not operationally defined (cutoff/open-position policy missing), and host data/executable are unverified, so no revert, guard, deployment, or 0.25 ATR test was made. New evidence/blocker: `docs/REVIEW-2026-10-19-struct-stop-judgement.md`. |
 | 2026-10-20 08:59 UTC (post-gate data refresh, **docs only; no runtime change**) | Checked-in book 644 closes (128W/277L/237BE/2TIME); struct-stop era grown to n=147 (43W/66L/37BE/1TIME), guard still PASS (0 inside level, 81.6% level-bound, +0.50 ATR clearance, 3.29 ATR risk). The n=150 arm **lapsed with the 10-19 time gate** and is not re-opened by the grown sample; the recorded judgement (SCREEN MET at n=139, PASS unavailable, gap trigger fired) stands. Post-gate readings: SL/day 5.50, SL share 44.90%, scratch 25.17%, gross −0.028R, decisive 39.45% [30.8–48.8]; gross era −$23.43. Gap rides unchanged at 2/2; quote logger 6.7 days, 6/14 complete, 1/2 weekends, $0.55 median. No guard, revert, test, or deploy. Evidence: `docs/REVIEW-2026-10-20-post-gate-refresh.md`. |
 
-## 1. Where things stand (as of **2026-10-20 — data collection 294; latest data through 08:59 UTC**)
+## 1. Where things stand (as of **2026-10-21 — data collection 303; latest data through 11:59 UTC**)
 
-**Current stance (post-gate data refresh; judgement recorded 2026-10-19 21:19 UTC):** paper-only; `engine.py` remains `TRADING_MODE = "FORWARD_TEST"`. No engine, filter, parameter, gate or deployment change was made in this refresh. The checked-in data is the latest available synced snapshot, not a host heartbeat; production process/revision and any unsynced rows remain operator-only and unverified.
+**Current stance (session refresh; judgement recorded 2026-10-19 21:19 UTC):** paper-only; `engine.py` remains `TRADING_MODE = "FORWARD_TEST"`. No engine, filter, parameter, gate or deployment change was made in this session. The checked-in data is the latest available synced snapshot, not a host heartbeat; production process/revision and any unsynced rows remain operator-only and unverified.
 
-**The book:** **644 closed trades** (128W/277L/237BE/2TIME; 31.6% decisive), engine ledger **$174.73**, true equity **$157.76**, net **−$599.84** at the assumed $0.40 round trip. One paper trade is open in the checked-in status: **SELL #646 @ $4120.28** (stop $4127.65, TP $4109.22, no BE armed). Quote logging has 6.7 days (6/14 complete UTC days, 1/2 weekends) and a first-look median $0.55 spread/round trip; the 14-day/two-weekend target is not met, so $0.40 remains the registered cost assumption.
+**The book:** **657 closed trades** (129W/285L/241BE/2TIME; 31.2% decisive [26.9–35.8]), engine ledger **$138.86**, true equity **$121.91**, net **−$640.89** at the assumed $0.40 round trip (−0.134R/trade). One paper trade is open in the checked-in status: **BUY #659 @ $4132.76** (stop == entry, ratcheted scratch armed; TP $4141.18; BE armed; entry 11:39:06 UTC; daily losses 7/10). Quote logging has 7.8 days (7/14 complete UTC days, 1/2 complete weekends) and a first-look median $0.55 spread/round trip; on 79 matched entry/exit pairs the measured round trip averages/medians $0.55 vs the assumed $0.40, so $0.40 remains the registered cost assumption until the 14-day/two-weekend target is met and re-costed via `win_rate_report.py --spread`.
 
-**The structural-stop evaluation was judged at its registered time gate (2026-10-19 21:00 UTC).** That judgement used the latest then-available snapshot, **n=139**; the n=150 arm was never reached, and under the registered "whichever comes first" wording the arm **lapsed with the gate** — later era growth is an observation, not a re-opened PASS/SCREEN judgement (see `docs/REVIEW-2026-10-20-post-gate-refresh.md`). The era has since grown to **n=147** (43W/66L/37BE/1TIME; 12 entry dates) on the post-gate rows. The mechanical guard still **PASSES**: 0 post-cutover stops inside the tested level, 81.6% level-bound, median clearance +0.50 ATR, median risk 3.29 ATR.
+**The structural-stop evaluation was judged at its registered time gate (2026-10-19 21:00 UTC).** That judgement used the latest then-available snapshot, **n=139**; the n=150 arm was never reached, and under the registered "whichever comes first" wording the arm **lapsed with the gate** — later era growth is an observation, not a re-opened PASS/SCREEN judgement (see `docs/REVIEW-2026-10-20-post-gate-refresh.md`). The era has since grown to **n=160** (44W/74L/41BE/1TIME) on the post-gate rows. The mechanical guard still **PASSES**: 0 post-cutover stops inside the tested level, 81.9% level-bound, median clearance +0.50 ATR, median risk 3.32 ATR.
 
-Post-gate readings on n=147 (observation only — the recorded decision is the n=139 one): SL/day **5.50**, SL share **44.90%** (≤47.0%), scratch share **25.17%**, gross R/trade **−0.028R**, decisive WR **39.45% [30.8–48.8]**. Gross era P&L is **−$23.43**; at the assumed $0.40 round trip it is about **−$82 (−0.098R/trade)**. The recorded judgement still stands: **SCREEN MET, PASS NOT MET** on the sample the bar was judged on, and **no demonstrated edge**. Do not quote the grown-sample numbers as a verdict.
+Readings on n=160 (observation only — the recorded decision is the n=139 one): SL/day **5.7**, SL share **46.2%** (≤47.0%), scratch share **25.6%**, gross R/trade **−0.065R**, decisive WR **37.3% [29.1–46.3]**. Gross era P&L is **−$59.28**. The recorded judgement still stands: **SCREEN MET, PASS NOT MET** on the sample the bar was judged on, and **no demonstrated edge**. Do not quote the grown-sample numbers as a verdict.
 
-**The separate §7 closure-gap REVERT trigger remains FIRED.** Counting a post-cutover trade open across a >5-minute log hole classified as a scheduled daily/weekly closure gives **2/2** (#595, #610); the eight post-gate trades added **no** new ride. Neither ride reopened through its stop or exited worse; one stop was ratcheted to entry, and no weekend closure has been ridden. These damage facts do not add a condition to the registered count. The bar and counting rule are recorded in `docs/REVIEW-2026-10-19-struct-stop-judgement.md` §3.
+**The separate §7 closure-gap REVERT trigger remains FIRED.** Counting a post-cutover trade open across a >5-minute log hole classified as a scheduled daily/weekly closure gives **2/2** (#595, #610); no new ride has been added since the post-gate refresh. Neither ride reopened through its stop or exited worse; one stop was ratcheted to entry, and no weekend closure has been ridden. These damage facts do not add a condition to the registered count. The bar and counting rule are recorded in `docs/REVIEW-2026-10-19-struct-stop-judgement.md` §3.
 
 The pre-registered response is **REVERT with the gap guard first**; therefore the 0.25 ATR level test is not eligible. The guard is still not operationally specified (no approved cutoff or open-position policy), and the production host/data state is unverified. **The owner was asked directly on 2026-10-20 and chose to leave it undefined for now:** scope "leave it blocked for now", schedule source "not sure yet", cutoff 30 min *if* a window is ever adopted — a preference attached to no adopted scope, **not** an approved `N` (`docs/REVIEW-2026-10-20-post-gate-refresh.md` §4; do not re-ask the same questions). This session records the refreshed state but does **not** invent a guard, revert code, or deploy. **Next eligible action:** the owner's own dated pre-registration of the guard (including cutoff, schedule source, and whether it blocks new entries or also closes open paper positions), then a reviewed guard change and the prescribed revert in order; verify fresh host data and executable before any deployment. Until then, the checked-in engine still contains the structural stop and remains paper-only.
 
-**Accounting incident reconciled (2026-10-19):** malformed rows #626–645 were quarantined from backed-up evidence using `tools/repair_phantom_ledger.py`; the checked-in ledger is now 644 valid closed trades and passes `check_data.py` (0 fail; 8 documented warnings). The raw-row reconciliation and evidence are in `docs/REVIEW-2026-10-19-negative-balance.md` and `incident_backups/`. **Host-side verification of the running executable/revision remains operator-only**; do not infer production process health from this checkout alone.
+**Accounting incident reconciled (2026-10-19):** malformed rows #626–645 were quarantined from backed-up evidence using `tools/repair_phantom_ledger.py`; the checked-in ledger is now 657 valid closed trades and passes `check_data.py` (0 fail; 8 documented warnings). The raw-row reconciliation and evidence are in `docs/REVIEW-2026-10-19-negative-balance.md` and `incident_backups/`. **Host-side verification of the running executable/revision remains operator-only**; do not infer production process health from this checkout alone.
 
-**The dashboard pressure composite remains a side proxy, not a signal.** The re-join at n=147 is still collinear with side and has no within-side `against` bucket (BUY 63 aligned / 4 mixed; SELL 77 aligned / 3 mixed). The owner's manual pressure/hold observation remains a separate, unmeasured hypothesis. The signal-outlook read still shows no directional edge after an 8/8 signal (50.4% [42–59] trade-way at 30m, median +0.02R; 50.7% [42–59] at 60m at n=139). These are base rates for manual context, never a forecast, entry gate, sizing, or hold-past-stop input.
+**The dashboard pressure composite remains a side proxy, not a signal.** The re-join at n=160 is still collinear with side and has no within-side `against` bucket (BUY 67 aligned / 4 mixed; SELL 86 aligned / 3 mixed). The owner's manual pressure/hold observation remains a separate, unmeasured hypothesis. The signal-outlook read still shows no directional edge after an 8/8 signal (50.4% [42–59] trade-way at 30m, median +0.02R; 50.7% [42–59] at 60m at n=139). These are base rates for manual context, never a forecast, entry gate, sizing, or hold-past-stop input.
 
 **Box theory (manual, unmeasured in the ledger):** asked 2026-10-20 whether boxes can be used for manual trades. Measured on the same tape (`tools/box_report.py`, `docs/ANALYSIS-2026-10-20-box-theory-manual-trading.md`): breakout and fade entries land on or below the driftless reference at both box sizes, and 74–75% of breaks close back inside within 15 min. **Verdict: box = a place to put a stop, not a signal.** Display/advice only — no gate, no runtime change; manual box trades are not in `trades.csv` and are not evidence until logged (bar: n≥100, positive after spread). The dashboard renders the same read in its **📦 Boxes & Timing** tab (`?tab=boxes`) — boxes, the seven-condition checklist, the setup card and the measured footer.
 
@@ -505,9 +506,9 @@ Dashboard PR: review read-only panels and limitations, then deploy dashboard-onl
 The 2026-10-20 manual watch cards add BUY/SELL price references, hypothetical stop/target,
 costed payoff and stale/chase warnings. Retests are explicitly not tracked; rolling levels
 are not fixed-box retest evidence. No engine/gate/strategy change. See
-`docs/REVIEW-2026-10-20-box-watch-cards.md`. The machine snapshot now reflects 11:59 UTC
-(645 closed, n=148, no open trade); the earlier 08:59 narrative remains a dated assessment,
-not a new experiment judgement. The gap-guard blocker is unchanged.
+`docs/REVIEW-2026-10-20-box-watch-cards.md`. The machine snapshot now reflects 2026-10-21 11:59 UTC
+(657 closed, n=160, one open trade BUY #659 @ $4132.76); the earlier 08:59 narrative remains a dated
+assessment, not a new experiment judgement. The gap-guard blocker is unchanged.
 
 **Priority incident blocker (2026-10-19):** recovery tool and safeguards are prepared
 for owner merge; full smoke + repair tests pass. Merge alone does not repair the host.
@@ -523,9 +524,8 @@ the detailed evidence and backlog. Dated pre-registrations/reviews are the sourc
 of truth for experiment thresholds; always refresh from current data.
 
 0. **Ops verification first (still open):** the latest checked-in CSV/log reaches
-   2026-10-20 08:59 UTC and its final 60 logged minutes are complete as of that row
-   (the 09:00 autosync commit); at this session's documentation time that snapshot is
-   a few hours old. This does not
+   2026-10-21 11:59 UTC and its final 60 logged minutes are complete as of that row;
+   at this session's documentation time that snapshot is the current one. This does not
    prove the production process/revision or systemd hardening, so confirm the
    heartbeat/alerts/dedup deployment and `mt5.service` hardening **on the host**.
    Runbook + drop-in in `docs/REVIEW-2026-09-29-feed-outage.md` §7

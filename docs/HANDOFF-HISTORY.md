@@ -14,6 +14,33 @@ block or a REVIEW instead; that is what makes this file trustworthy. (Created 20
 
 ---
 
+## 2026-10-21 11:59 UTC — §1 before the 11:59 UTC data refresh
+
+**This is the complete HANDOFF §1 block as it stood for the 2026-10-20 08:59 UTC snapshot (644 closed trades, structural-stop era n=147), superseded by the 2026-10-21 11:59 UTC refresh (657 closed trades, era n=160). Nothing below is current.**
+
+### Replaced §1 block
+
+## 1. Where things stand (as of **2026-10-20 — data collection 294; latest data through 08:59 UTC**)
+
+**Current stance (post-gate data refresh; judgement recorded 2026-10-19 21:19 UTC):** paper-only; `engine.py` remains `TRADING_MODE = "FORWARD_TEST"`. No engine, filter, parameter, gate or deployment change was made in this refresh. The checked-in data is the latest available synced snapshot, not a host heartbeat; production process/revision and any unsynced rows remain operator-only and unverified.
+
+**The book:** **644 closed trades** (128W/277L/237BE/2TIME; 31.6% decisive), engine ledger **$174.73**, true equity **$157.76**, net **−$599.84** at the assumed $0.40 round trip. One paper trade is open in the checked-in status: **SELL #646 @ $4120.28** (stop $4127.65, TP $4109.22, no BE armed). Quote logging has 6.7 days (6/14 complete UTC days, 1/2 weekends) and a first-look median $0.55 spread/round trip; the 14-day/two-weekend target is not met, so $0.40 remains the registered cost assumption.
+
+**The structural-stop evaluation was judged at its registered time gate (2026-10-19 21:00 UTC).** That judgement used the latest then-available snapshot, **n=139**; the n=150 arm was never reached, and under the registered "whichever comes first" wording the arm **lapsed with the gate** — later era growth is an observation, not a re-opened PASS/SCREEN judgement (see `docs/REVIEW-2026-10-20-post-gate-refresh.md`). The era has since grown to **n=147** (43W/66L/37BE/1TIME; 12 entry dates) on the post-gate rows. The mechanical guard still **PASSES**: 0 post-cutover stops inside the tested level, 81.6% level-bound, median clearance +0.50 ATR, median risk 3.29 ATR.
+
+Post-gate readings on n=147 (observation only — the recorded decision is the n=139 one): SL/day **5.50**, SL share **44.90%** (≤47.0%), scratch share **25.17%**, gross R/trade **−0.028R**, decisive WR **39.45% [30.8–48.8]**. Gross era P&L is **−$23.43**; at the assumed $0.40 round trip it is about **−$82 (−0.098R/trade)**. The recorded judgement still stands: **SCREEN MET, PASS NOT MET** on the sample the bar was judged on, and **no demonstrated edge**. Do not quote the grown-sample numbers as a verdict.
+
+**The separate §7 closure-gap REVERT trigger remains FIRED.** Counting a post-cutover trade open across a >5-minute log hole classified as a scheduled daily/weekly closure gives **2/2** (#595, #610); the eight post-gate trades added **no** new ride. Neither ride reopened through its stop or exited worse; one stop was ratcheted to entry, and no weekend closure has been ridden. These damage facts do not add a condition to the registered count. The bar and counting rule are recorded in `docs/REVIEW-2026-10-19-struct-stop-judgement.md` §3.
+
+The pre-registered response is **REVERT with the gap guard first**; therefore the 0.25 ATR level test is not eligible. The guard is still not operationally specified (no approved cutoff or open-position policy), and the production host/data state is unverified. **The owner was asked directly on 2026-10-20 and chose to leave it undefined for now:** scope "leave it blocked for now", schedule source "not sure yet", cutoff 30 min *if* a window is ever adopted — a preference attached to no adopted scope, **not** an approved `N` (`docs/REVIEW-2026-10-20-post-gate-refresh.md` §4; do not re-ask the same questions). This session records the refreshed state but does **not** invent a guard, revert code, or deploy. **Next eligible action:** the owner's own dated pre-registration of the guard (including cutoff, schedule source, and whether it blocks new entries or also closes open paper positions), then a reviewed guard change and the prescribed revert in order; verify fresh host data and executable before any deployment. Until then, the checked-in engine still contains the structural stop and remains paper-only.
+
+**Accounting incident reconciled (2026-10-19):** malformed rows #626–645 were quarantined from backed-up evidence using `tools/repair_phantom_ledger.py`; the checked-in ledger is now 644 valid closed trades and passes `check_data.py` (0 fail; 8 documented warnings). The raw-row reconciliation and evidence are in `docs/REVIEW-2026-10-19-negative-balance.md` and `incident_backups/`. **Host-side verification of the running executable/revision remains operator-only**; do not infer production process health from this checkout alone.
+
+**The dashboard pressure composite remains a side proxy, not a signal.** The re-join at n=147 is still collinear with side and has no within-side `against` bucket (BUY 63 aligned / 4 mixed; SELL 77 aligned / 3 mixed). The owner's manual pressure/hold observation remains a separate, unmeasured hypothesis. The signal-outlook read still shows no directional edge after an 8/8 signal (50.4% [42–59] trade-way at 30m, median +0.02R; 50.7% [42–59] at 60m at n=139). These are base rates for manual context, never a forecast, entry gate, sizing, or hold-past-stop input.
+
+**Box theory (manual, unmeasured in the ledger):** asked 2026-10-20 whether boxes can be used for manual trades. Measured on the same tape (`tools/box_report.py`, `docs/ANALYSIS-2026-10-20-box-theory-manual-trading.md`): breakout and fade entries land on or below the driftless reference at both box sizes, and 74–75% of breaks close back inside within 15 min. **Verdict: box = a place to put a stop, not a signal.** Display/advice only — no gate, no runtime change; manual box trades are not in `trades.csv` and are not evidence until logged (bar: n≥100, positive after spread). The dashboard renders the same read in its **📦 Boxes & Timing** tab (`?tab=boxes`) — boxes, the seven-condition checklist, the setup card and the measured footer.
+
+
 ## 2026-10-20 11:57 UTC — §1 before the post-gate data refresh
 
 **This is the complete HANDOFF §1 block as it stood for the 2026-10-19 18:10 UTC snapshot (636 closes, structural-stop n=139), written just after the 21:19 judgement.** Superseded on 2026-10-20 when the synced data reached 08:59 UTC with 644 closes and the era at n=147 — see `docs/REVIEW-2026-10-20-post-gate-refresh.md`. Nothing below is current.
