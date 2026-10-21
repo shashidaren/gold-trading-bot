@@ -1,5 +1,14 @@
 # Manual box watch cards — 2026-10-20
 
+> **Partly superseded 2026-10-21.** The "Retests are **not tracked**" paragraph below is no
+> longer true: `pressure.box_retest()` now tracks the last break on a box **frozen at the
+> break bar** (`extended` / `retesting` / `held` / `failed`) and both watch cards render it,
+> together with the measurement that entering the held retest showed **no edge** (59.0% vs a
+> 57.2% reference, the same −$0.31/trade as entering the break). The frozen-box event
+> definition and its tests that this document said a future feature would need are in
+> `docs/ANALYSIS-2026-10-21-box-chop-retest-alerts.md` §3 and `tools/test_box_alert.py`.
+> Everything else below stands, and nothing there became an engine gate.
+
 Owner approved the dashboard price-card proposal and requested a PR for owner merge.
 Display only: engine.py and trade_filter.py are unchanged. No orders, deployment,
 strategy promotion or changes to the registered structural-stop judgement.

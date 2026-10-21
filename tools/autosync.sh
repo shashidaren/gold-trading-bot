@@ -31,6 +31,7 @@ AUTO_DEPLOY="${AUTO_DEPLOY:-1}"       # 0 = data-only mode (never pull/restart)
 SMOKE_GATE="${SMOKE_GATE:-1}"         # 0 = deploy without the smoke test
 ENGINE_SERVICE="${ENGINE_SERVICE:-}" # empty = auto-detect the unit running engine.py
 DASHBOARD_SERVICE="${DASHBOARD_SERVICE:-}" # empty = auto-detect the unit running dashboard.py
+BOXALERT_SERVICE="${BOXALERT_SERVICE:-}" # empty = auto-detect the optional box_alert.py unit
 NOTIFY="${NOTIFY:-always}"            # always | quiet (quiet = only on events)
 # xm_data/ = the read-only quote + contract-spec logger (docs/XM-LOGGER.md); `git add` of a directory that
 # does not exist yet fails quietly (|| true below), so this is safe before the logger is installed.
@@ -133,6 +134,9 @@ if [ "$NEED_MERGE" = "1" ]; then
         CODE_CHANGED=$(git diff --name-only HEAD "$REMOTE_SHA" -- '*.py' | grep -c . || true)
         CORE_CHANGED=$(git diff --name-only HEAD "$REMOTE_SHA" -- engine.py trade_filter.py | grep -c . || true)
         DASH_CHANGED=$(git diff --name-only HEAD "$REMOTE_SHA" -- dashboard.py | grep -c . || true)
+        # the box-alert sidecar runs pressure.py's read layer, so either file changing
+        # needs its own restart (it is display-only: like the dashboard, never the engine)
+        BOXALERT_CHANGED=$(git diff --name-only HEAD "$REMOTE_SHA" -- tools/box_alert.py pressure.py | grep -c . || true)
         SVC=$(detect_service 'engine\.py' "$ENGINE_SERVICE" || true)
         PRE_MERGE=$(git rev-parse HEAD)
 
@@ -201,6 +205,16 @@ if [ "$NEED_MERGE" = "1" ]; then
                     || DEPLOY_MSG="$DEPLOY_MSG; FAILED to restart $DSVC"
             else
                 DEPLOY_MSG="$DEPLOY_MSG; dashboard service NOT FOUND - restart dashboard manually"
+            fi
+        fi
+        # OPTIONAL sidecar: absent on a box that never installed it, and that is fine -
+        # it is a notification, not part of the trading path. Never touch the engine here.
+        if [ "$BOXALERT_CHANGED" -gt 0 ]; then
+            BSVC=$(detect_service 'box_alert\.py' "$BOXALERT_SERVICE" || true)
+            if [ -n "$BSVC" ]; then
+                log "restarting box-alert sidecar ($BSVC)"
+                systemctl restart "$BSVC" >/dev/null 2>&1 \
+                    || DEPLOY_MSG="$DEPLOY_MSG; FAILED to restart $BSVC"
             fi
         fi
     fi
@@ -338,7 +352,23 @@ if [ -f tools/xm_quote_report.py ]; then
     esac
 fi
 
-log "done. data=[$DATA_MSG] deploy=[$DEPLOY_MSG] check=[$CHECK_MSG] handoff=[$HANDOFF_MSG] xm=[$XM_MSG]"
+# --- phase 4e: box-alert sidecar (ADVISORY - never blocks a deploy) -----------------
+# tools/box_alert.py is an OPTIONAL display-only notifier (docs/ANALYSIS-2026-10-21-
+# box-chop-retest-alerts.md). --quiet always prints one "box alerts: ..." line and
+# exits 0, including when it is not configured or not installed - so this can never
+# block a deploy or shout about a box the owner never opted into.
+BOXALERT_MSG=""
+if [ -f tools/box_alert.py ]; then
+    python3 tools/box_alert.py --quiet >/tmp/autosync_boxalert.log 2>&1
+    BOXALERT_MSG=$(tail -n1 /tmp/autosync_boxalert.log)
+    case "$BOXALERT_MSG" in
+        "box alerts:"*) ;;
+        *) BOXALERT_MSG="box alerts: report failed to run (${BOXALERT_MSG:-no output})" ;;
+    esac
+    log "$BOXALERT_MSG"
+fi
+
+log "done. data=[$DATA_MSG] deploy=[$DEPLOY_MSG] check=[$CHECK_MSG] handoff=[$HANDOFF_MSG] xm=[$XM_MSG] boxalert=[$BOXALERT_MSG]"
 
 QUIET_SKIP=0
 if [ "$NOTIFY" = "quiet" ] && [ "$DATA_MSG" = "no new data" ] && [ "$DEPLOY_MSG" = "none" ] \
@@ -353,5 +383,6 @@ if [ "$QUIET_SKIP" = "0" ]; then
 📈 candles: $FRESH_MSG
 📝 handoff: $HANDOFF_MSG
 📡 $XM_MSG
-💰 $STATS$EXTRA"
+${BOXALERT_MSG:+🔔 $BOXALERT_MSG
+}💰 $STATS$EXTRA"
 fi

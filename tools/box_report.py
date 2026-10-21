@@ -37,6 +37,7 @@ import sys
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pressure as P  # noqa: E402
 
 GAP_MINUTES = 3.0          # a bar-to-bar gap longer than this splits the tape
@@ -44,6 +45,8 @@ FALSE_BREAK_MINUTES = 15   # "broke out but closed back in" window
 DEFAULT_SPREAD = 0.55      # round trip, $/oz — the quote logger's median
 DEFAULT_N = (20, 60)       # box lookbacks in 1-min bars
 HORIZONS = {20: 60, 60: 120}   # forward walk per box size, minutes
+ALERT_SCAN_DAYS = 7        # --alert-scan replays this many days (it is not free)
+ALERT_SCAN_WINDOW = 1600   # trailing bars per replayed read (a prior day can sit ~1400 back)
 
 
 # ---------------------------------------------------------------- the tape
@@ -321,6 +324,190 @@ def live_boxes(rows, cost):
     return out
 
 
+# ---------------------------------------------------- alert-volume replay
+def _scan_rows(bars, lo, hi):
+    """A trailing slice of the tape as the row dicts pressure.box_geometry wants."""
+    return [{"Timestamp": b["ts"].strftime("%Y-%m-%d %H:%M:%S"), "Open": f"{b['o']:.2f}",
+             "High": f"{b['h']:.2f}", "Low": f"{b['l']:.2f}", "Close": f"{b['c']:.2f}",
+             "ATR": (f"{b['atr']:.2f}" if b["atr"] else "")} for b in bars[lo:hi + 1]]
+
+
+def _fresh_break_indexes(bars, start, sizes=(20, 60, 240)):
+    """Bars where a FRESH close-beyond exists for some box size.
+
+    A replay of every bar is pointless: only a fresh break can ever turn the panel
+    into a candidate, and `box_geometry` requires a close inside that box within
+    BOX_FRESH_BARS bars for the crossing to count as an event. (A prior-day box
+    trigger is not in this superset — it needs a full prior day of tape — so the
+    count below is very slightly LOW on Mondays.)
+    """
+    out = set()
+    for n in sizes:
+        for i in range(n, len(bars)):
+            bounds = box_at(bars, i, n, start)
+            if bounds is None:
+                continue
+            hi, lo = bounds
+            atr = bars[i]["atr"]
+            if not atr or atr <= 0:
+                continue
+            c = bars[i]["c"]
+            inside_hi = any(bars[i - k]["c"] <= hi for k in range(1, P.BOX_FRESH_BARS + 1))
+            inside_lo = any(bars[i - k]["c"] >= lo for k in range(1, P.BOX_FRESH_BARS + 1))
+            if (c >= hi + P.BOX_BREAK_ATR * atr and inside_hi) or \
+               (c <= lo - P.BOX_BREAK_ATR * atr and inside_lo):
+                out.add(i)
+    return sorted(out)
+
+
+def alert_scan(bars, cost, days=ALERT_SCAN_DAYS, window=ALERT_SCAN_WINDOW,
+               cooldown_minutes=None, daily_cap=None, global_cooldown_minutes=None):
+    """How many Telegram notices would today's rule have sent?
+
+    Replays the LIVE decision (pressure.box_status -> pressure.box_alert) and the
+    LIVE rate limiter (pressure.box_alert_suppressed / box_alert_record — the same
+    pure functions tools/box_alert.py wraps) over the last `days` of tape, so the
+    number printed here is the code the sidecar runs, not a re-implementation.
+
+    Two honesty notes, printed with the result:
+      * the portfolio state (SL cooldown, daily breaker) is not in the tape, so the
+        replay assumes neither is active and the feed is fresh: this is an UPPER
+        BOUND on real messages;
+      * the count says nothing about profitability. The measured base rate is still
+        0 of 8 geometries clearing the no-edge reference.
+    """
+    cooldown = cooldown_minutes or P.BOX_ALERT_COOLDOWN_MINUTES
+    cap = daily_cap or P.BOX_ALERT_DAILY_CAP
+    gap = global_cooldown_minutes or P.BOX_ALERT_GLOBAL_COOLDOWN_MINUTES
+    cutoff = bars[-1]["ts"] - timedelta(days=days)
+    start = run_offsets(bars)
+    idx = [i for i in _fresh_break_indexes(bars, start) if bars[i]["ts"] >= cutoff]
+    if not idx:
+        return {"ok": False, "reason": "no fresh breaks in the window"}
+
+    portfolio = {"cooldown_minutes_left": 0, "breaker_on": False}
+    feed = {"ok": True, "age_seconds": 0}
+    state = {"sent": {}, "day": None, "count": 0, "history": []}
+    sent, blocked_cooldown, blocked_cap, blocked_gap, declined = [], 0, 0, 0, {}
+    for i in idx:
+        rows = _scan_rows(bars, max(0, i - window + 1), i)
+        geom = P.box_geometry(rows, spread=cost)
+        if not geom.get("ok"):
+            continue
+        status = P.box_status(geom, portfolio=portfolio, feed=feed, now=bars[i]["ts"],
+                              spread=cost, regime=P.box_regime(rows))
+        decision = status.get("alert") or {}
+        if not decision.get("fire"):
+            why = (decision.get("blockers") or ["no candidate"])[0].split(":")[0]
+            declined[why] = declined.get(why, 0) + 1
+            continue
+        decision["cooldown_minutes"], decision["daily_cap"] = cooldown, cap
+        decision["global_cooldown_minutes"] = gap
+        why = P.box_alert_suppressed(decision, state, now=bars[i]["ts"])
+        if why:
+            if "daily cap" in why:
+                blocked_cap += 1
+            elif "minimum spacing" in why:
+                blocked_gap += 1
+            else:
+                blocked_cooldown += 1
+            continue
+        P.box_alert_record(state, decision, now=bars[i]["ts"])
+        sent.append({"ts": bars[i]["ts"], "side": decision["side"], "box": decision["box"],
+                     "edge": round(decision["edge"], 2)})
+
+    by_day = {}
+    for s_ in sent:
+        by_day.setdefault(s_["ts"].date(), 0)
+        by_day[s_["ts"].date()] += 1
+    span_days = (bars[-1]["ts"] - cutoff).total_seconds() / 86400.0
+    per_day = sorted(by_day.values())
+    return {
+        "ok": True, "days": round(span_days, 1), "evaluated": len(idx),
+        "sent": len(sent), "per_day": round(len(sent) / span_days, 1) if span_days else None,
+        "median_per_day": per_day[len(per_day) // 2] if per_day else 0,
+        "max_per_day": max(per_day) if per_day else 0,
+        "days_with_alerts": len(by_day),
+        "blocked_cooldown": blocked_cooldown, "blocked_daily_cap": blocked_cap,
+        "blocked_global_spacing": blocked_gap,
+        "declined": declined, "messages": sent,
+        "by_side": {sd: sum(1 for m in sent if m["side"] == sd) for sd in ("BUY", "SELL")},
+        "cooldown_minutes": cooldown, "daily_cap": cap, "global_cooldown_minutes": gap,
+        "cost": cost,
+    }
+
+
+def report_regime(regime):
+    """The chop + retest read the dashboard shows, printed — with its own verdict."""
+    hdr("4b. IS THE TAPE CHOPPY RIGHT NOW? (measured, and measured NOT to predict)")
+    chop, retest = regime.get("chop") or {}, regime.get("retest") or {}
+    rule()
+    if chop.get("ok"):
+        print(f"  {chop['headline']}")
+        print(f"    {chop['detail']}")
+        eff = ("n/a" if chop.get("eff_60") is None else f"{chop['eff_60']:.2f}")
+        eff2 = ("n/a" if chop.get("eff_240") is None else f"{chop['eff_240']:.2f}")
+        print(f"    efficiency ratio (|net| / path): 60 bars {eff} · 240 bars {eff2}"
+              "   (low = sideways, high = trending)")
+        if chop.get("box_width_atr"):
+            print(f"    20-bar box width now {chop['box_width_atr']:.1f} ATR vs its "
+                  f"{chop['box_width_median_atr']:.1f} ATR median in view")
+        m = chop["measured"]
+        print(f"    MEASURED, and it does NOT separate outcomes: over {m['sequential_breaks']}")
+        print(f"      sequential breaks, 'clean prior day' gave {m['prior_day_chop_clean_tf_pct']}%")
+        print(f"      target-first vs a {m['prior_day_chop_clean_ref_pct']}% reference and 'choppy prior")
+        print(f"      day' gave {m['prior_day_chop_choppy_tf_pct']}% vs {m['prior_day_chop_choppy_ref_pct']}% —")
+        print("      the wrong way round, inside noise. Context, never a filter.")
+    else:
+        print(f"  chop read unavailable: {chop.get('reason')}")
+    rule()
+    if retest.get("state") in (None, "none"):
+        print(f"  retest: {retest.get('detail', 'no retest read')}")
+    else:
+        print(f"  retest of the {retest.get('side')} break: {retest['state'].upper()}")
+        print(f"    {retest['detail']}")
+        print(f"    frozen box {retest['box_low']:.2f}-{retest['box_high']:.2f} "
+              f"(broke at {retest['break_ts'].strftime('%m-%d %H:%M')} UTC)")
+    m = retest.get("measured") or P.BOX_RETEST_MEASURED
+    print(f"    MEASURED: {m['retested_within_30_bars_pct']:.0f}% of breaks are retested within 30 bars "
+          f"(median {m['median_wait_bars']}); entering the HELD retest returned")
+    print(f"      {m['entry_on_hold_tf_pct']}% vs a {m['entry_on_hold_ref_pct']}% reference — the same "
+          f"${m['entry_on_hold_e_usd']}/trade as entering the break. Not a filter.")
+
+
+def report_alert_scan(res):
+    hdr(f"5. HOW LOUD IS THE TELEGRAM ALERT? (replay of the last {res['days']} days)")
+    if not res.get("ok"):
+        print(f"  {res.get('reason', 'no replay')}")
+        return
+    rule()
+    print(f"  {res['evaluated']} fresh-break bars replayed · rule: fresh close beyond an edge, "
+          f"every check green,")
+    print(f"  spread ≤ {P.BOX_COST_SHARE_OK:.0f}% of R, no chase, ≥{res['global_cooldown_minutes']:.0f} min "
+          f"between any two messages,")
+    print(f"  1 per {res['cooldown_minutes']:.0f} min per box edge, {res['daily_cap']}/day cap")
+    print(f"  → {res['sent']} messages = {res['per_day']}/day "
+          f"(median {res['median_per_day']}, busiest day {res['max_per_day']}, "
+          f"{res['days_with_alerts']} days with at least one)")
+    print(f"  suppressed: {res['blocked_global_spacing']} by the {res['global_cooldown_minutes']:.0f}-min spacing, "
+          f"{res['blocked_cooldown']} by the per-edge cooldown, "
+          f"{res['blocked_daily_cap']} by the daily cap")
+    print(f"  sides: BUY {res['by_side']['BUY']} · SELL {res['by_side']['SELL']}")
+    if res["declined"]:
+        top = sorted(res["declined"].items(), key=lambda kv: -kv[1])[:6]
+        print("  declined because: " + " · ".join(f"{k} {v}" for k, v in top))
+    print("  last few messages it would have sent:")
+    for m in res["messages"][-6:]:
+        print(f"    {m['ts'].strftime('%m-%d %H:%M')} UTC  {m['side']:4s} {m['box']} "
+              f"edge {m['edge']:.2f}")
+    print()
+    print("  Read this number as NOISE CONTROL, not as quality: the portfolio gates")
+    print("  (SL cooldown, daily breaker) are not in the tape, so the replay assumes")
+    print("  neither is active and the feed is fresh — an UPPER bound. And a message")
+    print(f"  count says nothing about expectancy: {P.BOX_MEASURED['cells']} box geometries")
+    print(f"  were measured and {P.BOX_MEASURED['cleared']} cleared the no-edge reference.")
+
+
 # ------------------------------------------------------------------- CLI
 def hdr(text):
     print(f"\n== {text} ==")
@@ -423,6 +610,11 @@ def main(argv=None):
     ap.add_argument("--spread", type=float, default=DEFAULT_SPREAD,
                     help=f"round-trip cost in $/oz (default {DEFAULT_SPREAD} — quote-logger median)")
     ap.add_argument("--json", action="store_true", help="dump the raw structures")
+    ap.add_argument("--alert-scan", action="store_true",
+                    help="replay the last --alert-days and print how many Telegram "
+                         "notices the current rule would have sent (slow: ~30 s)")
+    ap.add_argument("--alert-days", type=float, default=ALERT_SCAN_DAYS,
+                    help=f"days of tape the --alert-scan replays (default {ALERT_SCAN_DAYS})")
     args = ap.parse_args(argv)
 
     rows = P.read_rows(os.path.join(args.root, "forward_test_log.csv"))
@@ -435,14 +627,20 @@ def main(argv=None):
 
     live = live_boxes(rows, args.spread)
     scans = {n: scan(bars, n, HORIZONS[n], args.spread) for n in DEFAULT_N}
+    regime = P.box_regime(rows)
+    alerts = alert_scan(bars, args.spread, days=args.alert_days) if args.alert_scan else None
 
     if args.json:
         print(json.dumps({"cost_usd": args.spread, "bars": len(bars),
                           "first_bar": first, "last_bar": last,
-                          "live": live, "scans": {str(k): v for k, v in scans.items()}},
+                          "live": live, "scans": {str(k): v for k, v in scans.items()},
+                          "regime": regime, "alert_scan": alerts},
                          indent=2, default=str))
         return 0
     report(live, scans, args.spread, len(bars), first, last)
+    report_regime(regime)
+    if alerts:
+        report_alert_scan(alerts)
     return 0
 
 

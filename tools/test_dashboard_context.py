@@ -154,8 +154,17 @@ class BoxReadTests(unittest.TestCase):
         html = dashboard.app.test_client().get("/").get_data(as_text=True)
         for needle in ("Boxes &amp; Timing", 'id="panel-boxes"', "Where the boxes are",
                        "When to trade", "Measured, not assumed", "BUY WATCH", "SELL WATCH",
-                       "costed reward/risk", "Retest: not tracked", "No edge has been validated"):
+                       "costed reward/risk", "No edge has been validated",
+                       # 2026-10-21: retest tracking, the chop panel, the alert preview
+                       "Is the tape choppy? (measured, not felt)",
+                       "Telegram alert", "spam control, not an expectancy claim"):
             self.assertIn(needle, html)
+        # the old disclaimer is superseded: retests ARE tracked now, on a frozen box.
+        # One of the two branches always renders, depending on whether a break is live.
+        self.assertNotIn("Retest: not tracked", html)
+        self.assertTrue("box frozen at the break" in html or "no break to retest yet" in html)
+        # the alert panel is a preview, never a sender, and one of the two states shows
+        self.assertTrue("Would send now" in html or "Held" in html)
         # a third tab must not break the switch itself
         self.assertIn("var TABS = ['simple', 'boxes', 'details']", html)
 

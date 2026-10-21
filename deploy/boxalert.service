@@ -1,0 +1,47 @@
+# Gold box-watch Telegram notifier (python3 -> Telegram, read-only)
+#
+# OPTIONAL, display-only sidecar (tools/box_alert.py). Every 60 s it asks the same
+# question the dashboard's "Boxes & Timing" tab answers - "did a box edge just break
+# with every condition green?" - and sends ONE Telegram message when it did, carrying
+# the levels, the costed payoff, the retest state, the measured chop read and the
+# measured base rate (0 of 8 box geometries cleared the no-edge reference).
+#
+# It places no order, imports no engine module, and writes nothing except its own
+# dedupe state (/opt/gold/box_alert_state.json). Removing this unit changes nothing
+# about trading. Method + the honest verdicts:
+# docs/ANALYSIS-2026-10-21-box-chop-retest-alerts.md
+#
+# TEST FIRST (no service, no state written):
+#   cd /opt/gold
+#   set -a; . ./.env; set +a
+#   python3 tools/box_alert.py --once --dry-run     # what would it say right now?
+#   python3 tools/box_alert.py --test               # proves the bot/chat work
+#
+# Install (the -gold suffix keeps it apart from any other bot's notifier):
+#   sudo cp deploy/boxalert.service /etc/systemd/system/boxalert-gold.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now boxalert-gold
+#   journalctl -u boxalert-gold -f
+#
+# The token/chat come from /opt/gold/.env (the engine's own pair, never committed).
+# Optional overrides, all with defaults: GOLD_BOX_ALERTS=0 (disable without
+# uninstalling), GOLD_BOX_ALERT_GLOBAL_COOLDOWN_MIN (30), GOLD_BOX_ALERT_COOLDOWN_MIN
+# (90, per box edge), GOLD_BOX_ALERT_DAILY_CAP (6), GOLD_BOX_ALERT_STATE.
+# Never put a broker login here: this notifier needs none.
+
+[Unit]
+Description=Gold box-watch Telegram notifier (display-only, no orders)
+After=network.target
+
+[Service]
+User=root
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/opt/gold/.env
+Environment=GOLD_DATA_DIR=/opt/gold
+ExecStart=/usr/bin/python3 /opt/gold/tools/box_alert.py --loop --interval 60
+WorkingDirectory=/opt/gold
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
