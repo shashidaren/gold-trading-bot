@@ -279,12 +279,45 @@ HTML_TEMPLATE = """
                         <p class="text-xs text-slate-400 mt-3">Extension beyond edge: {{ '%.2f'|format(card.extension_atr) }} ATR. Do-not-chase warning above 1 ATR (unvalidated display heuristic).</p>
                         {% if card.limited_reward %}<p class="text-xs text-amber-300 mt-2">Limited reward: costed reward is less than risk.</p>{% endif %}
                         {% for reason in card.reasons %}<p class="text-xs text-rose-300 mt-2">{{ reason }}</p>{% endfor %}
-                        <p class="text-xs text-slate-400 mt-2">Retest: not tracked. Verify manually against a fixed box; do not infer a held retest from these rolling levels.</p>
+                        {% if card.retest_state and card.retest_state != 'none' %}
+                        <p class="text-xs text-slate-400 mt-2">Retest — box frozen at the break:
+                            <span class="{% if card.retest_state == 'held' %}text-emerald-300{% elif card.retest_state == 'failed' %}text-rose-300{% else %}text-amber-300{% endif %}font-semibold">{{ card.retest_state }}</span>
+                            — {{ card.retest_detail }}</p>
+                        <p class="text-xs text-slate-500 mt-1">Measured: {{ '%.0f'|format(card.retest_measured.retested_within_30_bars_pct) }}% of breaks are retested within 30 bars (median {{ card.retest_measured.median_wait_bars }}); entering the held retest returned {{ card.retest_measured.entry_on_hold_tf_pct }}% vs a {{ card.retest_measured.entry_on_hold_ref_pct }}% reference and the same ${{ '%.2f'|format(card.retest_measured.entry_on_hold_e_usd|abs) }}/trade as entering the break — a status read, not a filter.</p>
+                        {% else %}
+                        <p class="text-xs text-slate-400 mt-2">Retest: no close beyond a box edge in the last 30 bars, so there is no break to retest yet.</p>
+                        {% endif %}
                     </div>
                     {% endfor %}
                 </div>
                 <p class="text-xs text-slate-400 mt-3">Confirmation includes the existing box breakout ATR buffer, not a wick touch. Costed ratio = (reward − assumed round-trip spread) / (risk + spread), using ${{ '%.2f'|format(bx.spread_usd) }}/oz; excludes slippage, commission and swap. These are bar-close references, not current executable bid/ask quotes. Recheck actual price and spread before any manual decision. No edge has been validated.</p>
             </div>
+
+            <!-- Telegram alert preview: the SAME decision the sidecar sends, shown not sent. -->
+            {% if bx.alert %}
+            <div class="rounded-2xl border p-4 mb-5 {% if bx.alert.fire %}border-emerald-700 bg-emerald-950/20{% else %}border-slate-700 bg-slate-800{% endif %}">
+                <div class="flex flex-col md:flex-row md:items-center gap-3">
+                    <div class="text-lg font-semibold">🔔 Telegram alert</div>
+                    <div class="text-sm {% if bx.alert.fire %}text-emerald-300{% else %}text-slate-400{% endif %}">
+                        {% if bx.alert.fire %}Would send now{% else %}Held{% endif %}
+                    </div>
+                    <div class="text-[11px] text-slate-500 md:ml-auto">
+                        ≥{{ '%.0f'|format(bx.alert.global_cooldown_minutes) }} min between any two messages ·
+                        1 per {{ '%.0f'|format(bx.alert.cooldown_minutes) }} min per box edge ·
+                        {{ bx.alert.daily_cap }}/day cap — spam control, not an expectancy claim
+                    </div>
+                </div>
+                {% if bx.alert.fire and bx.alert.text %}
+                <pre class="text-[11px] leading-relaxed text-slate-300 bg-slate-900/70 rounded-lg p-3 mt-3 whitespace-pre-wrap font-mono">{{ bx.alert.text }}</pre>
+                <p class="text-[11px] text-slate-500 mt-2">This is the exact text <span class="font-mono">tools/box_alert.py</span> sends when it is installed and <span class="font-mono">TELEGRAM_BOT_TOKEN</span>/<span class="font-mono">TELEGRAM_CHAT_ID</span> are set. The dashboard itself never sends anything.</p>
+                {% else %}
+                <ul class="text-xs text-slate-400 mt-2 space-y-1">
+                    {% for b in bx.alert.blockers[:6] %}<li>· {{ b }}</li>{% endfor %}
+                </ul>
+                <p class="text-[11px] text-slate-500 mt-2">A notice fires only on a <span class="text-slate-300">fresh close beyond a box edge</span> with every condition green, a spread at or under {{ 10 }}% of R and no chase. It says the conditions line up — measured, {{ bx.measured.cells }} box geometries and {{ bx.measured.cleared }} cleared the no-edge reference.</p>
+                {% endif %}
+            </div>
+            {% endif %}
 
             <div class="grid grid-cols-1 xl:grid-cols-2 gap-5">
                 <!-- Boxes -->
@@ -344,6 +377,49 @@ HTML_TEMPLATE = """
                     {% endfor %}
                     </div>
                 </div>
+            </div>
+
+            <!-- Tape regime: the measured chop read, with the measurement that says
+                 it does NOT predict. Answers "is it choppy today?" with a number
+                 instead of a feeling — and refuses to turn that number into a filter. -->
+            <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4 mt-5">
+                <div class="flex flex-col md:flex-row md:items-center gap-2">
+                    <div class="text-sm font-semibold text-slate-200">🌊 Is the tape choppy? (measured, not felt)</div>
+                    {% if bx.chop and bx.chop.ok %}
+                    <span class="text-[11px] px-2 py-0.5 rounded-full
+                        {% if bx.chop.level == 'elevated' %}bg-rose-500/20 text-rose-300
+                        {% elif bx.chop.level == 'clean' %}bg-emerald-500/20 text-emerald-300
+                        {% elif bx.chop.level == 'thin' %}bg-slate-600/40 text-slate-300
+                        {% else %}bg-amber-500/20 text-amber-300{% endif %}">{{ bx.chop.level }}</span>
+                    {% endif %}
+                </div>
+                {% if bx.chop and bx.chop.ok %}
+                <div class="text-sm text-slate-300 mt-1">{{ bx.chop.headline }} — {{ bx.chop.detail }}</div>
+                <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mt-3 text-xs">
+                    <div><div class="text-slate-500">breaks, last 24 h</div><div class="font-mono text-slate-200">{{ bx.chop.recent_breaks }}</div></div>
+                    <div><div class="text-slate-500">closed back inside</div><div class="font-mono text-slate-200">{{ bx.chop.recent_false_breaks }} ({{ '%.0f'|format(bx.chop.recent_false_break_pct) }}%)</div></div>
+                    <div><div class="text-slate-500">baseline in view</div><div class="font-mono text-slate-200">{{ '%.0f'|format(bx.chop.baseline_false_break_pct) }}% <span class="text-slate-500">of {{ bx.chop.baseline_breaks }}</span></div></div>
+                    <div><div class="text-slate-500">efficiency 60 / 240 bars</div><div class="font-mono text-slate-200">{{ '%.2f'|format(bx.chop.eff_60) if bx.chop.eff_60 is not none else '—' }} / {{ '%.2f'|format(bx.chop.eff_240) if bx.chop.eff_240 is not none else '—' }}</div></div>
+                    <div><div class="text-slate-500">20-bar box now</div><div class="font-mono text-slate-200">{{ '%.1f'|format(bx.chop.box_width_atr) if bx.chop.box_width_atr else '—' }} ATR <span class="text-slate-500">vs {{ '%.1f'|format(bx.chop.box_width_median_atr) if bx.chop.box_width_median_atr else '—' }} median</span></div></div>
+                    <div><div class="text-slate-500">span measured</div><div class="font-mono text-slate-200">{{ bx.chop.baseline_span_days }} days</div></div>
+                </div>
+                {% set cm = bx.regime_measured.chop %}
+                <div class="text-[11px] text-slate-500 mt-3">
+                    <span class="text-slate-300 font-semibold">And the honest part:</span> this read does not predict outcomes. Over {{ cm.sequential_breaks }} sequential breaks,
+                    a <span class="text-slate-300">clean</span> prior day gave {{ cm.prior_day_chop_clean_tf_pct }}% target-first against a {{ cm.prior_day_chop_clean_ref_pct }}% reference and a
+                    <span class="text-slate-300">choppy</span> prior day gave {{ cm.prior_day_chop_choppy_tf_pct }}% against {{ cm.prior_day_chop_choppy_ref_pct }}% — the wrong way round, inside noise.
+                    Efficiency ratio and box compression did not clear their references either. Context, never a filter.
+                </div>
+                {% else %}
+                <div class="text-sm text-slate-400 mt-1">{{ bx.chop.reason if bx.chop else 'chop read unavailable' }}</div>
+                {% endif %}
+                {% if bx.retest and bx.retest.state and bx.retest.state != 'none' %}
+                <div class="text-xs text-slate-300 mt-3 border-t border-slate-700/70 pt-3">
+                    <span class="font-semibold">Last break (frozen box):</span>
+                    <span class="{% if bx.retest.state == 'held' %}text-emerald-300{% elif bx.retest.state == 'failed' %}text-rose-300{% else %}text-amber-300{% endif %}">{{ bx.retest.state }}</span>
+                    — {{ bx.retest.detail }}
+                </div>
+                {% endif %}
             </div>
 
             <!-- The setup, if there is one -->
@@ -1372,15 +1448,17 @@ def pressure_context():
     return ctx
 
 
-_box_cache = {"key": None, "geom": None}
+_box_cache = {"key": None, "geom": None, "regime": None}
 
 
 def box_context(portfolio=None, feed=None):
     """Boxes + the condition checklist (display-only, cached geometry).
 
-    Geometry is rebuilt only when the log file changes; the checklist is live
-    (session, cooldown, feed age) because those are the parts that move minute
-    to minute. Nothing here is an entry rule — see pressure.box_status.
+    Geometry and the tape regime (chop + frozen-box retest) are rebuilt only when
+    the log file changes — both are pure functions of the tape. The checklist is
+    live (session, cooldown, feed age) because those move minute to minute, and so
+    is the Telegram preview, which is the same pressure.box_alert() decision the
+    sidecar runs. Nothing here is an entry rule — see pressure.box_status.
     """
     if PR is None:
         return {"ok": False, "reason": f"pressure.py unavailable: {_PR_IMPORT_ERROR}"}
@@ -1389,12 +1467,14 @@ def box_context(portfolio=None, feed=None):
         try:
             rows = PR.tail_rows(LOG_FILE_PATH, 9000, window_bytes=1024 * 1024)
             _box_cache["geom"] = PR.box_geometry(rows)
+            _box_cache["regime"] = PR.box_regime(rows)
             _box_cache["key"] = key
         except Exception as exc:
             return {"ok": False, "reason": f"box geometry failed: {exc}"}
     try:
         return PR.box_status(_box_cache["geom"], portfolio=portfolio, feed=feed,
-                             now=datetime.now(timezone.utc).replace(tzinfo=None))
+                             now=datetime.now(timezone.utc).replace(tzinfo=None),
+                             regime=_box_cache["regime"])
     except Exception as exc:
         return {"ok": False, "reason": f"box status failed: {exc}"}
 
