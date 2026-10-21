@@ -211,6 +211,17 @@ and §3 are the measurements that would have to say otherwise, and they do not.
 
 ## 5. Running it
 
+> **Update, later on 2026-10-21 (ops fix, no change to any rule or number in this document).**
+> The first digest to run this phase (18:00 UTC) said `🔔 box alerts: not configured (no
+> TELEGRAM_BOT_TOKEN/CHAT_ID)` in the very message the pair had just delivered.
+> `tools/autosync.sh` keeps the pair in its own unexported shell variables, and `box_alert.py`
+> read only its inherited environment. The tool now reads the pair and its `GOLD_BOX_ALERT*`
+> knobs from `$GOLD_DATA_DIR/.env` itself (environment wins), so the `set -a` line below is no
+> longer needed (it is harmless). The digest line now reports whether the notifier is actually
+> **running**, from a heartbeat the `--loop` stamps into its own state file. The documented but
+> unread `GOLD_BOX_ALERT_GLOBAL_COOLDOWN_MIN` is now honoured, and the message footer states the
+> limits in force. Digest states: `docs/AUTOSYNC.md` §3 (`🔔`).
+
 ```bash
 python3 tools/box_report.py --alert-scan          # live boxes + regime + the alert replay
 cd /opt/gold && set -a && . ./.env && set +a

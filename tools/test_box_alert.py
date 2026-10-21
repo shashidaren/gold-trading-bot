@@ -87,6 +87,30 @@ def read_of(rows, now=NOW, portfolio=PORTFOLIO, feed=FEED_OK):
                         regime=P.box_regime(rows))
 
 
+def write_root(rows=None, env_text=None):
+    """A throwaway GOLD_DATA_DIR: a synthetic 1-min log and, optionally, a .env.
+
+    No trades.csv on purpose (no ledger -> no cooldown/breaker), so the only thing a
+    test controls is the tape and the clock. Never the live CSVs: they move every 3 h.
+    """
+    import csv
+    import tempfile
+    root = tempfile.mkdtemp()
+    if rows:
+        with open(os.path.join(root, "forward_test_log.csv"), "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(rows[0]))
+            w.writeheader()
+            w.writerows(rows)
+    if env_text is not None:
+        with open(os.path.join(root, ".env"), "w") as f:
+            f.write(env_text)
+    return root
+
+
+def last_bar_time(rows):
+    return datetime.strptime(rows[-1]["Timestamp"], "%Y-%m-%d %H:%M:%S")
+
+
 # ─────────────────────────────────────────────────────────────── the chop read
 class ChopTests(unittest.TestCase):
     def test_a_break_that_comes_back_counts_and_one_that_runs_does_not(self):
@@ -369,15 +393,21 @@ class DecideOnceTests(unittest.TestCase):
         return True, "sent"
 
     def test_it_decides_without_sending_when_nothing_lines_up(self):
-        rc, out = BA.decide_once(self.Args(self.root, self.state),
-                                 now=datetime(2026, 10, 21, 16, 0),
+        # Hermetic since 2026-10-21. The first version read the CHECKED-IN log and
+        # assumed it ended at 14:59 UTC. Three autosync data commits later the day's
+        # breaker blocked first, and the "feed" assertion failed on an unchanged tool
+        # (HANDOFF §7: never the live CSVs). Same intent, synthetic tape: 30 quiet bars
+        # and a clock an hour past the last one, on a weekday afternoon.
+        rows = wide_tape(break_close=None)
+        root = write_root(rows)
+        rc, out = BA.decide_once(self.Args(root, self.state),
+                                 now=last_bar_time(rows) + timedelta(hours=1),
                                  sender=self.fake_sender, state_path=self.state)
         self.assertEqual(rc, 0)
-        self.assertIn(out["action"], ("no alert", "suppressed", "would send (dry run)", "sent"))
-        # the checked-in log ends 14:59 UTC, so at 16:00 the feed check must block
-        if out["action"] == "no alert":
-            self.assertIn("feed", out["reason"])
-        self.assertEqual(self.sent, [] if out["action"] != "sent" else self.sent)
+        self.assertEqual(out["action"], "no alert")
+        self.assertIn("feed", out["reason"])            # an hour-old tape must block
+        self.assertEqual(self.sent, [])
+        self.assertFalse(os.path.exists(self.state))    # declining writes nothing
 
     def test_dry_run_never_calls_the_sender(self):
         args = self.Args(self.root, self.state)
@@ -401,6 +431,191 @@ class DecideOnceTests(unittest.TestCase):
         again = BA.load_state(self.state)
         self.assertIn("minimum spacing",
                       BA.suppressed(decision, again, now=NOW + timedelta(minutes=1)))
+
+
+# ───────────────────────────────── settings: the env file (the 2026-10-21 18:00 digest bug)
+class EnvFileTests(unittest.TestCase):
+    """The 2026-10-21 18:00 UTC digest said "box alerts: not configured" in the very
+    message the Telegram pair had just delivered. autosync keeps the pair in private
+    shell variables, and the tool read only the environment it inherited. Now it reads
+    the same /opt/gold/.env the engine and the unit use, only its own keys, and the
+    environment wins."""
+
+    def env_path(self, text):
+        return os.path.join(write_root(env_text=text), ".env")
+
+    def test_it_reads_a_systemd_style_file(self):
+        path = self.env_path("# comment\n; also a comment\n\n"
+                             "DATA_SOURCE=MT5\r\n"
+                             "TELEGRAM_BOT_TOKEN=\"123:abc\"\n"
+                             "export TELEGRAM_CHAT_ID='42'\n"
+                             "  GOLD_BOX_ALERT_DAILY_CAP = 4  \n"
+                             "not a pair\n=orphan\n"
+                             "GOLD_BOX_ALERT_DAILY_CAP=5\n")
+        self.assertEqual(BA.read_env_file(path), {
+            "DATA_SOURCE": "MT5", "TELEGRAM_BOT_TOKEN": "123:abc",
+            "TELEGRAM_CHAT_ID": "42", "GOLD_BOX_ALERT_DAILY_CAP": "5"})   # later line wins
+
+    def test_a_missing_file_is_empty_not_an_error(self):
+        self.assertEqual(BA.read_env_file("/nonexistent/.env"), {})
+        self.assertEqual(BA.read_env_file(None), {})
+
+    def test_only_its_own_missing_keys_are_filled_and_the_environment_wins(self):
+        path = self.env_path("TELEGRAM_BOT_TOKEN=from-file\nTELEGRAM_CHAT_ID=from-file\n"
+                             "TWELVE_DATA_API_KEY=not-ours\nGOLD_BOX_ALERTS=0\n")
+        env = {"TELEGRAM_CHAT_ID": "from-env", "TELEGRAM_BOT_TOKEN": ""}
+        filled = BA.apply_env_file(path, environ=env)
+        self.assertEqual(env["TELEGRAM_BOT_TOKEN"], "from-file")   # empty counts as missing
+        self.assertEqual(env["TELEGRAM_CHAT_ID"], "from-env")      # the environment wins
+        self.assertEqual(env["GOLD_BOX_ALERTS"], "0")
+        self.assertNotIn("TWELVE_DATA_API_KEY", env)               # not this tool's key
+        self.assertEqual(sorted(filled), ["GOLD_BOX_ALERTS", "TELEGRAM_BOT_TOKEN"])
+
+    def run_quiet(self, root, *extra):
+        """`box_alert.py --quiet` exactly as autosync runs it: a cron-like environment
+        (no TELEGRAM_* exported) plus GOLD_DATA_DIR. Subprocess, so nothing leaks into
+        this test process's os.environ."""
+        import subprocess
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GOLD_DATA_DIR": root}
+        res = subprocess.run([sys.executable, os.path.join(HERE, "box_alert.py"), "--quiet",
+                              *extra], env=env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return res.stdout.strip().splitlines()[-1]
+
+    def test_the_autosync_digest_finds_the_pair_in_the_env_file(self):
+        root = write_root(wide_tape(break_close=None),
+                          env_text="TELEGRAM_BOT_TOKEN=123:SECRET\nTELEGRAM_CHAT_ID=42\n")
+        line = self.run_quiet(root)
+        self.assertNotIn("not configured", line)
+        self.assertIn("Telegram pair found", line)
+        self.assertIn("notifier not running", line)        # nothing ever looped here
+        self.assertNotIn("SECRET", line)
+        with open(os.path.join(root, ".env"), "a") as f:   # the off switch, same file
+            f.write("GOLD_BOX_ALERTS=0\n")
+        self.assertEqual(self.run_quiet(root), "box alerts: disabled (GOLD_BOX_ALERTS=0)")
+
+    def test_without_a_pair_it_says_where_it_looked(self):
+        root = write_root(wide_tape(break_close=None))
+        line = self.run_quiet(root)
+        self.assertIn("not configured", line)
+        self.assertIn(os.path.join(root, ".env"), line)
+        # --env-file /dev/null = environment only, whatever the data dir holds
+        root2 = write_root(env_text="TELEGRAM_BOT_TOKEN=1:x\nTELEGRAM_CHAT_ID=2\n")
+        self.assertIn("not configured", self.run_quiet(root2, "--env-file", os.devnull))
+
+
+# ─────────────────────────────────── liveness: "pair found" is not "notifier running"
+class DigestLivenessTests(unittest.TestCase):
+    """Fixing "not configured" alone would swap one wrong line for another. With the
+    pair found and no unit installed, the old format read "0 sent today · none sent
+    yet", which looks like a healthy notifier waiting for a candidate. The line says
+    running only on a fresh --loop heartbeat."""
+
+    PAIR = {"TELEGRAM_BOT_TOKEN": "123:SECRET", "TELEGRAM_CHAT_ID": "42"}
+
+    def state(self, beat=None, interval=60):
+        s = {"sent": {}, "day": None, "count": 0, "last_sent": None, "history": []}
+        if beat is not None:
+            s["loop"] = {"heartbeat": beat.strftime("%Y-%m-%d %H:%M:%S"),
+                         "interval_s": interval}
+        return s
+
+    def test_a_pair_without_a_loop_is_not_a_working_notifier(self):
+        line = BA.digest_line(self.state(), now=NOW, env=self.PAIR)
+        self.assertEqual(line, "box alerts: Telegram pair found · notifier not running "
+                               "(optional: install deploy/boxalert.service)")
+        self.assertNotIn("SECRET", line)
+
+    def test_a_fresh_heartbeat_reads_running_and_an_old_one_stopped(self):
+        line = BA.digest_line(self.state(NOW - timedelta(seconds=30)), now=NOW, env=self.PAIR)
+        self.assertEqual(line, "box alerts: running · 0 sent today · none sent yet")
+        old = BA.digest_line(self.state(NOW - timedelta(minutes=10)), now=NOW, env=self.PAIR)
+        self.assertEqual(old, "box alerts: notifier STOPPED (last heartbeat 10-07 15:50 UTC)"
+                              " · 0 sent today · none sent yet")
+        # a slower loop gets proportionally longer grace (3 ticks)
+        slow = self.state(NOW - timedelta(minutes=10), interval=300)
+        self.assertTrue(BA.digest_line(slow, now=NOW, env=self.PAIR)
+                        .startswith("box alerts: running"))
+
+    def test_a_live_candidate_is_only_claimed_while_running(self):
+        firing = {"fire": True}
+        self.assertIn("a candidate is live now",
+                      BA.digest_line(self.state(NOW), decision=firing, now=NOW, env=self.PAIR))
+        self.assertNotIn("candidate",
+                         BA.digest_line(self.state(), decision=firing, now=NOW, env=self.PAIR))
+
+    def test_off_wins_and_a_missing_pair_names_where_it_looked(self):
+        off = dict(self.PAIR, GOLD_BOX_ALERTS="0")
+        self.assertEqual(BA.digest_line(self.state(NOW), now=NOW, env=off),
+                         "box alerts: disabled (GOLD_BOX_ALERTS=0)")
+        self.assertEqual(BA.digest_line(self.state(), now=NOW, env={}, env_file="/opt/gold/.env"),
+                         "box alerts: not configured (no TELEGRAM_BOT_TOKEN/CHAT_ID "
+                         "in the environment or /opt/gold/.env)")
+
+    def test_the_heartbeat_never_loses_a_booked_send(self):
+        import tempfile
+        path = os.path.join(tempfile.mkdtemp(), "state.json")
+        state = BA.load_state(path)
+        BA.record_send(state, {"key": "BUY|20-bar|100.00", "side": "BUY", "box": "20-bar"},
+                       now=NOW)
+        BA.save_state(state, path)
+        self.assertTrue(BA.touch_heartbeat(path, now=NOW + timedelta(minutes=1), interval=60))
+        again = BA.load_state(path)
+        self.assertEqual(again["count"], 1)                        # the send survived
+        self.assertEqual(BA.loop_health(again, NOW + timedelta(minutes=2))[0], "running")
+        self.assertEqual(BA.loop_health(again, NOW + timedelta(minutes=30))[0], "stopped")
+        self.assertEqual(BA.loop_health({}, NOW), ("never", None))
+        self.assertEqual(BA.loop_health({"loop": "garbage"}, NOW), ("never", None))
+
+
+# ───────────────────────────────────────────── limits: every documented knob is read
+class LimitsTests(unittest.TestCase):
+    """GOLD_BOX_ALERT_GLOBAL_COOLDOWN_MIN was documented (unit, docstring) but never
+    read, and the message footer always quoted the defaults whatever the knobs said."""
+
+    KNOBS = {"GOLD_BOX_ALERT_GLOBAL_COOLDOWN_MIN": "45", "GOLD_BOX_ALERT_COOLDOWN_MIN": "120",
+             "GOLD_BOX_ALERT_DAILY_CAP": "4"}
+
+    def test_every_documented_knob_is_read_and_bad_values_fall_back(self):
+        self.assertEqual(BA.alert_limits(self.KNOBS), {"cooldown_minutes": 120.0,
+                                                       "global_cooldown_minutes": 45.0,
+                                                       "daily_cap": 4})
+        defaults = {"cooldown_minutes": P.BOX_ALERT_COOLDOWN_MINUTES,
+                    "global_cooldown_minutes": P.BOX_ALERT_GLOBAL_COOLDOWN_MINUTES,
+                    "daily_cap": P.BOX_ALERT_DAILY_CAP}
+        self.assertEqual(BA.alert_limits({}), defaults)
+        self.assertEqual(BA.alert_limits({"GOLD_BOX_ALERT_DAILY_CAP": "lots",
+                                          "GOLD_BOX_ALERT_COOLDOWN_MIN": "-5",
+                                          "GOLD_BOX_ALERT_GLOBAL_COOLDOWN_MIN": "0"}), defaults)
+
+    def test_read_decision_carries_the_limits_into_the_limiter_and_the_text(self):
+        from unittest import mock
+        rows = wide_tape()
+        root = write_root(rows)
+        now = last_bar_time(rows) + timedelta(seconds=30)
+        files = {"log_file": os.path.join(root, "forward_test_log.csv"),
+                 "status_file": os.path.join(root, "status.json"),
+                 "trades_file": os.path.join(root, "trades.csv")}
+        with mock.patch.dict(os.environ):
+            for key in self.KNOBS:
+                os.environ.pop(key, None)
+            default = BA.read_decision(now=now, **files)
+        self.assertTrue(default["fire"], default.get("blockers"))
+        self.assertIn("Max 1 per 30 min overall, 1 per 90 min per box edge, 6/day.",
+                      default["text"])
+        with mock.patch.dict(os.environ, self.KNOBS):
+            tuned = BA.read_decision(now=now, **files)
+        self.assertEqual((tuned["fire"], tuned["key"]), (default["fire"], default["key"]))
+        self.assertEqual(tuned["global_cooldown_minutes"], 45.0)
+        self.assertIn("Max 1 per 45 min overall, 1 per 120 min per box edge, 4/day.",
+                      tuned["text"])
+        # and the limiter really spaces at 45: another edge 35 min after a send waits
+        state = {"sent": {}, "day": None, "count": 0, "last_sent": None, "history": []}
+        BA.record_send(state, tuned, now=now)
+        other = dict(tuned, key="SELL|20-bar|99.80")
+        self.assertIn("minimum spacing 45",
+                      BA.suppressed(other, state, now=now + timedelta(minutes=35)))
+        self.assertIsNone(BA.suppressed(other, state, now=now + timedelta(minutes=46)))
 
 
 if __name__ == "__main__":

@@ -11,11 +11,13 @@
 # about trading. Method + the honest verdicts:
 # docs/ANALYSIS-2026-10-21-box-chop-retest-alerts.md
 #
-# TEST FIRST (no service, no state written):
+# TEST FIRST (no service, no state written). The tool reads the Telegram pair and the
+# GOLD_BOX_ALERT* knobs from /opt/gold/.env itself (environment wins), so no
+# `set -a; . ./.env` step is needed:
 #   cd /opt/gold
-#   set -a; . ./.env; set +a
 #   python3 tools/box_alert.py --once --dry-run     # what would it say right now?
 #   python3 tools/box_alert.py --test               # proves the bot/chat work
+#   python3 tools/box_alert.py --quiet              # the autosync digest line
 #
 # Install (the -gold suffix keeps it apart from any other bot's notifier):
 #   sudo cp deploy/boxalert.service /etc/systemd/system/boxalert-gold.service
@@ -26,7 +28,12 @@
 # The token/chat come from /opt/gold/.env (the engine's own pair, never committed).
 # Optional overrides, all with defaults: GOLD_BOX_ALERTS=0 (disable without
 # uninstalling), GOLD_BOX_ALERT_GLOBAL_COOLDOWN_MIN (30), GOLD_BOX_ALERT_COOLDOWN_MIN
-# (90, per box edge), GOLD_BOX_ALERT_DAILY_CAP (6), GOLD_BOX_ALERT_STATE.
+# (90, per box edge), GOLD_BOX_ALERT_DAILY_CAP (6), GOLD_BOX_ALERT_STATE. Put them in
+# /opt/gold/.env, not in this unit: autosync's digest line reads that file, so it
+# describes the settings the sidecar really runs with.
+# Liveness: the loop stamps a heartbeat into box_alert_state.json every tick. The
+# digest says "running" only while that mark is fresh, so it is never fooled by "the
+# Telegram pair is configured but no unit is installed".
 # Never put a broker login here: this notifier needs none.
 
 [Unit]
