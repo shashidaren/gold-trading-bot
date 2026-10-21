@@ -272,3 +272,46 @@ references, hypothetical invalidation/target, gross and costed payoff, stale/unk
 health overrides and a labelled >1 ATR chase heuristic. Retests are not tracked;
 no engine or filter changes. See `docs/REVIEW-2026-10-20-box-watch-cards.md`.
 Also recorded the requested live-readiness estimate separately; no go-live approval.
+
+## 2026-10-21 — box chop read, retest tracking, optional Telegram notifier
+
+Owner: the BUY/SELL watch cards look accurate but the market feels choppy; can anything be
+improved, and can a Telegram message go out when the indicators line up?
+
+**Display + tooling only.** No `engine.py` / `trade_filter.py` change, no parameter, gate or
+exit change; the struct-stop window and its 2026-10-19 judgement are untouched.
+
+1. **Chop read** (`pressure.box_chop`, dashboard "🌊 Is the tape choppy?", `box_report` §4b):
+   the false-break share of the engine's own 20-bar box, recent 24 h vs the span in view, plus
+   efficiency ratio and box-width-vs-median. At the 14:59 snapshot: 14/18 breaks closed back
+   inside within 15 min (78%) vs a 74% baseline — chop is **normal** — while efficiency is
+   0.04/0.02 and the box is 3.0 ATR vs a 4.7 median, i.e. range-bound and compressed.
+2. **Retest tracking** (`pressure.box_retest`): the last break on a box **frozen at the break
+   bar**, classified extended / retesting / held / failed, rendered on both watch cards. 94% of
+   breaks are retested within 30 bars (median 3); 98% of touch-then-no-re-break were false
+   breaks; entering the **held** retest measured 59.0% vs a 57.2% reference and the same
+   −$0.31/trade as entering the break — a status read, **not** a filter. Supersedes the
+   "retests are not tracked" line of 2026-10-20.
+3. **Telegram notifier** (`tools/box_alert.py`, `deploy/boxalert.service`, optional): one
+   rate-limited message when a fresh close beyond an edge lines up with every check, ≤10%-of-R
+   geometry and no chase. Decision in `pressure.box_alert()`, limiter in
+   `pressure.box_alert_suppressed/record` — pure, so the sidecar, the dashboard preview and the
+   `box_report --alert-scan` replay share one implementation. Measured volume **5.1/day** over a
+   7-day replay (30-min global spacing + 90-min per-edge cooldown + 6/day cap = spam control,
+   not an expectancy claim). The dashboard previews the exact text and never sends it.
+
+**Negative results recorded, including my own mistake:** a first pass on overlapping events
+(6083) showed a clean 10 pp "chop filter" (62.9% vs a 54.6% reference, +$1.04/trade). Under the
+repo's one-position convention (681 sequential breaks) it vanished and partly **reversed**
+(choppy bucket 61.9% vs clean 60.0%), and the prior-trading-day version — which cannot
+autocorrelate with its own outcome — pointed the wrong way too (51.1% vs a 55.1% reference).
+Same trap as the 09-28 pooled-momentum error, so it is written down
+(`docs/ANALYSIS-2026-10-21-box-chop-retest-alerts.md` §2).
+
+Verification: `tools/test_box_alert.py` 22 pass (new); `test_box_watch.py` 6, `test_box_report.py`
+14, `test_dashboard_context.py` 13 (Flask 3.1.3 in a local venv); `tools/smoke_test.py`
+**SMOKE TEST PASSED** including Scenario U's `pressure.py` read-only AST check;
+`box_report.py --alert-scan` runs clean on 47,379 bars (~22 s); `bash -n tools/autosync.sh` ok;
+`handoff_check.py` FRESH, 0 advisory drift. **Not run:** a real Telegram send (no outbound
+access to api.telegram.org in the sandbox) and nothing on the production host — installing the
+sidecar and merging remain the owner's actions.

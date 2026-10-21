@@ -1469,6 +1469,29 @@ BOX_SIZES = ((20, "20-bar level (engine's own)"),
 BOX_PRIOR_DAY_MIN_BARS = 600  # a Sunday evening is not a day to draw a box on
 BOX_FEED_STALE_SECONDS = 300
 
+# ── tape regime ("is it choppy right now?") and retest tracking ────────────────
+# Both were measured before they were displayed, and both measured NEGATIVE as
+# filters — see docs/ANALYSIS-2026-10-21-box-chop-retest-alerts.md §2/§3. They are
+# here as *context*: the chop read answers "is the tape behaving unusually?" with a
+# number instead of a feeling, and the retest tracker says what happened to the last
+# break. Neither may become an entry condition (HANDOFF §11).
+BOX_CHOP_LOOKBACK_BARS = 20    # the chop scan uses the engine's own 20-bar box
+BOX_CHOP_FALSE_BREAK_MINUTES = 15.0   # same window as tools/box_report.py
+BOX_CHOP_HORIZON_MINUTES = 60.0       # same forward walk as tools/box_report.py
+BOX_CHOP_WINDOW_BARS = 1440    # "recent" = the last 24 h of contiguous tape
+BOX_CHOP_EFF_BARS = 60         # Kaufman efficiency ratio window
+BOX_CHOP_ELEVATED_PCT = 85.0   # recent false-break share above this = "elevated"
+BOX_CHOP_CLEAN_PCT = 60.0      # below this = "clean tape"
+BOX_RETEST_WINDOW_BARS = 30    # only a break inside this many bars is still "the last break"
+BOX_RETEST_TOUCH_ATR = 0.25    # a bar this close to the frozen edge = the edge was touched
+BOX_RETEST_HOLD_BARS = 30      # bars after the touch in which a re-break still counts
+BOX_RETEST_FAIL_ATR = 0.10     # a close this far back inside the box = the break is dead
+# Notification policy (spam control), NOT an expectancy claim: nothing measured
+# here says that waiting, or taking fewer of these, improves outcomes.
+BOX_ALERT_COOLDOWN_MINUTES = 90    # min between two messages on the SAME box edge
+BOX_ALERT_GLOBAL_COOLDOWN_MINUTES = 30   # min between ANY two messages
+BOX_ALERT_DAILY_CAP = 6            # max messages per UTC day
+
 # The measured verdict, copied from the 2026-10-20 analysis — printed wherever
 # the panel could otherwise be mistaken for a signal. Scenario U pins these.
 BOX_MEASURED = {
@@ -1476,6 +1499,36 @@ BOX_MEASURED = {
     "cells": 8, "cleared": 0,
     "false_break_pct_20": 74.0, "false_break_pct_60": 75.0,
     "best": "stop outside the whole box + a 1-box target (near break-even, not an edge)",
+}
+
+# Measured 2026-10-21 on the same tape under the SEQUENTIAL one-position convention
+# (docs/ANALYSIS-2026-10-21-box-chop-retest-alerts.md §2/§3). Both reads came back
+# NEGATIVE as filters, and these numbers travel with them so a display can never
+# imply that "choppy" or "retested" predicts anything. They are context only.
+BOX_CHOP_MEASURED = {
+    "source": "docs/ANALYSIS-2026-10-21-box-chop-retest-alerts.md",
+    "sequential_breaks": 681,
+    "last7d_false_break_pct": 74.0, "whole_log_false_break_pct": 74.0,
+    "prior_day_chop_clean_tf_pct": 51.1, "prior_day_chop_clean_ref_pct": 55.1,
+    "prior_day_chop_choppy_tf_pct": 58.1, "prior_day_chop_choppy_ref_pct": 55.4,
+    "verdict": ("the chop read does NOT separate outcomes: bucketing the 681 sequential "
+                "breaks by the prior day's false-break share put the 'clean' days at "
+                "51.1% vs a 55.1% reference and the 'choppy' days at 58.1% vs 55.4% — "
+                "the wrong way round, over 43 day-clusters, inside noise"),
+}
+BOX_RETEST_MEASURED = {
+    "source": "docs/ANALYSIS-2026-10-21-box-chop-retest-alerts.md",
+    "retested_within_30_bars_pct": 94.0,
+    "median_wait_bars": 3, "p90_wait_bars": 15,
+    "held_retest_pct": 81.0,
+    "no_rebreak_false_break_pct": 98.0,
+    "entry_at_break_tf_pct": 56.6, "entry_at_break_ref_pct": 55.4,
+    "entry_on_hold_tf_pct": 59.0, "entry_on_hold_ref_pct": 57.2,
+    "entry_on_hold_e_usd": -0.31, "entry_at_break_e_usd": -0.31,
+    "verdict": ("a break is retested almost always and it does not help: entering the "
+                "held retest returned 59.0% vs a 57.2% reference and the same -$0.31/trade "
+                "as entering the break. The tracker says what the last break is doing "
+                "now; it is not a filter"),
 }
 
 
@@ -1647,11 +1700,281 @@ def box_geometry(rows, spread=BOX_SPREAD_USD):
     return out
 
 
-def box_watch_cards(geom, checks, now, spread=BOX_SPREAD_USD):
+def _box_forward_end(bars, i, minutes):
+    """Last index reachable from bar i inside `minutes` without crossing a gap.
+
+    Same convention as tools/box_report.forward_end: a gap longer than
+    BOX_GAP_MINUTES ends the walk, so a closure never turns into a fake hold.
+    """
+    j = i
+    end = bars[i][0] + timedelta(minutes=minutes)
+    while j + 1 < len(bars):
+        nxt = bars[j + 1][0]
+        if nxt > end:
+            break
+        if (nxt - bars[j][0]).total_seconds() / 60.0 > BOX_GAP_MINUTES:
+            break
+        j += 1
+    return j
+
+
+def _box_break_events(bars, n=BOX_CHOP_LOOKBACK_BARS):
+    """Every close outside the n-bar box, SEQUENTIAL (one position at a time).
+
+    Mirrors tools/box_report.scan(): the next break is only considered once the
+    previous one's forward window has closed, because overlapping 1-min events are
+    not independent (the 2026-10-21 draft read them as if they were and produced a
+    10 pp "chop filter" that vanished under this convention — §2 of the analysis).
+    The newest event is flagged `complete: False` while its false-break window is
+    still open, so a break in progress never counts towards the chop read.
+    """
+    start = _box_run_offsets(bars)
+    events = []
+    next_free = 0
+    for i in range(len(bars)):
+        if i < next_free:
+            continue
+        bounds = _box_bounds(bars, i, n, start)
+        if bounds is None:
+            continue
+        hi, lo = bounds
+        ts, _h, _l, close, atr = bars[i]
+        if not atr or atr <= 0:
+            continue
+        if close > hi:
+            side = 1
+        elif close < lo:
+            side = -1
+        else:
+            continue
+        end = _box_forward_end(bars, i, BOX_CHOP_HORIZON_MINUTES)
+        if end <= i + 2:                       # nothing usable ahead: censored
+            continue
+        next_free = end + 1
+        fb_end = _box_forward_end(bars, i, BOX_CHOP_FALSE_BREAK_MINUTES)
+        reached = (bars[fb_end][0] - ts).total_seconds() / 60.0
+        events.append({
+            "i": i, "ts": ts, "side": side, "high": hi, "low": lo, "atr": atr,
+            "close": close,
+            "false_break": any(lo < bars[j][3] < hi for j in range(i + 1, fb_end + 1)),
+            "complete": reached >= BOX_CHOP_FALSE_BREAK_MINUTES or fb_end < len(bars) - 1,
+        })
+    return events
+
+
+def _box_efficiency(bars, look):
+    """Kaufman efficiency ratio of the last `look` closes: |net| / sum|step|, 0..1."""
+    if len(bars) <= look:
+        return None
+    net = abs(bars[-1][3] - bars[-1 - look][3])
+    path = sum(abs(bars[k][3] - bars[k - 1][3]) for k in range(len(bars) - look, len(bars)))
+    return (net / path) if path else None
+
+
+def box_chop(bars, window_bars=BOX_CHOP_WINDOW_BARS):
+    """Measured tape regime — "is it choppy right now?", answered with a number.
+
+    The chop read is the false-break share of the engine's own 20-bar box: of the
+    closes that landed outside it, how many were back inside within 15 minutes.
+    "Recent" is the last `window_bars` of contiguous tape; the baseline is every
+    completed event in the bars handed in (the dashboard tails ~9000 rows, so say
+    which span you are reading).
+
+    THIS READ DOES NOT PREDICT ANYTHING. Measured on 681 sequential breaks
+    (BOX_CHOP_MEASURED): bucketing by the prior day's false-break share put clean
+    days at 51.1% vs a 55.1% reference and choppy days at 58.1% vs 55.4%. It is
+    here to replace a feeling with a measurement, not to filter entries.
+    """
+    if len(bars) < BOX_CHOP_LOOKBACK_BARS + 2:
+        return {"ok": False, "reason": "not enough bars for a chop read"}
+    events = _box_break_events(bars)
+    done = [e for e in events if e["complete"]]
+    if len(done) < 5:
+        return {"ok": False, "reason": f"only {len(done)} completed box breaks in view"}
+    last_ts = bars[-1][0]
+    first_ts = bars[0][0]
+    cut = last_ts - timedelta(minutes=window_bars)
+    recent = [e for e in done if e["ts"] >= cut]
+    pending = [e for e in events if not e["complete"]]
+
+    def share(sample):
+        if not sample:
+            return None
+        return 100.0 * sum(1 for e in sample if e["false_break"]) / len(sample)
+
+    recent_pct, base_pct = share(recent), share(done)
+    # box width vs its own recent median, in ATR: is the tape compressing?
+    start = _box_run_offsets(bars)
+    widths = []
+    for i in range(max(BOX_CHOP_LOOKBACK_BARS, len(bars) - window_bars), len(bars), 10):
+        bounds = _box_bounds(bars, i, BOX_CHOP_LOOKBACK_BARS, start)
+        atr = bars[i][4]
+        if bounds and atr:
+            widths.append((bounds[0] - bounds[1]) / atr)
+    widths.sort()
+    median_width = widths[len(widths) // 2] if widths else None
+    last_bounds = _box_bounds(bars, len(bars) - 1, BOX_CHOP_LOOKBACK_BARS, start)
+    last_atr = bars[-1][4]
+    width_atr = ((last_bounds[0] - last_bounds[1]) / last_atr) if last_bounds and last_atr else None
+
+    span_days = (last_ts - first_ts).days
+    if len(recent) < 3:
+        level, headline = "thin", f"Only {len(recent)} box breaks in the last 24 h"
+    elif recent_pct >= BOX_CHOP_ELEVATED_PCT:
+        level, headline = "elevated", "Elevated chop — breaks are failing more than usual"
+    elif recent_pct <= BOX_CHOP_CLEAN_PCT:
+        level, headline = "clean", "Clean tape — breaks are holding more than usual"
+    else:
+        level, headline = "normal", "Normal chop — the tape is behaving like its own baseline"
+    if not recent:
+        detail = (f"no completed box break in the last 24 h to measure "
+                  f"({base_pct:.0f}% over the {span_days} days in view)"
+                  if base_pct is not None else "no completed box break in view")
+    else:
+        detail = (f"{sum(1 for e in recent if e['false_break'])} of {len(recent)} breaks in the "
+                  f"last 24 h closed back inside within {BOX_CHOP_FALSE_BREAK_MINUTES:.0f} min "
+                  f"({recent_pct:.0f}%) vs {base_pct:.0f}% over the {span_days} days in view"
+                  + (f"; {len(pending)} break still resolving" if pending else ""))
+    return {
+        "ok": True, "as_of": last_ts, "level": level, "headline": headline, "detail": detail,
+        "window_bars": window_bars, "window_hours": window_bars / 60.0,
+        "recent_breaks": len(recent),
+        "recent_false_breaks": sum(1 for e in recent if e["false_break"]),
+        "recent_false_break_pct": recent_pct,
+        "baseline_breaks": len(done), "baseline_false_break_pct": base_pct,
+        "baseline_span_days": round((last_ts - first_ts).total_seconds() / 86400.0, 1),
+        "pending_breaks": len(pending),
+        "eff_60": _box_efficiency(bars, BOX_CHOP_EFF_BARS),
+        "eff_240": _box_efficiency(bars, 240),
+        "box_width_atr": width_atr, "box_width_median_atr": median_width,
+        "measured": BOX_CHOP_MEASURED,
+    }
+
+
+def box_retest(bars, n=BOX_CHOP_LOOKBACK_BARS, window=BOX_RETEST_WINDOW_BARS):
+    """What happened to the LAST break of the n-bar box, on a box frozen at the break.
+
+    The rolling bounds in box_geometry() move every bar, so they cannot answer "was
+    that breakout level retested and did it hold?" — that needs the box as it stood
+    when it broke. This freezes it and walks forward:
+
+      extended   close still beyond the edge, the edge has not been touched again
+      retesting  the frozen edge was touched and the close has not got back beyond it
+      held       after that touch, a close back beyond the edge (the retest held)
+      failed     a close back inside the box by more than BOX_RETEST_FAIL_ATR
+
+    Display-only. Measured on 681 sequential breaks (BOX_RETEST_MEASURED): 94% are
+    retested within 30 bars (median 3), 98% of the touch-then-no-re-break group were
+    false breaks, and entering the HELD retest returned 59.0% vs a 57.2% reference —
+    the same expectancy as entering the break. The tracker says what the last break
+    is doing now; it is not a filter and it must not be shown as one.
+    """
+    if len(bars) < n + 2:
+        return {"ok": False, "reason": "not enough bars for a retest read",
+                "state": "none", "measured": BOX_RETEST_MEASURED}
+    start = _box_run_offsets(bars)
+    last = len(bars) - 1
+    # Collect the fresh breaks in the window, then take the FIRST bar of the LAST
+    # episode. "Most recent break bar" would be wrong: the box lags, so during a
+    # sustained move almost every bar is a fresh close beyond the (migrated) box,
+    # and the tracker would freeze on the newest bar instead of the move's start.
+    breaks = []
+    for i in range(max(BOX_CHOP_LOOKBACK_BARS, last - window), last + 1):
+        bounds = _box_bounds(bars, i, n, start)
+        if bounds is None:
+            continue
+        hi, lo = bounds
+        atr = bars[i][4]
+        if not atr or atr <= 0:
+            continue
+        # Same freshness rule as box_geometry: a box price left a while ago is
+        # history, not an event.
+        inside_hi = any(bars[i - k][3] <= hi for k in range(1, BOX_FRESH_BARS + 1))
+        inside_lo = any(bars[i - k][3] >= lo for k in range(1, BOX_FRESH_BARS + 1))
+        if bars[i][3] >= hi + BOX_BREAK_ATR * atr and inside_hi:
+            breaks.append((i, 1, hi, lo))
+        elif bars[i][3] <= lo - BOX_BREAK_ATR * atr and inside_lo:
+            breaks.append((i, -1, lo, hi))
+    episode = [b for b in breaks if b[1] == breaks[-1][1]] if breaks else []
+    # an episode = consecutive break bars on the same side, at most BOX_FRESH_BARS apart
+    break_i = None
+    if episode:
+        break_i, side, edge, far = episode[0]
+        for k in range(1, len(episode)):
+            if episode[k][0] - episode[k - 1][0] > BOX_FRESH_BARS:
+                break_i, side, edge, far = episode[k]
+    if break_i is None:
+        return {"ok": True, "state": "none", "side": None, "box_high": None, "box_low": None,
+                "detail": f"no close beyond a {n}-bar box edge in the last {window} bars",
+                "measured": BOX_RETEST_MEASURED}
+
+    ts, _h, _l, close, atr = bars[break_i]
+    state, touch_ts, rebreak_ts, failed_ts = "extended", None, None, None
+    for j in range(break_i + 1, len(bars)):
+        jts, jh, jl, jc, _ja = bars[j]
+        thr = edge + side * BOX_BREAK_ATR * atr
+        beyond = side * (jc - thr) >= 0
+        if touch_ts is None:
+            reach = jl if side > 0 else jh
+            touched = (reach <= edge + BOX_RETEST_TOUCH_ATR * atr) if side > 0 else \
+                      (reach >= edge - BOX_RETEST_TOUCH_ATR * atr)
+            if touched:
+                touch_ts, state = jts, "retesting"
+        if side * (jc - edge) < -BOX_RETEST_FAIL_ATR * atr:      # closed back inside
+            state, failed_ts = "failed", jts
+            break
+        if touch_ts is not None and beyond:
+            state, rebreak_ts = "held", jts
+            break
+        if beyond:
+            state = "extended"
+        elif touch_ts is None:
+            state = "at_edge"
+    # Built per state (not as a dict): the strings need the timestamps that only
+    # the states that reached them actually have.
+    if state == "extended":
+        detail = (f"closed beyond ${edge:.2f} {last - break_i} bar(s) ago and is still out "
+                  f"there ({side * (close - edge) / atr:.2f} ATR) — the edge has not been "
+                  f"touched again")
+    elif state == "at_edge":
+        detail = (f"closed beyond ${edge:.2f} {last - break_i} bar(s) ago and has drifted back "
+                  f"onto it without a re-break")
+    elif state == "retesting":
+        detail = (f"the frozen edge ${edge:.2f} was touched at "
+                  f"{touch_ts.strftime('%m-%d %H:%M')} UTC and the close has not got back "
+                  f"beyond it — no re-break yet")
+    elif state == "held":
+        detail = (f"retested ${edge:.2f} at {touch_ts.strftime('%m-%d %H:%M')} and closed back "
+                  f"beyond it at {rebreak_ts.strftime('%m-%d %H:%M')} UTC — the retest held")
+    else:
+        detail = (f"closed back inside the box at {failed_ts.strftime('%m-%d %H:%M')} UTC — "
+                  f"that break is dead")
+    return {
+        "ok": True, "state": state, "side": "BUY" if side > 0 else "SELL",
+        "break_ts": ts, "bars_since": last - break_i,
+        "edge": edge, "far": far, "edge_name": "high" if side > 0 else "low",
+        "box_high": edge if side > 0 else far, "box_low": far if side > 0 else edge,
+        "box_width": abs(edge - far), "frozen_at": ts,
+        "touch_ts": touch_ts, "rebreak_ts": rebreak_ts, "failed_ts": failed_ts,
+        "extension_atr": side * (close - edge) / atr, "atr": atr,
+        "detail": detail, "measured": BOX_RETEST_MEASURED,
+    }
+
+
+def box_regime(rows, window_bars=BOX_CHOP_WINDOW_BARS):
+    """box_chop + box_retest in one pass over the tape (both are pure)."""
+    bars = _box_bars(rows)
+    return {"ok": True, "as_of": bars[-1][0] if bars else None,
+            "chop": box_chop(bars, window_bars=window_bars), "retest": box_retest(bars)}
+
+
+def box_watch_cards(geom, checks, now, spread=BOX_SPREAD_USD, retest=None):
     """Display-only breakout references; never executable quotes or entry signals.
 
-    Use the trigger's box when present, otherwise the nearest box. Freeze neither
-    orders nor retests: these rolling levels are recomputed with each closed bar.
+    Use the trigger's box when present, otherwise the nearest box. The levels
+    themselves roll with every closed bar; only the retest read is frozen (see
+    box_retest — it carries the box as it stood when it broke, plus the measured
+    fact that entering the held retest showed no edge).
     Costed payoff assumes the displayed close/reference, not a future fill.
     """
     if not geom.get("ok"):
@@ -1660,6 +1983,7 @@ def box_watch_cards(geom, checks, now, spread=BOX_SPREAD_USD):
     box = next(b for b in geom["boxes"] if b["name"] == name)
     close, atr = geom["close"], geom["atr"]
     age = max(0, (now - geom["as_of"]).total_seconds())
+    retest = retest or geom.get("retest") or {}
     # Do not show an actionable-looking status when health is unknown.
     health = {c["key"]: c for c in checks}
     reasons = []
@@ -1684,10 +2008,26 @@ def box_watch_cards(geom, checks, now, spread=BOX_SPREAD_USD):
         risk = sign * (entry - stop)
         reward = box["width"]
         net_rr = (reward - spread) / (risk + spread)
+        # The frozen-box retest read applies only to the box it was measured on.
+        rt = retest if (retest.get("state") not in (None, "none")
+                        and retest.get("side") == side
+                        and retest.get("edge") is not None
+                        and abs(retest["edge"] - edge) < 1e-6) else {}
+        rt_state = rt.get("state")
         if reasons:
             state = "WAIT — health / risk check"
         elif chasing:
             state = "WAIT — do not chase"
+        elif rt_state == "failed":
+            state = "WAIT — the last break failed (closed back inside the box)"
+        elif rt_state == "retesting":
+            state = f"WAIT — retest of ${edge:.2f} in progress, no re-break yet"
+        elif rt_state == "held":
+            state = f"Retest of ${edge:.2f} held — context only, no edge measured"
+        elif rt_state in ("extended", "at_edge") and confirmed and not fresh:
+            state = ("WAIT — still outside on an old break; no fresh close beyond the edge"
+                     if rt_state == "extended" else
+                     "WAIT — back on the edge of an old break, no fresh close beyond it")
         elif confirmed and not fresh:
             state = "WAIT — already outside; no fresh break"
         elif confirmed:
@@ -1699,23 +2039,188 @@ def box_watch_cards(geom, checks, now, spread=BOX_SPREAD_USD):
                           risk=risk, reward=reward, gross_rr=reward / risk,
                           net_rr=net_rr, extension_atr=extension, chasing=chasing,
                           state=state, reasons=reasons, age_seconds=int(age),
-                          limited_reward=net_rr < 1.0))
+                          limited_reward=net_rr < 1.0,
+                          retest_state=rt_state, retest_detail=rt.get("detail"),
+                          retest_bars_since=rt.get("bars_since"),
+                          retest_touch=rt.get("touch_ts"), retest_rebreak=rt.get("rebreak_ts"),
+                          retest_measured=rt.get("measured") or BOX_RETEST_MEASURED))
     return cards
 
 
-def box_status(geom, portfolio=None, feed=None, now=None, spread=BOX_SPREAD_USD):
+def box_alert(read, cooldown_minutes=BOX_ALERT_COOLDOWN_MINUTES,
+              daily_cap=BOX_ALERT_DAILY_CAP,
+              global_cooldown_minutes=BOX_ALERT_GLOBAL_COOLDOWN_MINUTES):
+    """The ONE decision shared by the Telegram sidecar and the dashboard preview.
+
+    It answers a narrow question: "are the display conditions for a box break all
+    green right now?" — the seven-condition checklist, a FRESH close beyond an
+    edge, geometry whose spread is a small share of R, and no do-not-chase
+    extension. It is a *notification* policy, not a signal:
+
+      * It never claims an edge. Measured, 0 of 8 box geometries cleared the
+        driftless reference and the chop/retest reads do not separate outcomes, so
+        the message it builds carries those numbers in the body.
+      * It only ever considers a BREAK, never a rejection/fade: fades measured
+        worst of the four geometries (66% of R in cost, 10.4% vs a 10.4% reference).
+      * `cooldown_minutes` / `daily_cap` are spam control. They are NOT a claim
+        that waiting improves expectancy — nothing measured here says that.
+
+    Returns a dict with `fire`, `blockers` (why not), `key` (dedupe identity) and
+    `text` (the exact message the sidecar would send). Nothing here sends anything
+    and nothing here writes a file: tools/box_alert.py does the I/O.
+    """
+    spread = read.get("spread_usd") or BOX_SPREAD_USD
+    blockers, geom = [], read.get("geometry") or {}
+    if not geom.get("ok"):
+        return {"fire": False, "blockers": [geom.get("reason", "no box geometry")],
+                "side": None, "box": None, "key": None, "text": "",
+                "cooldown_minutes": cooldown_minutes, "daily_cap": daily_cap,
+                "global_cooldown_minutes": global_cooldown_minutes}
+
+    checks = {c["key"]: c for c in read.get("checks", [])}
+    for key in ("feed", "session", "risk_state", "volatility"):
+        item = checks.get(key)
+        if not item or item["state"] != "pass":
+            blockers.append(f"{(item['label'] if item else key).lower()}: "
+                            f"{item['detail'] if item else 'unavailable'}")
+
+    trig, setup = read.get("trigger") or {}, read.get("setup")
+    if trig.get("state") != "break":
+        blockers.append("no fresh close beyond a box edge"
+                        + (" (rejections are not alerted: fades measured worst — "
+                           "66% of R in cost)" if trig.get("state") == "reject" else ""))
+    if not setup:
+        blockers.append("no setup to size")
+
+    card = next((c for c in read.get("watch_cards", [])
+                 if setup and c["side"] == setup["side"]), None)
+    if setup and setup.get("cost_share_pct") is not None:
+        if setup["cost_share_pct"] > BOX_COST_SHARE_OK:
+            blockers.append(f"the spread is {setup['cost_share_pct']:.1f}% of R "
+                            f"(alert needs ≤ {BOX_COST_SHARE_OK:.0f}%)")
+    if card and card.get("chasing"):
+        blockers.append(f"{card['extension_atr']:.2f} ATR beyond the edge — do not chase")
+    if (read.get("retest") or {}).get("state") == "failed":
+        blockers.append("the last break of that box failed (closed back inside)")
+
+    if blockers or not setup or not card:
+        return {"fire": False, "blockers": blockers, "side": setup.get("side") if setup else None,
+                "box": setup.get("box") if setup else None, "key": None, "text": "",
+                "cooldown_minutes": cooldown_minutes, "daily_cap": daily_cap,
+                "global_cooldown_minutes": global_cooldown_minutes}
+
+    chop = read.get("chop") or {}
+    retest = read.get("retest") or {}
+    as_of = geom.get("as_of")
+    lines = [
+        f"📦 gold box watch — {setup['side']} candidate (context, not a signal)",
+        f"box: {setup['box']} {min(setup['edge'], setup['far']):.2f}-"
+        f"{max(setup['edge'], setup['far']):.2f}",
+        f"break: closed {setup['entry']:.2f} beyond the {setup['edge_name']} "
+        f"{setup['edge']:.2f} ({trig.get('strength_atr') or 0:.2f} ATR) at "
+        f"{as_of.strftime('%H:%M') if as_of else '?'} UTC",
+        f"entry ref {setup['entry']:.2f} · stop {setup['stop']:.2f} (past the far edge) · "
+        f"target {setup['target']:.2f} (1 box)",
+        f"risk ${setup['risk_usd']:.2f} · reward ${setup['reward_usd']:.2f} · "
+        f"gross {setup['rr']:.2f}:1 · costed {card['net_rr']:.2f}:1 · "
+        f"spread {setup['cost_share_pct']:.0f}% of R",
+        f"retest: {retest.get('state', 'none')}"
+        + (f" — {retest['detail']}" if retest.get("detail") else ""),
+    ]
+    if chop.get("ok"):
+        lines.append(f"tape: {chop['detail']}")
+    else:
+        lines.append(f"tape: {chop.get('reason', 'chop read unavailable')}")
+    lines += [
+        f"measured: {BOX_MEASURED['cells']} box geometries tested, "
+        f"{BOX_MEASURED['cleared']} cleared the no-edge reference; "
+        f"{BOX_MEASURED['false_break_pct_20']:.0f}% of breaks fail within 15 min",
+        f"display only — no order placed, engine unchanged. Max 1 per "
+        f"{global_cooldown_minutes:.0f} min overall, 1 per {cooldown_minutes:.0f} min per box "
+        f"edge, {daily_cap}/day.",
+    ]
+    key = f"{setup['side']}|{setup['box']}|{setup['edge']:.2f}"
+    return {"fire": True, "blockers": [], "side": setup["side"], "box": setup["box"],
+            "edge": setup["edge"], "key": key, "text": "\n".join(lines),
+            "setup": setup, "card": card, "as_of": as_of,
+            "cooldown_minutes": cooldown_minutes, "daily_cap": daily_cap,
+            "global_cooldown_minutes": global_cooldown_minutes}
+
+
+def box_alert_suppressed(decision, state, now=None):
+    """Rate-limit reason for a decision that WOULD fire, else None.
+
+    Pure, so the sidecar, the dashboard preview and a replay in tools/box_report.py
+    all run the same limiter and cannot drift apart. Notification policy only, and
+    deliberately visible rather than clever: a daily cap, a global spacing between
+    ANY two messages (so three boxes breaking in the same minute produce one
+    message, not three), and a per-box-edge cooldown. None of it is a claim that
+    waiting improves expectancy.
+
+    `state` is the sidecar's dict: {"sent": {key: ts}, "day", "count", "last_sent"}.
+    """
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    key, day = decision.get("key"), now.strftime("%Y-%m-%d")
+    cap = int(decision.get("daily_cap") or BOX_ALERT_DAILY_CAP)
+    cooldown = float(decision.get("cooldown_minutes") or BOX_ALERT_COOLDOWN_MINUTES)
+    gap = float(decision.get("global_cooldown_minutes") or BOX_ALERT_GLOBAL_COOLDOWN_MINUTES)
+    if state.get("day") == day and int(state.get("count") or 0) >= cap:
+        return f"daily cap reached ({cap} messages already sent today)"
+    last_any = parse_ts(state.get("last_sent")) if state.get("last_sent") else None
+    if last_any and (now - last_any) < timedelta(minutes=gap):
+        return (f"a message went out {int((now - last_any).total_seconds() // 60)} min ago "
+                f"(minimum spacing {gap:.0f} min)")
+    last = (state.get("sent") or {}).get(key)
+    if last:
+        last_ts = parse_ts(last)
+        if last_ts and (now - last_ts) < timedelta(minutes=cooldown):
+            left = cooldown - (now - last_ts).total_seconds() / 60.0
+            return (f"sent {cooldown - left:.0f} min ago for this same box edge "
+                    f"(cooldown {cooldown:.0f} min)")
+    return None
+
+
+def box_alert_record(state, decision, now=None):
+    """Book a message that was actually sent, in the sidecar's state dict."""
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    day = now.strftime("%Y-%m-%d")
+    if state.get("day") != day:
+        state["day"], state["count"] = day, 0
+    state["count"] = int(state.get("count") or 0) + 1
+    state.setdefault("sent", {})[decision["key"]] = now.strftime("%Y-%m-%d %H:%M:%S")
+    state["last_sent"] = now.strftime("%Y-%m-%d %H:%M:%S")
+    state.setdefault("history", []).append(
+        {"ts": now.strftime("%Y-%m-%d %H:%M:%S"), "key": decision["key"],
+         "side": decision.get("side"), "box": decision.get("box")})
+    state["history"] = state["history"][-200:]
+    return state
+
+
+def box_status(geom, portfolio=None, feed=None, now=None, spread=BOX_SPREAD_USD,
+               regime=None):
     """The condition checklist and the one-line verdict, over a cached geometry.
 
     Every item is a measurement, not an instruction: the panel may say the
     conditions line up, and it must still print that the measured base rate has
     no edge. Nothing here can block or place a trade.
+
+    `regime` is the optional box_regime() read (chop + frozen-box retest). It adds
+    a context line and the retest state to the cards; it changes no verdict,
+    because neither read separates outcomes (BOX_CHOP_MEASURED / BOX_RETEST_MEASURED).
     """
     now = now or datetime.now(timezone.utc).replace(tzinfo=None)
     if not geom.get("ok"):
-        return {"ok": False, "reason": geom.get("reason", "no geometry"), "geometry": geom,
-                "checks": [], "verdict": {"code": "unavailable", "tone": "idle",
-                                          "headline": "Box read unavailable",
-                                          "detail": geom.get("reason", "")}}
+        out = {"ok": False, "reason": geom.get("reason", "no geometry"), "geometry": geom,
+               "checks": [], "verdict": {"code": "unavailable", "tone": "idle",
+                                         "headline": "Box read unavailable",
+                                         "detail": geom.get("reason", "")},
+               "chop": (regime or {}).get("chop") or {},
+               "retest": (regime or {}).get("retest") or {},
+               "spread_usd": spread,
+               "regime_measured": {"chop": BOX_CHOP_MEASURED, "retest": BOX_RETEST_MEASURED}}
+        # Every caller can read ["alert"] without a guard, ok or not.
+        out["alert"] = box_alert(out)
+        return out
 
     nearest = geom["nearest"]
     trig = geom["trigger"]
@@ -1811,6 +2316,16 @@ def box_status(geom, portfolio=None, feed=None, now=None, spread=BOX_SPREAD_USD)
     else:
         add("geometry", "Geometry", "na", "no setup to size")
 
+    # 8. tape — the measured chop read. Context, never a gate: it says whether the
+    # tape is behaving unusually, and the measurement says that does not predict
+    # outcomes, so it can only ever be "info" or a flagged "warn".
+    chop = (regime or {}).get("chop") or {}
+    if chop.get("ok"):
+        add("tape", "Tape (chop)", "warn" if chop["level"] == "elevated" else "info",
+            chop["detail"] + " — measured: this read does not separate outcomes")
+    else:
+        add("tape", "Tape (chop)", "na", chop.get("reason", "chop read unavailable"))
+
     by_key = {c["key"]: c for c in checks}
     if by_key["location"]["state"] == "fail":
         verdict = {"code": "no_setup", "tone": "idle", "headline": "No box setup — mid-box",
@@ -1840,16 +2355,23 @@ def box_status(geom, portfolio=None, feed=None, now=None, spread=BOX_SPREAD_USD)
                    "headline": f"Candidate — {setup['side']} at the {setup['box']}" if setup else "Candidate",
                    "detail": "conditions line up. Base rate still shows no edge: this is context, not a signal"}
 
-    return {"ok": True, "now": now, "geometry": geom, "checks": checks, "verdict": verdict,
-            "setup": setup, "nearest": nearest, "trigger": trig, "measured": BOX_MEASURED,
-            "spread_usd": spread,
-            "watch_cards": box_watch_cards(geom, checks, now, spread)}
+    retest = (regime or {}).get("retest") or geom.get("retest") or {}
+    cards = box_watch_cards(geom, checks, now, spread, retest=retest)
+    out = {"ok": True, "now": now, "geometry": geom, "checks": checks, "verdict": verdict,
+           "setup": setup, "nearest": nearest, "trigger": trig, "measured": BOX_MEASURED,
+           "spread_usd": spread, "watch_cards": cards,
+           "chop": chop, "retest": retest,
+           "regime_measured": {"chop": BOX_CHOP_MEASURED, "retest": BOX_RETEST_MEASURED}}
+    out["alert"] = box_alert(out)
+    return out
 
 
 def box_read(rows, now=None, portfolio=None, feed=None, spread=BOX_SPREAD_USD):
-    """box_geometry + box_status in one call (library/CLI convenience)."""
+    """box_geometry + box_regime + box_status in one call (library/CLI convenience)."""
     geom = box_geometry(rows, spread=spread)
-    out = box_status(geom, portfolio=portfolio, feed=feed, now=now, spread=spread)
+    regime = box_regime(rows)
+    out = box_status(geom, portfolio=portfolio, feed=feed, now=now, spread=spread,
+                     regime=regime)
     out["geometry"] = geom
     return out
 
