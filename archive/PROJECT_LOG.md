@@ -315,3 +315,49 @@ Verification: `tools/test_box_alert.py` 22 pass (new); `test_box_watch.py` 6, `t
 `handoff_check.py` FRESH, 0 advisory drift. **Not run:** a real Telegram send (no outbound
 access to api.telegram.org in the sandbox) and nothing on the production host — installing the
 sidecar and merging remain the owner's actions.
+
+## 2026-10-21 (later) — `🔔 box alerts: not configured` was a wiring bug, not a missing pair
+
+Owner: the 18:00 UTC digest said `🔔 box alerts: not configured (no TELEGRAM_BOT_TOKEN/CHAT_ID)` —
+why?
+
+**Ops/tooling fix only.** No `engine.py` / `trade_filter.py` / `pressure.py` / `dashboard.py` change,
+no parameter, gate or exit change; the struct-stop window, its judgement and the gap-guard blocker
+are untouched. Nothing was installed or changed on the host.
+
+**Cause.** That digest was delivered *by* the Telegram pair it said was missing. `tools/autosync.sh`
+reads the pair from `/opt/gold/.env` into its own **unexported** `TG_TOKEN`/`TG_CHAT` (enough for its
+`curl`), then runs `python3 tools/box_alert.py --quiet` as a child — which inherited neither variable,
+and `box_alert.py` (unlike `engine.py`, which `load_dotenv`s `/opt/gold/.env`) read only its
+environment. 18:00 was the first run of the phase PR #49 added (merged 17:40, deployed 17:46; the
+deploying run never runs a new phase, `docs/AUTOSYNC.md` §3). Reproduced with the real script in a
+sandbox (cron-like empty environment, fake `.env`, stubbed `curl`/`systemctl`): the stub received the
+digest *with the token*, and the digest's `🔔` line said `not configured`.
+
+**Fix.**
+1. `box_alert.py` reads its own keys (Telegram pair + `GOLD_BOX_ALERT*`) from `$GOLD_DATA_DIR/.env`
+   (`GOLD_ENV_FILE` / `--env-file`), filling only what the environment lacks — never the feed's API
+   key, never overriding a real variable. Autosync passes `GOLD_DATA_DIR=$GOLD_DIR`; no secret moves
+   through argv or the child's environment.
+2. The line now says whether the notifier is **running**: `--loop` stamps a heartbeat into its own
+   `box_alert_state.json` each tick (not in `--dry-run`). Without this, the fixed line would have read
+   `0 sent today · none sent yet` on a box with no unit installed — a healthy-looking notifier that
+   does not exist. States: `Telegram pair found · notifier not running (optional: install
+   deploy/boxalert.service)` / `running · …` / `notifier STOPPED (last heartbeat …)` / `disabled` /
+   `not configured (… in the environment or /opt/gold/.env)` (`docs/AUTOSYNC.md` §3).
+3. Found on the way: `GOLD_BOX_ALERT_GLOBAL_COOLDOWN_MIN` was documented (unit + docstring) but never
+   read, and the message footer always quoted the default limits. Both now follow the knobs (the
+   decision itself cannot change — the limits only ride along).
+4. `DecideOnceTests.test_it_decides_without_sending_when_nothing_lines_up` was already failing before
+   this change: it read the **checked-in** log and assumed it ended 14:59 UTC; three data commits later
+   the day's breaker blocked first. Rewritten on a synthetic tape (HANDOFF §7: never the live CSVs).
+
+Verification: `tools/test_box_alert.py` **34 pass** (12 new, incl. a subprocess run of `--quiet` exactly
+as autosync calls it; the new tests fail on the old code with the owner's exact line); `smoke_test.py`
+**SMOKE TEST PASSED**; `py_compile` all; `bash -n tools/autosync.sh`; `check_data.py` 0 fail / 8 warn;
+`test_box_report` 14, `test_box_watch` 6, `test_dashboard_context` 13 (Flask in a temp venv),
+`test_signal_outlook` 9, `test_repair_phantom_ledger` 7. Sandboxed real `autosync.sh` (fixed) printed
+each state: pair-not-running, running (a real `--loop` reading `.env` with nothing exported), STOPPED,
+disabled, not configured; the token appeared in no output. **Not run:** a real Telegram send and
+anything on the production host. After merge, the next autosync deploys it (tools-only: smoke gate
+runs, engine not restarted; an installed box-alert unit is restarted).

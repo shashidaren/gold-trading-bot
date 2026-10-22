@@ -10,8 +10,9 @@
 #        everything else = remote wins) -> runs the smoke test -> rolls back
 #        on failure -> restarts the engine -> verifies status.json is fresh
 #   3. Runs tools/check_data.py (integrity gate), tools/handoff_check.py (is docs/HANDOFF.md
-#      still telling the truth?) and tools/xm_quote_report.py --quiet (is the quote logger
-#      writing?). The last two are ADVISORY: shown in the digest, never block a deploy
+#      still telling the truth?), tools/xm_quote_report.py --quiet (is the quote logger
+#      writing?) and tools/box_alert.py --quiet (is the optional box notifier configured
+#      and running?). The last three are ADVISORY: shown in the digest, never block a deploy
 #   4. Sends a one-message digest to the Telegram chat configured in .env
 #
 # Safety model:
@@ -357,9 +358,18 @@ fi
 # box-chop-retest-alerts.md). --quiet always prints one "box alerts: ..." line and
 # exits 0, including when it is not configured or not installed - so this can never
 # block a deploy or shout about a box the owner never opted into.
+# The Telegram pair: this script keeps it in its OWN unexported TG_TOKEN/TG_CHAT, so
+# a child never inherits it. From 2026-10-21 box_alert.py reads $GOLD_DATA_DIR/.env
+# itself, the same file engine.py and the unit's EnvironmentFile= use. Before that,
+# the 18:00 digest said "not configured" in the message the pair had just delivered.
+# GOLD_DATA_DIR points it at this run's root, the .env and box_alert_state.json the
+# sidecar uses (the unit sets GOLD_DATA_DIR=/opt/gold). No secret passes on argv/env.
+# The line also reports whether the notifier is RUNNING, from the --loop heartbeat in
+# that state file, so "pair found" is never mistaken for "installed and working".
 BOXALERT_MSG=""
 if [ -f tools/box_alert.py ]; then
-    python3 tools/box_alert.py --quiet >/tmp/autosync_boxalert.log 2>&1
+    GOLD_DATA_DIR="${GOLD_DATA_DIR:-$GOLD_DIR}" \
+        python3 tools/box_alert.py --quiet >/tmp/autosync_boxalert.log 2>&1
     BOXALERT_MSG=$(tail -n1 /tmp/autosync_boxalert.log)
     case "$BOXALERT_MSG" in
         "box alerts:"*) ;;
