@@ -14,7 +14,7 @@
     "trade_expert": true,
     "trade_mode": 2
   },
-  "captured_utc": "2026-10-22 03:50:40",
+  "captured_utc": "2026-10-22 09:50:41",
   "decoded": {
     "account_kind": "REAL",
     "calc_mode": "CFD_LEVERAGE",
@@ -45,9 +45,9 @@
   "hash": "edcf2cbe383d",
   "label": "",
   "probes": {
-    "calc_margin_usd_0.01lot": 4.09,
+    "calc_margin_usd_0.01lot": 4.08,
     "calc_profit_usd_0.01lot_plus_1usd": 1.0,
-    "price_used": 4093.78
+    "price_used": 4084.28
   },
   "schema": 1,
   "spread_points_now": 55,
