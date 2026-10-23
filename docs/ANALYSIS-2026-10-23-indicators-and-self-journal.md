@@ -268,11 +268,12 @@ rebuilds it on demand (cached ~2 minutes); `--csv` is an explicit export.
 | last 7 entry days | 71 | 18W/29L/24BE | 38.3% [25.8–52.6] | −0.03R | −$33.35 |
 | today (entry date) | 8 | 2W/4L/2BE | 33.3% [9.7–70.0] | −0.13R | −$7.26 |
 
-Payoff 1.55 : 1, breakeven WR **39.3%**, profit factor 0.72. The era's 38.2% is
-above the old uncosted 32.1% line and below the **costed** breakeven — which is
-the same conclusion as the 2026-10-19 judgement: **SCREEN MET, no demonstrated
-edge, PASS not met**. The journal does not re-judge the experiment; it just puts
-the arithmetic in one place.
+Payoff 1.55 : 1, breakeven WR **39.3%**, profit factor 0.72. The era's 38.2%
+point estimate sits above the 32.1% PASS bar, but its **Wilson lower bound
+(30.7%) does not clear it**, and 38.2% is still below the **costed** breakeven
+(39.3%) — the same conclusion as the 2026-10-19 judgement: **SCREEN MET, no
+demonstrated edge, PASS not met**. The journal does not re-judge the experiment;
+it just puts the arithmetic in one place.
 
 **Two R/trade conventions, deliberately both visible.** The journal averages each
 trade's own R (`Profit ÷ that trade's risk`) and calls it **mean R/trade** — the
