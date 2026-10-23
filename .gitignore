@@ -24,6 +24,8 @@ state.json
 portfolio_state.pkl
 # box-alert sidecar dedupe state (tools/box_alert.py, deploy/boxalert.service) - host-local
 box_alert_state.json
+# Manual scalping decisions are host-local, self-reported, and never part of the bot ledger
+manual_scalp_journal.json
 
 # === OS & Editor Files ===
 .DS_Store

@@ -165,8 +165,14 @@ class BoxReadTests(unittest.TestCase):
         self.assertTrue("box frozen at the break" in html or "no break to retest yet" in html)
         # the alert panel is a preview, never a sender, and one of the two states shows
         self.assertTrue("Would send now" in html or "Held" in html)
-        # a new tab must not break the switch itself (2026-10-23: chart added)
-        self.assertIn("var TABS = ['simple', 'chart', 'boxes', 'details']", html)
+        # a new page must not break the existing tab switch (journal is also a tab;
+        # Manual Scalping deliberately lives at /scalp, outside this switcher).
+        self.assertIn("var TABS = ['simple', 'journal', 'chart', 'boxes', 'details']", html)
+        self.assertIn('href="/scalp"', html)
+        # Tab persistence must update the URL as well as localStorage: the
+        # meta-refresh otherwise replays an old ?tab=chart deep link.
+        self.assertIn("url.searchParams.set('tab', name)", html)
+        self.assertIn("window.history.replaceState", html)
 
     def test_the_dashboard_renders_the_chart_tab(self):
         os.environ["GOLD_DATA_DIR"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

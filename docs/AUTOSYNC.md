@@ -201,8 +201,10 @@ consequence for reading logs: the run that deploys a new phase does **not** run 
 Safe: the engine restores an open trade from `status.json` and re-seeds its stats and slope history
 from `trades.csv` / `forward_test_log.csv` on start, so a restart mid-trade resumes the same trade
 (including its structural stop; smoke Scenario N). The engine is only stopped and restarted when
-`engine.py` or `trade_filter.py` changed (`CORE_CHANGED`); a `dashboard.py` change only restarts the
-dashboard; a tools-only or docs-only change restarts nothing.
+`engine.py` or `trade_filter.py` changed (`CORE_CHANGED`); a `dashboard.py` change or a change to its
+helpers (`pressure.py`, `chart.py`, `manual_scalp.py`, `scalp_template.py`) only restarts the dashboard
+(`DASH_CHANGED`); a tools-only or docs-only change restarts nothing. The `/scalp` journal is outside the
+engine either way: its host-local `manual_scalp_journal.json` is not merged, deployed, or used as bot state.
 
 The smoke gate runs before the restart, so a broken commit is rolled back *before* the engine ever
 loads it. That makes `tools/smoke_test.py` **the deploy gate, not just a dev tool**: `autosync.sh` reads

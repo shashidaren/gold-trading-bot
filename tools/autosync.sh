@@ -138,7 +138,7 @@ if [ -n "$REMOTE_SHA" ] && [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
 fi
 
 if [ "$NEED_MERGE" = "1" ]; then
-    if ! git diff --quiet -- engine.py trade_filter.py dashboard.py tools/ 2>/dev/null; then
+    if ! git diff --quiet -- engine.py trade_filter.py dashboard.py pressure.py chart.py manual_scalp.py scalp_template.py tools/ 2>/dev/null; then
         DEPLOY_MSG="SKIPPED - local code edits detected on server (hand-edits are not supported); manual pull needed"
         log "$DEPLOY_MSG"
     elif [ "$AUTO_DEPLOY" != "1" ]; then
@@ -147,7 +147,7 @@ if [ "$NEED_MERGE" = "1" ]; then
     else
         CODE_CHANGED=$(git diff --name-only HEAD "$REMOTE_SHA" -- '*.py' | grep -c . || true)
         CORE_CHANGED=$(git diff --name-only HEAD "$REMOTE_SHA" -- engine.py trade_filter.py | grep -c . || true)
-        DASH_CHANGED=$(git diff --name-only HEAD "$REMOTE_SHA" -- dashboard.py | grep -c . || true)
+        DASH_CHANGED=$(git diff --name-only HEAD "$REMOTE_SHA" -- dashboard.py pressure.py chart.py manual_scalp.py scalp_template.py | grep -c . || true)
         # the box-alert sidecar runs pressure.py's read layer, so either file changing
         # needs its own restart (it is display-only: like the dashboard, never the engine)
         BOXALERT_CHANGED=$(git diff --name-only HEAD "$REMOTE_SHA" -- tools/box_alert.py pressure.py | grep -c . || true)
