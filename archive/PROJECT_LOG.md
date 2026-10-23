@@ -361,3 +361,45 @@ each state: pair-not-running, running (a real `--loop` reading `.env` with nothi
 disabled, not configured; the token appeared in no output. **Not run:** a real Telegram send and
 anything on the production host. After merge, the next autosync deploys it (tools-only: smoke gate
 runs, engine not restarted; an installed box-alert unit is restarted).
+
+---
+
+## 2026-10-23 — Telegram routing: indicator alerts only, trade news in a twice-daily digest
+
+**Ask.** "Staring at the screen until we get a go ahead to trade… I have many telegram messages, I may
+miss out on this… maybe we limit the telegram messages for the indicators only, the rest on the auto
+trade I possibly don't need for now." (Owner also chose: trade messages off entirely; digest twice a
+day plus a trade summary; a watch plan at both London and NY open.)
+
+**Measured first.** 10 trading days to 10-23: **36.8 skip notices/day** (45% of all traffic, one per
+blocked bar during a cooldown or blackout), 14 entries, 14 exits, 4.1 `BE STOP ARMED`, 8 autosync
+digests, ≈5.1 box-watch notices → **≈82/day, worst day 101**. The wanted message was ~6% of the chat.
+
+**Changed (message policy only — no strategy, gate, exit, sizing or ledger change).**
+1. `engine.py`: `send_telegram(text, kind=...)` with `TELEGRAM_KINDS = (trade, exit, skip, risk, feed)`;
+   `GOLD_TELEGRAM_KINDS` selects which are sent. Unset/blank = **every message, unchanged**; `none` =
+   silent; a typo falls back to everything so a typo can never silently mute the bot. Filtering is
+   silent (no print flood) and the CSVs/status/journal are written either way.
+2. `tools/autosync.sh`: `GOLD_DIGEST_EVERY_HOURS` (default 12, `0` = old 3-hourly) with the last-sent
+   epoch in `GOLD_DIGEST_STATE`; **an incident bypasses the clock** (any `$EXTRA`, a rollback/failed/
+   skipped deploy, a failed push) and is never silenced; routine digests go out with
+   `disable_notification=true` so only incidents buzz; new `🧾 trades: N closed (2W/3L/2BE) | net $…`
+   line computed read-only from `trades.csv` since the last digest.
+3. Watch plan: `pressure.box_plan_next/box_plan_text/box_context`, `tools/box_alert.py --plan` (and
+   inside `--loop`). One message after 07:00 and 13:00 UTC: where price sits, the two prices at which
+   the instant notice would fire, the costed levels, what is blocking, ATR-percentile + tick-volume
+   **context** (the two 10-23 audit hints — neither cleared the adoption bar) and the **0-of-8 no-edge
+   footer**. Deduped per (date, session); nothing sent if the box slept through the window or the
+   market is shut; `--no-plan` disables it.
+
+**Result.** ≈82 messages/day → **≈7–9/day**, at most four of them unsolicited (2 plans + the measured
+≈5.1 notices), and the chat is quiet unless something is wrong.
+
+**Verification.** `smoke_test.py` **SMOKE TEST PASSED** (new Scenario X: default-unchanged, `none`,
+explicit list, typo fallback, a filtered kind sends nothing, digest blocks, anchor windows,
+dedupe/re-send/failed-send-retry/dry-run/weekend, plan text content); `test_box_alert.py` 34 pass;
+`test_box_watch` 6; `check_data` 0 fail / 8 warn; `handoff_check` FRESH; `py_compile tools/*.py`;
+`bash -n tools/autosync.sh`; the digest trade-summary block re-run against the live ledger at 12 h /
+48 h / 500 h windows. **Not run:** a real Telegram send, the production host, or the box notifier
+(not installed). Deploy: `engine.py` changed → `goldbot` restarts; the plan needs
+`deploy/boxalert.service`. Revert is `.env`-only.

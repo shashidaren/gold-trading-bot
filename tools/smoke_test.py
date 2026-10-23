@@ -698,7 +698,7 @@ check("L: corrupt feed file reported",
 # 6) alert policy: rate-limited Telegram, journal print cooldown, recovery line
 print("   (expect one 'MT5 feed problem' line and one 'recovered' line below)")
 eng_l2 = engine.GoldEngine()
-eng_l2.send_telegram = lambda text: setattr(eng_l2, "_sent", text)  # capture, don't send
+eng_l2.send_telegram = lambda text, kind="trade": setattr(eng_l2, "_sent", text)  # capture, don't send
 eng_l2._sent = None
 publish(CANDLE, mtime_age=engine.MT5_FEED_PUBLISHER_STALE_SECONDS + 600)
 p0 = eng_l2.mt5_feed_problem()
@@ -3177,6 +3177,156 @@ with contextlib.redirect_stdout(buf_w):
 check("W: --strict exits 1 once the trigger is reached (a pipeline can gate on it)",
       rc_w == 1, f"exit {rc_w}")
 shutil.rmtree(tmp_w, ignore_errors=True)
+
+
+# --- Scenario X ------------------------------------------------------------
+print("\nScenario X: Telegram routing + the twice-daily watch plan (2026-10-23) — "
+      "engine chatter filtered at source, trade news in the digest, one plan per session anchor")
+
+# X1: the routing knob is pure and defaults to "send everything" (a deploy of this code
+# alone must change nothing).
+check("X: an unset/blank GOLD_TELEGRAM_KINDS sends every kind (today's behaviour)",
+      engine.notify_kinds({}) == set(engine.TELEGRAM_KINDS)
+      and engine.notify_kinds({"GOLD_TELEGRAM_KINDS": ""}) == set(engine.TELEGRAM_KINDS)
+      and engine.notify_kinds({"GOLD_TELEGRAM_KINDS": "   "}) == set(engine.TELEGRAM_KINDS))
+check("X: 'none' mutes the engine entirely", engine.notify_kinds({"GOLD_TELEGRAM_KINDS": "none"}) == set())
+check("X: an explicit list keeps only the named kinds",
+      engine.notify_kinds({"GOLD_TELEGRAM_KINDS": "feed, risk"}) == {"feed", "risk"})
+check("X: a typo falls back to everything rather than silently muting the bot",
+      engine.notify_kinds({"GOLD_TELEGRAM_KINDS": "trades,exits"}) == set(engine.TELEGRAM_KINDS))
+check("X: all five kinds exist and are distinct",
+      engine.TELEGRAM_KINDS == ("trade", "exit", "skip", "risk", "feed"))
+check("X: notify_enabled() is the same decision the sender uses",
+      engine.notify_enabled("skip", {"GOLD_TELEGRAM_KINDS": "feed"}) is False
+      and engine.notify_enabled("feed", {"GOLD_TELEGRAM_KINDS": "feed"}) is True)
+
+# X2: send_telegram actually drops a filtered message (and never raises), and still
+# sends every kind when the knob is unset. requests is stubbed at the top of this file.
+_sent_posts = []
+_orig_post = engine.requests.post
+engine.requests.post = lambda *a, **k: _sent_posts.append(k.get("json") or {})
+_orig_token, _orig_chat = engine.TELEGRAM_BOT_TOKEN, engine.TELEGRAM_CHAT_ID
+engine.TELEGRAM_BOT_TOKEN, engine.TELEGRAM_CHAT_ID = "tok", "chat"
+_orig_env = os.environ.get("GOLD_TELEGRAM_KINDS")
+try:
+    os.environ["GOLD_TELEGRAM_KINDS"] = "feed"
+    _eng_x = engine.GoldEngine.__new__(engine.GoldEngine)   # no __init__: no file I/O
+    _eng_x.send_telegram("skipped setup", kind="skip")
+    check("X: a filtered kind sends nothing", _sent_posts == [])
+    _eng_x.send_telegram("feed recovered", kind="feed")
+    check("X: an allowed kind still sends", len(_sent_posts) == 1)
+    os.environ["GOLD_TELEGRAM_KINDS"] = "none"
+    for _k in engine.TELEGRAM_KINDS:
+        _eng_x.send_telegram(f"msg {_k}", kind=_k)
+    check("X: GOLD_TELEGRAM_KINDS=none mutes every kind", len(_sent_posts) == 1)
+    os.environ.pop("GOLD_TELEGRAM_KINDS")
+    _eng_x.send_telegram("trade alert", kind="trade")
+    check("X: unset sends again (default behaviour preserved)", len(_sent_posts) == 2)
+finally:
+    engine.requests.post = _orig_post
+    engine.TELEGRAM_BOT_TOKEN, engine.TELEGRAM_CHAT_ID = _orig_token, _orig_chat
+    if _orig_env is None:
+        os.environ.pop("GOLD_TELEGRAM_KINDS", None)
+    else:
+        os.environ["GOLD_TELEGRAM_KINDS"] = _orig_env
+
+# X3: the digest trade summary lives in autosync.sh (it reads the ledger, writes nothing).
+_as = open(os.path.join(ROOT, "tools", "autosync.sh")).read()
+check("X: autosync summarises closes since the last digest from trades.csv",
+      "phase 4f" in _as and "net ${net:+.2f} gross" in _as and "GNG" not in _as)
+check("X: the digest is rate-limited by GOLD_DIGEST_EVERY_HOURS and has an incident bypass",
+      "GOLD_DIGEST_EVERY_HOURS" in _as and "INCIDENT=1" in _as and "DUE=0" in _as)
+check("X: routine digests are silent, incidents are not",
+      'if [ "$INCIDENT" = "1" ]; then _silent=0; else _silent=1; fi' in _as
+      and "disable_notification=true" in _as)
+
+# X4: the session anchors are pure and windowed (a late cron must send nothing stale).
+import pressure as PX  # noqa: E402
+_plan_at = lambda hh, mm: PX.box_plan_next(datetime(2026, 10, 23, hh, mm, 0))
+check("X: the London anchor is due at 07:00 and for 15 minutes after",
+      _plan_at(7, 0)[0] == "London open" and _plan_at(7, 14)[0] == "London open")
+check("X: 06:50 is too early and 07:30 is too late",
+      _plan_at(6, 50)[0] is None and _plan_at(7, 30)[0] is None)
+check("X: the NY anchor is separate and due at 13:00",
+      _plan_at(13, 2)[0] == "NY open" and _plan_at(12, 58)[0] is None)
+check("X: no anchor is due mid-session (09:00, 18:00)",
+      _plan_at(9, 0)[0] is None and _plan_at(18, 0)[0] is None)
+check("X: box_plan_next knows nothing about the market being shut (that is the sidecar's call)",
+      PX.box_plan_next(datetime(2026, 10, 24, 7, 3, 0))[0] == "London open"
+      and PX.market_quiet(datetime(2026, 10, 24, 7, 3, 0)))
+
+# X5: the plan message states the two alert prices, the blocks, and the measured base
+# rate. Built on a synthetic read — hermetic, no live CSVs, no clock.
+_geom_x = {"ok": True, "as_of": datetime(2026, 10, 23, 7, 0), "close": 4000.0, "atr": 2.0,
+           "boxes": [], "nearest": {"box": "last 1h (60 bars)", "side": "BUY", "edge": 4001.0,
+                                    "distance_usd": 1.0, "distance_atr": 0.5, "width": 6.0},
+           "trigger": {"state": "none", "side": None, "box": None, "detail": "no edge tested"}}
+_cards_x = [{"side": "BUY", "threshold": 4001.2, "entry": 4001.2, "stop": 3995.0,
+              "target": 4007.2, "net_rr": 1.1, "risk": 6.2, "reward": 6.0},
+             {"side": "SELL", "threshold": 3995.0, "entry": 3995.0, "stop": 4001.0,
+              "target": 3989.0, "net_rr": 0.9, "risk": 6.0, "reward": 6.0}]
+_checks_x = [{"key": k, "label": k.title(), "state": "pass", "detail": "clear"}
+             for k in ("session", "risk_state", "volatility", "feed")]
+_read_x = {"geometry": _geom_x, "watch_cards": _cards_x, "checks": _checks_x,
+           "trigger": _geom_x["trigger"]}
+_text_x = PX.box_plan_text(_read_x, "London open",
+                           {"atr_pctile": 18.0, "volume_ratio": 1.4, "chop": {"detail": "chop normal"}})
+check("X: the plan carries both alert prices and the costed levels",
+      "$4001.20" in _text_x and "$3995.00" in _text_x and "stop $3995.00" in _text_x)
+check("X: the plan labels its context as measured-but-not-a-gate",
+      "not a gate" in _text_x and "18th percentile" in _text_x and "1.40×" in _text_x)
+check("X: the plan states the measured no-edge verdict (0 of 8 cleared)",
+      "0 of 8" in _text_x and "heads-up, not a signal" in _text_x)
+check("X: an unreadable box read produces no message", PX.box_plan_text({"geometry": {"ok": False}}, "x") == "")
+
+# X6: one message per anchor — dedupe in the sidecar's OWN state file, and a failed send
+# is retried rather than recorded as sent. Hermetic: the read is stubbed, the sender is a
+# list, the state file is a temp path.
+sys.path.insert(0, HERE)
+import box_alert as BA  # noqa: E402
+BA.read_status = lambda **k: (dict(_read_x, checks=_checks_x, geometry=_geom_x,
+                                  watch_cards=_cards_x), [])
+_plan_state = os.path.join(tempfile.mkdtemp(prefix="gold_smoke_x_"), "box_alert_state.json")
+_args_x = types.SimpleNamespace(state=_plan_state, dry_run=False, log="x", status="x",
+                                trades="x", spread=None, env_file="/dev/null")
+_messages = []
+_orig_send = BA.send_telegram
+BA.send_telegram = lambda text, **k: (_messages.append(text), (True, "sent"))[1]
+_orig_alert_env = os.environ.get("GOLD_BOX_ALERTS")
+os.environ.pop("GOLD_BOX_ALERTS", None)
+try:
+    _rc, _out = BA.plan_decision(_args_x, now=datetime(2026, 10, 23, 7, 3, 0))
+    check("X: the plan sends once at the anchor", _out["action"] == "sent" and len(_messages) == 1,
+          f"{_out['action']} {len(_messages)}")
+    _rc, _out2 = BA.plan_decision(_args_x, now=datetime(2026, 10, 23, 7, 4, 0))
+    check("X: a second tick in the same window does not resend",
+          _out2["action"] == "already sent" and len(_messages) == 1)
+    _rc, _out3 = BA.plan_decision(_args_x, now=datetime(2026, 10, 23, 8, 0, 0))
+    check("X: outside the window nothing is due",
+          _out3["action"] == "no session now" and len(_messages) == 1)
+    _rc, _out4 = BA.plan_decision(_args_x, now=datetime(2026, 10, 23, 13, 1, 0))
+    check("X: the NY anchor gets its own message", _out4["action"] == "sent" and len(_messages) == 2)
+    # a failed send must not be recorded as sent: the next tick retries
+    BA.send_telegram = lambda text, **k: (False, "telegram request failed")
+    _clear = os.path.join(tempfile.mkdtemp(prefix="gold_smoke_x2_"), "state.json")
+    _args_x.state = _clear
+    _rc, _out5 = BA.plan_decision(_args_x, now=datetime(2026, 10, 23, 7, 2, 0))
+    _rc, _out6 = BA.plan_decision(_args_x, now=datetime(2026, 10, 23, 7, 5, 0))
+    check("X: a failed send is retried, never booked as sent",
+          _out5["action"] == "SEND FAILED" and _out6["action"] == "SEND FAILED")
+    _dry = types.SimpleNamespace(**{**_args_x.__dict__, "state": os.path.join(
+        tempfile.mkdtemp(prefix="gold_smoke_x3_"), "state.json")})
+    _dry.dry_run = True
+    check("X: --dry-run sends nothing and writes no dedupe entry",
+          BA.plan_decision(_dry, now=datetime(2026, 10, 23, 7, 2, 0))[1]["action"] == "would send (dry run)"
+          and not os.path.exists(_dry.state))
+    check("X: a weekend anchor sends nothing at all (market quiet)",
+          BA.plan_decision(_args_x, now=datetime(2026, 10, 24, 7, 2, 0))[1]["action"] == "no plan")
+finally:
+    BA.send_telegram = _orig_send
+    if _orig_alert_env is not None:
+        os.environ["GOLD_BOX_ALERTS"] = _orig_alert_env
+    shutil.rmtree(os.path.dirname(_plan_state), ignore_errors=True)
 
 
 print()

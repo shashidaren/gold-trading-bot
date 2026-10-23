@@ -100,6 +100,49 @@ BE_TRIGGER_R = 0.75
 # check_position); a broker-side time stop is future work for any live pilot.
 MAX_HOLD_MINUTES = 240
 
+# ── TELEGRAM ROUTING (2026-10-23, ops only — no strategy/exit/gate change) ──────
+# The engine talks to Telegram on every signal, skip, exit and feed event. Measured
+# on the 10 trading days to 2026-10-23 that is ~82 messages/day, of which only the
+# optional box-watch notice (~5/day) is the one the owner actually reads — every
+# skipped bar during a cooldown or a blackout sends its own message (~37/day).
+# Owner ask: keep Telegram for the indicator notice; the trade chatter belongs
+# elsewhere (the dashboard + the 2×/day autosync digest).
+#
+# So each message carries a KIND and GOLD_TELEGRAM_KINDS selects which kinds the
+# engine is allowed to send:
+#   trade  entry alert (BUY/SELL + SL/TP)
+#   exit   TP / SL / BE exit, TIME stop, BE-ratchet armed
+#   skip   "BUY SETUP SKIPPED" (cooldown / blackout / breaker / ATR)
+#   risk   sizer refusals, LIVE order failures, account_info unavailable
+#   feed   stale-feed alert and feed recovery
+# Unset or blank = send everything (today's behaviour, byte for byte) so a deploy
+# of this code alone changes nothing. GOLD_TELEGRAM_KINDS=none mutes the engine
+# entirely; a typo falls back to "everything" rather than silently muting it.
+# Nothing here touches the trading path: the same trades, exits and skips happen
+# whether or not a message is sent, and every event still lands in trades.csv,
+# skipped_trades.csv, status.json and forward_test_log.csv.
+TELEGRAM_KINDS = ("trade", "exit", "skip", "risk", "feed")
+
+
+def notify_kinds(env=None):
+    """Kinds the engine is allowed to send, from GOLD_TELEGRAM_KINDS (pure)."""
+    env = os.environ if env is None else env
+    raw = env.get("GOLD_TELEGRAM_KINDS")
+    if raw is None or not str(raw).strip():
+        return set(TELEGRAM_KINDS)
+    raw = str(raw).strip().lower()
+    if raw in ("none", "off", "0"):
+        return set()
+    wanted = {k.strip() for k in raw.split(",") if k.strip()}
+    known = {k for k in wanted if k in TELEGRAM_KINDS}
+    return known or set(TELEGRAM_KINDS)   # a typo must never silence the bot
+
+
+def notify_enabled(kind, env=None):
+    """True if a message of this kind should be sent. Pure; no clock, no network."""
+    return kind in notify_kinds(env)
+
+
 REQUIRE_VOLUME_CONFIRM = False
 VOLUME_SPIKE_MULTIPLIER = 0.9
 REQUIRE_TREND_CONFIRM = True
@@ -669,7 +712,15 @@ class GoldEngine:
         except Exception as e:
             print(f"Failed to write status.json: {e}")
 
-    def send_telegram(self, text: str):
+    def send_telegram(self, text: str, kind: str = "trade"):
+        """Send one Telegram message, unless its KIND is filtered out.
+
+        Filtering is silent by design (a suppressed skip must not become a print
+        flood instead); the engine still prints the skip line that matters and
+        still writes every event to its CSV. See TELEGRAM_KINDS above.
+        """
+        if not notify_enabled(kind):
+            return
         if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
             return
         try:
@@ -700,11 +751,12 @@ class GoldEngine:
             return False
         self._last_stale_alert_mono = time.monotonic()
         if detail:
-            self.send_telegram(detail)
+            self.send_telegram(detail, kind="feed")
             return True
         self.send_telegram(
             f"⚠️ gold engine: no price ticks for {stale_seconds / 60:.0f} min — "
-            f"stale-feed guard forced a WebSocket reconnect"
+            f"stale-feed guard forced a WebSocket reconnect",
+            kind="feed",
         )
         return True
 
@@ -791,7 +843,7 @@ class GoldEngine:
         self._last_feed_problem_log_mono = None
         when = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
         print(f"\nMT5 feed recovered: candle @ {when} UTC", flush=True)
-        self.send_telegram(f"✅ gold engine: MT5 feed recovered (candle @ {when} UTC)")
+        self.send_telegram(f"✅ gold engine: MT5 feed recovered (candle @ {when} UTC)", kind="feed")
         return True
 
     def log_candle(self, timestamp, o, h, l, c, ratio, tick_count, vol_ma, dynamic_floor, ema_f, ema_s, tested, rejected, held, vol_conf, trend_conf, rsi_val, atr_val):
@@ -874,7 +926,8 @@ class GoldEngine:
               f"SL -> entry ${self.stop_loss:.2f}")
         self.send_telegram(
             f"🛡 BE STOP ARMED (#{self.current_trade_num})\n"
-            f"SL moved to entry: `${self.stop_loss:.2f}`"
+            f"SL moved to entry: `${self.stop_loss:.2f}`",
+            kind="exit",
         )
         self.save_status()
 
@@ -934,7 +987,8 @@ class GoldEngine:
         self.send_telegram(
             f"\u23f1 TIME STOP ({self.trade_type} #{self.current_trade_num})\n"
             f"Held {held:.0f} min (>{MAX_HOLD_MINUTES}) | Exit: `${price:.2f}` ({profit:+.2f})\n"
-            f"Equity: `${self.balance:.2f}`"
+            f"Equity: `${self.balance:.2f}`",
+            kind="exit",
         )
         self.save_status()
         return True
@@ -1187,7 +1241,7 @@ class GoldEngine:
                     f"BUY SETUP SKIPPED\nReason: `{reason}`\n"
                     f"Price: `${c:.2f}` | RSI: `{self.rsi:.1f}` | ATR: `{self.atr:.2f}`"
                 )
-                self.send_telegram(msg)
+                self.send_telegram(msg, kind="skip")
                 print(f"\nTrade skipped -> {reason}\n")
                 return
 
@@ -1212,7 +1266,7 @@ class GoldEngine:
                     f"SELL SETUP SKIPPED\nReason: `{reason}`\n"
                     f"Price: `${c:.2f}` | RSI: `{self.rsi:.1f}` | ATR: `{self.atr:.2f}`"
                 )
-                self.send_telegram(msg)
+                self.send_telegram(msg, kind="skip")
                 print(f"\nTrade skipped -> {reason}\n")
                 return
 
@@ -1286,14 +1340,16 @@ class GoldEngine:
         if info is None:
             # Never size a real order off the paper ledger (2026-10-17 correction).
             print("\nLIVE order skipped -> account_info() unavailable, no risk base\n")
-            self.send_telegram("LIVE ORDER SKIPPED\naccount_info() unavailable - no risk base")
+            self.send_telegram("LIVE ORDER SKIPPED\naccount_info() unavailable - no risk base",
+                              kind="risk")
             return
         self.account_balance = info.balance
         self.trade_lots = self.size_lots(risk)
         if self.trade_lots is None:
             print(f"\nLIVE order skipped -> {RISK_PCT}% risk needs <{VOLUME_MIN} lot at stop ${risk:.2f}\n")
             self.send_telegram(
-                f"LIVE POSITION SIZE SKIPPED\nStop ${risk:.2f} needs <{VOLUME_MIN} lot for {RISK_PCT}% risk")
+                f"LIVE POSITION SIZE SKIPPED\nStop ${risk:.2f} needs <{VOLUME_MIN} lot for {RISK_PCT}% risk",
+                kind="risk")
             return
         self.pnl_scale = self.trade_lots * CONTRACT_SIZE
 
@@ -1319,7 +1375,8 @@ class GoldEngine:
         result = mt5.order_send(request)
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             print(f"Order failed: {result.retcode} - {result.comment}")
-            self.send_telegram(f"ORDER FAILED\nCode: {result.retcode}\nMsg: {result.comment}")
+            self.send_telegram(f"ORDER FAILED\nCode: {result.retcode}\nMsg: {result.comment}",
+                              kind="risk")
         else:
             self.current_trade_num = self.next_trade_num
             self.next_trade_num += 1
@@ -1330,7 +1387,8 @@ class GoldEngine:
                 f"Ticket: `{result.order}` | Trade #{self.current_trade_num}\n"
                 f"Entry: `${price:.2f}`\n"
                 f"SL: `${sl_price:.2f}`\n"
-                f"TP: `${tp_price:.2f}`"
+                f"TP: `${tp_price:.2f}`",
+                kind="trade",
             )
 
     def execute_simulated_trade(self, direction: str, c: float, wick_ratio: float, ts: str, level=None):
@@ -1347,7 +1405,8 @@ class GoldEngine:
             print(f"\nTrade skipped -> {RISK_PCT}% risk needs <{VOLUME_MIN} lot at stop ${risk:.2f} "
                   f"(structural dead-end at this balance) - not taken\n")
             self.send_telegram(
-                f"POSITION SIZE SKIPPED\nStop ${risk:.2f} needs <{VOLUME_MIN} lot for {RISK_PCT}% risk")
+                f"POSITION SIZE SKIPPED\nStop ${risk:.2f} needs <{VOLUME_MIN} lot for {RISK_PCT}% risk",
+                kind="risk")
             return
         # --- commit the trade only now that it is known to be takeable ---
         # (2026-10-17 correction: the sizer check used to sit AFTER this block, and its
@@ -1386,7 +1445,7 @@ class GoldEngine:
             f"SL: `${self.stop_loss:.2f}`{bound}\n"
             f"TP: `${self.take_profit:.2f}`"
         )
-        self.send_telegram(msg)
+        self.send_telegram(msg, kind="trade")
         print(f"\nAlert sent -> {direction} Trade #{self.current_trade_num}\n")
         self.save_status()
 
@@ -1411,6 +1470,8 @@ class GoldEngine:
                     f"TP HIT (BUY #{self.current_trade_num})\n"
                     f"Exit: `${price:.2f}` (+${profit:.2f})\n"
                     f"Equity: `${self.balance:.2f}`"
+               ,
+                    kind="exit",
                 )
                 self.save_status()
             elif price <= self.stop_loss:
@@ -1429,6 +1490,8 @@ class GoldEngine:
                     f"{'🛡 BE EXIT' if was_be else 'SL HIT'} (BUY #{self.current_trade_num})\n"
                     f"Exit: `${price:.2f}` (-${loss:.2f})\n"
                     f"Equity: `${self.balance:.2f}`"
+               ,
+                    kind="exit",
                 )
                 self.save_status()
 
@@ -1444,6 +1507,8 @@ class GoldEngine:
                     f"TP HIT (SELL #{self.current_trade_num})\n"
                     f"Exit: `${price:.2f}` (+${profit:.2f})\n"
                     f"Equity: `${self.balance:.2f}`"
+               ,
+                    kind="exit",
                 )
                 self.save_status()
             elif price >= self.stop_loss:
@@ -1462,6 +1527,8 @@ class GoldEngine:
                     f"{'🛡 BE EXIT' if was_be else 'SL HIT'} (SELL #{self.current_trade_num})\n"
                     f"Exit: `${price:.2f}` (-${loss:.2f})\n"
                     f"Equity: `${self.balance:.2f}`"
+               ,
+                    kind="exit",
                 )
                 self.save_status()
 

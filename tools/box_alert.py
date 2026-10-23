@@ -30,8 +30,24 @@ USAGE
     python3 tools/box_alert.py --once              # decide, and send if it fires
     python3 tools/box_alert.py --loop              # decide every --interval seconds
     python3 tools/box_alert.py --test              # send a test message (checks the bot)
+    python3 tools/box_alert.py --plan              # session watch plan, if an anchor is due
+    python3 tools/box_alert.py --plan --dry-run    # preview that plan, send nothing
     python3 tools/box_alert.py --quiet             # one digest line (tools/autosync.sh)
     python3 tools/box_alert.py --json              # machine-readable decision
+
+THE SESSION WATCH PLAN (2026-10-23)
+    `--loop` also sends ONE "watch plan" message shortly after 07:00 and 13:00 UTC
+    (London / NY open): where price sits in the boxes, the two prices at which the
+    instant notice WOULD fire, the costed levels, what is blocking right now, and the
+    measured ATR-percentile / tick-volume context. It exists because the owner's real
+    complaint was the WAIT for the notice, not only the volume: two anchors a day mean
+    no screen-watching, and the instant notice then only confirms or does not.
+    Deduped per (date, session) in the same state file, so a 60 s loop sends exactly one
+    message per anchor and a box that was asleep through a window sends nothing stale.
+    Same rules as the break notice: display-only, no order, no gate, no edge claimed
+    (0 of 8 box geometries cleared the driftless reference).
+    `--no-plan` runs the loop for break notices only.
+
 
 ENVIRONMENT
     TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID   required to send (the engine's own pair)
@@ -41,7 +57,8 @@ ENVIRONMENT
     GOLD_BOX_ALERT_DAILY_CAP (6)            max messages per UTC day
     GOLD_DATA_DIR / GOLD_LOG_FILE / GOLD_STATUS_FILE / GOLD_TRADES_FILE /
     GOLD_SKIP_FILE                          same overrides the dashboard honours
-    GOLD_BOX_ALERT_STATE                    dedupe state file
+    GOLD_BOX_ALERT_STATE                    dedupe state file (break notices + plan dedupe
+                                            + the --loop heartbeat; box_alert_state.json)
     GOLD_ENV_FILE ($GOLD_DATA_DIR/.env)     where the settings above are read from
                                             when the process environment lacks them
 
@@ -171,22 +188,22 @@ def alert_limits(env=None):
 
 
 # ──────────────────────────────────────────────────────────── the read (no writes)
-def read_decision(log_file=LOG_FILE, status_file=STATUS_FILE, trades_file=TRADES_FILE,
-                  spread=None, now=None):
-    """pressure.box_read() + pressure.box_alert() on the live files.
+def read_status(log_file=LOG_FILE, status_file=STATUS_FILE, trades_file=TRADES_FILE,
+                spread=None, now=None):
+    """The full box_status() read on the live files (what the dashboard renders).
 
-    Portfolio and feed health come from the same readers the dashboard uses, so
-    the alert and the panel cannot disagree about a cooldown or a stale tape.
+    Returns (status, rows). `status` is None when the log is empty. Portfolio and feed
+    health come from the same readers the dashboard uses, so a message built from this
+    and a panel cannot disagree about a cooldown or a stale tape.
     """
     now = now or utcnow()
     rows = P.tail_rows(log_file, TAIL_ROWS, window_bytes=1024 * 1024)
     if not rows:
-        return {"fire": False, "blockers": [f"no rows in {log_file}"], "text": "",
-                "key": None, "now": now, "spread_usd": None}
+        return None, []
     trades = P.read_rows(trades_file)
     try:
         portfolio = P.portfolio_read(trades, now=now, log_rows=rows)
-    except Exception as exc:                       # never let a ledger read kill the notice
+    except Exception as exc:                       # never let a ledger read kill a notice
         portfolio = None
         print(f"box_alert: portfolio read failed ({exc})", file=sys.stderr)
     feed = P.feed_read(rows, now=now)
@@ -194,6 +211,18 @@ def read_decision(log_file=LOG_FILE, status_file=STATUS_FILE, trades_file=TRADES
     regime = P.box_regime(rows)
     status = P.box_status(geom, portfolio=portfolio, feed=feed, now=now,
                           spread=spread or P.BOX_SPREAD_USD, regime=regime)
+    return status, rows
+
+
+def read_decision(log_file=LOG_FILE, status_file=STATUS_FILE, trades_file=TRADES_FILE,
+                  spread=None, now=None):
+    """pressure.box_alert() on the same live-files read (the instant break notice)."""
+    now = now or utcnow()
+    status, rows = read_status(log_file=log_file, status_file=status_file,
+                               trades_file=trades_file, spread=spread, now=now)
+    if status is None:
+        return {"fire": False, "blockers": [f"no rows in {log_file}"], "text": "",
+                "key": None, "now": now, "spread_usd": None}
     # box_status() builds its alert with pressure.py's default limits, which is what the
     # dashboard previews. Re-run the SAME pure decision on the same read with the limits
     # in force (the env knobs), so the limiter and the message's own "max 1 per ..."
@@ -208,6 +237,7 @@ def read_decision(log_file=LOG_FILE, status_file=STATUS_FILE, trades_file=TRADES
     out["now"] = now
     out["verdict"] = status.get("verdict")
     out["spread_usd"] = status.get("spread_usd")
+    geom = status.get("geometry") or {}
     out["as_of"] = geom.get("as_of") if geom.get("ok") else None
     out["chop"] = status.get("chop")
     out["retest"] = status.get("retest")
@@ -380,6 +410,62 @@ def decide_once(args, now=None, sender=send_telegram, state_path=None):
     return 0, {**_summary(decision, state, now), "action": "sent", "reason": detail}
 
 
+def plan_decision(args, now=None, sender=None, state_path=None):
+    """The session watch plan: one message per anchor (07:00 / 13:00 UTC), at most.
+
+    Owner ask 2026-10-23: watching the screen for the instant notice is a long wait.
+    This is the twice-daily answer — where price sits in the boxes and the two prices
+    at which the notice WOULD fire — so the screen does not need staring at. It is
+    display-only: no order, no gate, and the message carries the measured base rate.
+
+    Deduped in our own state file by (date, session label), so a loop or a cron that
+    runs every minute still sends exactly one message per anchor, and a missed window
+    (a box that was asleep at 07:00) sends nothing rather than a stale plan.
+    """
+    now = now or utcnow()
+    sender = sender or send_telegram          # resolved late, so a test can stub it
+    state_path = state_path or args.state
+    label, anchor = P.box_plan_next(now)
+    if not label:
+        return 0, {"ts": now.strftime("%Y-%m-%d %H:%M:%S"), "action": "no session now",
+                   "reason": "anchors are "
+                             + ", ".join(f"{h:02d}:{m:02d}" for _l, h, m in P.BOX_PLAN_SESSIONS)
+                             + " UTC", "text": ""}
+    state = load_state(state_path)
+    key = f"{anchor:%Y-%m-%d} {label}"
+    plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
+    base = {"ts": now.strftime("%Y-%m-%d %H:%M:%S"), "session": label,
+            "anchor": anchor.strftime("%Y-%m-%d %H:%M"), "key": key, "text": ""}
+    if plan.get(key):
+        return 0, {**base, "action": "already sent",
+                   "reason": f"{label} plan went out at {plan[key]}"}
+    try:
+        if P.market_quiet(now):
+            return 0, {**base, "action": "no plan",
+                       "reason": "market quiet (weekend or the daily break)"}
+    except Exception:
+        pass                                   # a helper change must not kill the plan
+    status, rows = read_status(log_file=args.log, status_file=args.status,
+                               trades_file=args.trades, spread=args.spread, now=now)
+    text = P.box_plan_text(status or {}, label, P.box_context(rows, status)) if status else ""
+    if not text:
+        return 0, {**base, "action": "no plan", "reason": "no box read to report"}
+    base["text"] = text
+    if getattr(args, "dry_run", False):
+        return 0, {**base, "action": "would send (dry run)"}
+    if not alerts_enabled():
+        return 0, {**base, "action": "disabled (GOLD_BOX_ALERTS=0)"}
+    ok, detail = sender(text)
+    if not ok:
+        return 0, {**base, "action": "SEND FAILED", "reason": detail}
+    plan[key] = now.strftime("%Y-%m-%d %H:%M:%S")
+    for old in sorted(plan)[:-30]:        # keep our own state file small
+        plan.pop(old, None)
+    state["plan"] = plan
+    save_state(state, state_path)
+    return 0, {**base, "action": "sent", "reason": detail}
+
+
 def _summary(decision, state, now):
     return {"ts": now.strftime("%Y-%m-%d %H:%M:%S"),
             "side": decision.get("side"), "box": decision.get("box"),
@@ -399,6 +485,11 @@ def main(argv=None):
                     help="never send; print the decision and the message it would send")
     ap.add_argument("--test", action="store_true",
                     help="send a one-line test message (proves the bot/chat work)")
+    ap.add_argument("--no-plan", action="store_true",
+                    help="--loop only: never send the session watch plan")
+    ap.add_argument("--plan", action="store_true",
+                    help="send the session watch plan if a London/NY anchor is due "
+                         "(07:00 or 13:00 UTC); combine with --dry-run to preview")
     ap.add_argument("--quiet", action="store_true",
                     help="print only the one-line digest used by tools/autosync.sh")
     ap.add_argument("--json", action="store_true", help="print the decision as JSON")
@@ -430,6 +521,17 @@ def main(argv=None):
         print(f"test message: {'sent' if ok else 'FAILED'} ({detail})")
         return 0 if ok else 1
 
+    if args.plan:
+        rc, out = plan_decision(args)
+        if args.json:
+            print(json.dumps(out, indent=2, default=str))
+        else:
+            print(f"{out['ts']} · {out['action']}"
+                  + (f" — {out['reason']}" if out.get("reason") else ""))
+            if out.get("text") and (args.dry_run or out["action"] == "sent"):
+                print("\n--- message ---\n" + out["text"])
+        return rc
+
     if args.quiet:
         decision = None
         try:
@@ -459,6 +561,13 @@ def main(argv=None):
                 except Exception as exc:                # liveness must not kill the sidecar
                     print(f"box_alert: heartbeat failed: {exc}", file=sys.stderr, flush=True)
             try:
+                # The twice-daily watch plan first: it is due only inside a 15-minute
+                # window after 07:00/13:00 UTC and dedupes itself, so most ticks are free.
+                if not args.no_plan:
+                    _rc, plan_out = plan_decision(args)
+                    if plan_out["action"] not in ("no session now", "already sent"):
+                        print(f"{plan_out['ts']} plan {plan_out['action']}: "
+                              f"{plan_out.get('reason', '')} [{plan_out.get('session')}]", flush=True)
                 rc, out = decide_once(args)
                 if out["action"] != "no alert":
                     print(f"{out['ts']} {out['action']}: {out.get('reason', '')} "
