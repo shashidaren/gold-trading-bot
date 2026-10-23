@@ -20,6 +20,14 @@ except Exception as _exc:  # never take the dashboard down over the read layer
 else:
     _CH_IMPORT_ERROR = ""
 
+try:  # display-only self-journal (see journal.py's docstring)
+    import journal as JN
+except Exception as _exc:  # never take the dashboard down over the read layer
+    JN = None
+    _JN_IMPORT_ERROR = str(_exc)
+else:
+    _JN_IMPORT_ERROR = ""
+
 app = Flask(__name__)
 
 DATA_DIR = os.getenv("GOLD_DATA_DIR", "/opt/gold")
@@ -37,6 +45,8 @@ STALE_AFTER_SECONDS = 300
 ERA_075_START = datetime(2026, 9, 15, 6, 0)  # UTC, PR #9
 ERA_MH_START = datetime(2026, 9, 21, 6, 0)   # UTC, PR #15 ~autosync
 CALIBRATION_CACHE_SECONDS = 600              # the ledger-join scan is O(log size)
+JOURNAL_CACHE_SECONDS = 120                  # rebuild the journal at most this often
+JOURNAL_PERMUTATIONS = 120                   # the on-page noise floor (CLI uses 200)
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -92,8 +102,9 @@ HTML_TEMPLATE = """
             <button id="tab-simple" onclick="showTab('simple')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-amber-500 text-slate-900">✨ Simple Summary</button>
             <button id="tab-boxes" onclick="showTab('boxes')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📦 Boxes &amp; Timing</button>
             <button id="tab-chart" onclick="showTab('chart')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">🧭 Chart &amp; Placement</button>
+            <button id="tab-journal" onclick="showTab('journal')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📓 Journal</button>
             <button id="tab-details" onclick="showTab('details')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📊 Full Dashboard</button>
-            <span class="ml-auto text-[11px] text-slate-500 hidden md:inline">Simple is the mood · Chart shows <em>where</em> a trade would go · Boxes is the checklist · Full shows every gate. All <span class="text-slate-300">paper only</span> — no real orders.</span>
+            <span class="ml-auto text-[11px] text-slate-500 hidden md:inline">Simple is the mood · Chart shows <em>where</em> a trade would go · Boxes is the checklist · Journal is the audit trail · Full shows every gate. All <span class="text-slate-300">paper only</span> — no real orders.</span>
         </div>
 
         <!-- ================= SIMPLE TAB ================= -->
@@ -752,6 +763,334 @@ HTML_TEMPLATE = """
             {% endif %}
         </div>
         <!-- ================= END CHART & PLACEMENT TAB ================= -->
+
+        <!-- ================= JOURNAL TAB ================= -->
+        <div id="panel-journal" class="hidden">
+            {% if ctx.journal and ctx.journal.ok %}
+            {% set j = ctx.journal %}
+            {% set b = j.book %}
+            {% set er = j.era %}
+
+            <div class="rounded-2xl border border-slate-700 bg-slate-800 p-5 mb-5">
+                <div class="flex flex-col md:flex-row md:items-start gap-4">
+                    <div class="text-4xl">📓</div>
+                    <div class="flex-1">
+                        <h2 class="text-xl font-semibold text-slate-100">Self-journal — what the bot did, why, and how it ended</h2>
+                        <p class="text-sm text-slate-400 mt-1">
+                            Rebuilt from <span class="font-mono">trades.csv</span> + <span class="font-mono">forward_test_log.csv</span>:
+                            the context is the last closed bar before each entry, the outcome is the ledger's own exit.
+                            Nothing here is written, ordered or used by the engine.
+                        </p>
+                    </div>
+                    <div class="text-right text-xs text-slate-400 space-y-1 shrink-0">
+                        <div>data through <span class="font-mono text-slate-200">{{ j.as_of.strftime('%Y-%m-%d %H:%M') if j.as_of else '—' }}</span> UTC</div>
+                        <div>cost model <span class="font-mono text-slate-200">${{ '%.2f'|format(j.cost) }}</span> round trip (assumed)</div>
+                        <div>{{ j.era_label }}</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
+                <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+                    <div class="text-[11px] uppercase tracking-wide text-slate-400">Decisive win rate — current rule</div>
+                    <div class="text-3xl font-bold mt-1 {{ 'text-emerald-300' if (er.decisive_wr or 0) >= 39.3 else 'text-rose-300' }}">
+                        {{ '%.1f'|format(er.decisive_wr) if er.decisive_wr is not none else '—' }}%
+                    </div>
+                    <div class="text-xs text-slate-400 mt-1">95% CI
+                        {{ '%.1f'|format(er.decisive_ci[0]) if er.decisive_ci and er.decisive_ci[0] is not none else '—' }}–
+                        {{ '%.1f'|format(er.decisive_ci[1]) if er.decisive_ci and er.decisive_ci[1] is not none else '—' }}%
+                        · TP/(TP+SL)</div>
+                    <div class="text-[11px] text-slate-500 mt-1">all-time {{ '%.1f'|format(b.decisive_wr) if b.decisive_wr is not none else '—' }}% at n={{ b.n }}</div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+                    <div class="text-[11px] uppercase tracking-wide text-slate-400">Record — current rule</div>
+                    <div class="text-2xl font-bold mt-1">
+                        <span class="text-emerald-300">{{ er.wins }}W</span> /
+                        <span class="text-rose-300">{{ er.losses }}L</span> /
+                        <span class="text-slate-300">{{ er.be }}BE</span> /
+                        <span class="text-amber-300">{{ er.time }}TIME</span>
+                    </div>
+                    <div class="text-xs text-slate-400 mt-1">all-in rate {{ '%.1f'|format(er.all_in_pct) if er.all_in_pct is not none else '—' }}% (scratches count against)</div>
+                    <div class="text-[11px] text-slate-500 mt-1">all-time {{ b.wins }}W/{{ b.losses }}L/{{ b.be }}BE/{{ b.time }}TIME</div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+                    <div class="text-[11px] uppercase tracking-wide text-slate-400">Net at the assumed cost</div>
+                    <div class="text-3xl font-bold mt-1 {{ 'text-emerald-300' if (er.net or 0) >= 0 else 'text-rose-300' }}">
+                        {{ '%+.2f'|format(er.net) if er.net is not none else '—' }}
+                    </div>
+                    <div class="text-xs text-slate-400 mt-1">current rule · ${{ '%.2f'|format(er.net_per_trade) if er.net_per_trade is not none else '—' }}/trade</div>
+                    <div class="text-[11px] text-slate-500 mt-1">whole book {{ '%+.2f'|format(b.net) if b.net is not none else '—' }}</div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+                    <div class="text-[11px] uppercase tracking-wide text-slate-400">Expectancy</div>
+                    <div class="text-3xl font-bold mt-1 {{ 'text-emerald-300' if (er.r_mean or 0) >= 0 else 'text-rose-300' }}">
+                        {{ '%+.2f'|format(er.r_mean) if er.r_mean is not none else '—' }}R
+                    </div>
+                    <div class="text-xs text-slate-400 mt-1">per closed trade · payoff
+                        {{ '%.2f'|format(b.payoff) if b.payoff is not none else '—' }} : 1 · breakeven
+                        {{ '%.1f'|format(b.breakeven_wr_pct) if b.breakeven_wr_pct is not none else '—' }}%</div>
+                    <div class="text-[11px] text-slate-500 mt-1">median hold {{ '%.0f'|format(b.hold_median) if b.hold_median is not none else '—' }} min ·
+                        longest SL run {{ b.streak.longest_sl }}</div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+                <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+                    <div class="text-sm font-semibold text-slate-200">Since midnight — entry date {{ j.today.label }}</div>
+                    <div class="text-sm text-slate-300 mt-1">
+                        n={{ j.today.n }} · {{ j.today.wins }}W/{{ j.today.losses }}L/{{ j.today.be }}BE/{{ j.today.time }}TIME ·
+                        decisive {{ '%.1f'|format(j.today.decisive_wr) if j.today.decisive_wr is not none else '—' }}% ·
+                        R/trade {{ '%+.2f'|format(j.today.r_mean) if j.today.r_mean is not none else '—' }} ·
+                        net <span class="{{ 'text-emerald-300' if (j.today.net or 0) >= 0 else 'text-rose-300' }}">{{ '%+.2f'|format(j.today.net) if j.today.net is not none else '—' }}</span>
+                    </div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+                    <div class="text-sm font-semibold text-slate-200">Last 7 entry days</div>
+                    <div class="text-sm text-slate-300 mt-1">
+                        n={{ j.last7.n }} · {{ j.last7.wins }}W/{{ j.last7.losses }}L/{{ j.last7.be }}BE/{{ j.last7.time }}TIME ·
+                        decisive {{ '%.1f'|format(j.last7.decisive_wr) if j.last7.decisive_wr is not none else '—' }}% ·
+                        R/trade {{ '%+.2f'|format(j.last7.r_mean) if j.last7.r_mean is not none else '—' }} ·
+                        net <span class="{{ 'text-emerald-300' if (j.last7.net or 0) >= 0 else 'text-rose-300' }}">{{ '%+.2f'|format(j.last7.net) if j.last7.net is not none else '—' }}</span>
+                    </div>
+                </div>
+            </div>
+
+            {% if j.open %}
+            <div class="rounded-2xl border border-amber-700 bg-amber-950/20 p-4 mb-5">
+                <div class="flex flex-col md:flex-row md:items-center gap-2">
+                    <div class="text-lg font-semibold text-amber-300">🟡 Open page — #{{ j.open.num }} {{ j.open.side }}</div>
+                    <div class="text-xs text-slate-400 md:ml-auto">not counted in any success rate until it closes</div>
+                </div>
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mt-3 text-xs">
+                    <div><div class="text-slate-400">entry</div><div class="font-mono text-slate-200">${{ '%.2f'|format(j.open.entry) }}</div></div>
+                    <div><div class="text-slate-400">stop / target</div><div class="font-mono text-slate-200">${{ '%.2f'|format(j.open.stop) }} / ${{ '%.2f'|format(j.open.tp) }}</div></div>
+                    <div><div class="text-slate-400">last close</div><div class="font-mono text-slate-200">${{ '%.2f'|format(j.open.price_now) if j.open.price_now is not none else '—' }}</div></div>
+                    <div><div class="text-slate-400">open P/L (last close)</div><div class="font-mono {{ 'text-emerald-300' if (j.open.r_now or 0) >= 0 else 'text-rose-300' }}">{{ '%+.2f'|format(j.open.r_now) if j.open.r_now is not none else '—' }}R</div></div>
+                    <div><div class="text-slate-400">age</div><div class="font-mono text-slate-200">{{ '%.0f'|format(j.open.hold_min) if j.open.hold_min is not none else '—' }} min</div></div>
+                </div>
+                <div class="text-xs text-slate-300 mt-2">{{ j.open.thesis }}</div>
+            </div>
+            {% endif %}
+
+            <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4 mb-5">
+                <div class="text-sm font-semibold text-slate-200">Newest pages</div>
+                <div class="text-[11px] text-slate-500 mb-2">Context is the bar before entry; MFE/MAE are the best/worst excursions after it, in R. This is an audit trail, not a scoreboard of “good” calls.</div>
+                <div class="overflow-x-auto">
+                <table class="w-full text-xs text-slate-300">
+                    <thead class="text-slate-400">
+                        <tr>
+                            <th class="text-left pb-1">#</th>
+                            <th class="text-left pb-1">entry (UTC)</th>
+                            <th class="text-left pb-1">side</th>
+                            <th class="text-left pb-1">exit</th>
+                            <th class="text-right pb-1">R</th>
+                            <th class="text-right pb-1">MFE</th>
+                            <th class="text-right pb-1">MAE</th>
+                            <th class="text-right pb-1">hold</th>
+                            <th class="text-left pb-1 pl-3">why (the bar the engine acted on)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for e in j.recent %}
+                        <tr class="border-t border-slate-700/60">
+                            <td class="py-1 text-slate-500">#{{ e.num }}</td>
+                            <td class="py-1 font-mono text-[11px]">{{ e.entry_time.strftime('%m-%d %H:%M') }}</td>
+                            <td class="py-1 font-semibold {{ 'text-emerald-300' if e.side == 'BUY' else 'text-rose-300' }}">{{ e.side }}</td>
+                            <td class="py-1 font-semibold {% if e.reason == 'TP' %}text-emerald-300{% elif e.reason == 'SL' %}text-rose-300{% elif e.reason == 'BE' %}text-slate-400{% else %}text-amber-300{% endif %}">{{ e.reason }}</td>
+                            <td class="py-1 text-right font-mono {{ 'text-emerald-300' if (e.r or 0) > 0 else ('text-rose-300' if (e.r or 0) < 0 else 'text-slate-400') }}">{{ '%+.2f'|format(e.r) if e.r is not none else '—' }}</td>
+                            <td class="py-1 text-right font-mono text-slate-400">{{ '%+.2f'|format(e.mfe_r) if e.mfe_r is not none else '—' }}</td>
+                            <td class="py-1 text-right font-mono text-slate-400">{{ '%+.2f'|format(e.mae_r) if e.mae_r is not none else '—' }}</td>
+                            <td class="py-1 text-right font-mono text-slate-400">{{ '%.0f'|format(e.hold_min) if e.hold_min is not none else '—' }}</td>
+                            <td class="py-1 pl-3 text-[11px] text-slate-400">{{ e.thesis }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-5 mb-5">
+                <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+                    <div class="text-sm font-semibold text-slate-200">By side — BUY and SELL are different strategies</div>
+                    <table class="w-full text-xs text-slate-300 mt-2">
+                        <thead class="text-slate-400"><tr>
+                            <th class="text-left pb-1">side</th><th class="text-right pb-1">n</th>
+                            <th class="text-right pb-1">W/L/BE/T</th><th class="text-right pb-1">decisive</th>
+                            <th class="text-right pb-1">R/trade</th><th class="text-right pb-1">net</th>
+                        </tr></thead>
+                        <tbody>
+                        {% for name, s in j.sides.items() %}
+                        <tr class="border-t border-slate-700/60">
+                            <td class="py-1 font-semibold {{ 'text-emerald-300' if name == 'BUY' else 'text-rose-300' }}">{{ name }}</td>
+                            <td class="py-1 text-right">{{ s.n }}</td>
+                            <td class="py-1 text-right">{{ s.wins }}/{{ s.losses }}/{{ s.be }}/{{ s.time }}</td>
+                            <td class="py-1 text-right">{{ '%.1f'|format(s.decisive_wr) if s.decisive_wr is not none else '—' }}%</td>
+                            <td class="py-1 text-right font-mono">{{ '%+.2f'|format(s.r_mean) if s.r_mean is not none else '—' }}</td>
+                            <td class="py-1 text-right font-mono {{ 'text-emerald-300' if (s.net or 0) >= 0 else 'text-rose-300' }}">{{ '%+.2f'|format(s.net) if s.net is not none else '—' }}</td>
+                        </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+                    <div class="text-sm font-semibold text-slate-200">By session — entry hour, UTC</div>
+                    <table class="w-full text-xs text-slate-300 mt-2">
+                        <thead class="text-slate-400"><tr>
+                            <th class="text-left pb-1">session</th><th class="text-right pb-1">n</th>
+                            <th class="text-right pb-1">W/L/BE/T</th><th class="text-right pb-1">decisive</th>
+                            <th class="text-right pb-1">R/trade</th><th class="text-right pb-1">net</th>
+                        </tr></thead>
+                        <tbody>
+                        {% for name, s in j.sessions.items() %}
+                        <tr class="border-t border-slate-700/60">
+                            <td class="py-1 text-slate-300">{{ name }}</td>
+                            <td class="py-1 text-right">{{ s.n }}</td>
+                            <td class="py-1 text-right">{{ s.wins }}/{{ s.losses }}/{{ s.be }}/{{ s.time }}</td>
+                            <td class="py-1 text-right">{{ '%.1f'|format(s.decisive_wr) if s.decisive_wr is not none else '—' }}%</td>
+                            <td class="py-1 text-right font-mono">{{ '%+.2f'|format(s.r_mean) if s.r_mean is not none else '—' }}</td>
+                            <td class="py-1 text-right font-mono {{ 'text-emerald-300' if (s.net or 0) >= 0 else 'text-rose-300' }}">{{ '%+.2f'|format(s.net) if s.net is not none else '—' }}</td>
+                        </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                    <div class="text-[11px] text-slate-500 mt-2">Asia/rollover = 23:00–06:59 UTC; London/NY = 07:00–22:59 UTC. Sessions are descriptive — the 2026-10-05 review downgraded the session band as a gate.</div>
+                </div>
+            </div>
+
+            <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4 mb-5">
+                <div class="text-sm font-semibold text-slate-200">The last 14 entry days</div>
+                <div class="overflow-x-auto mt-2">
+                <table class="w-full text-xs text-slate-300">
+                    <thead class="text-slate-400"><tr>
+                        <th class="text-left pb-1">date</th><th class="text-right pb-1">n</th>
+                        <th class="text-right pb-1">W</th><th class="text-right pb-1">L</th><th class="text-right pb-1">BE</th>
+                        <th class="text-right pb-1">TIME</th><th class="text-right pb-1">decisive</th>
+                        <th class="text-right pb-1">R/trade</th><th class="text-right pb-1">net</th>
+                        <th class="text-right pb-1">cum net</th>
+                    </tr></thead>
+                    <tbody>
+                        {% for d in j.daily %}
+                        <tr class="border-t border-slate-700/60">
+                            <td class="py-1 font-mono text-[11px]">{{ d.label }}</td>
+                            <td class="py-1 text-right">{{ d.n }}</td>
+                            <td class="py-1 text-right text-emerald-300">{{ d.wins }}</td>
+                            <td class="py-1 text-right text-rose-300">{{ d.losses }}</td>
+                            <td class="py-1 text-right text-slate-400">{{ d.be }}</td>
+                            <td class="py-1 text-right text-amber-300">{{ d.time }}</td>
+                            <td class="py-1 text-right">{{ '%.1f'|format(d.decisive_wr) if d.decisive_wr is not none else '—' }}%</td>
+                            <td class="py-1 text-right font-mono">{{ '%+.2f'|format(d.r_mean) if d.r_mean is not none else '—' }}</td>
+                            <td class="py-1 text-right font-mono {{ 'text-emerald-300' if (d.net or 0) >= 0 else 'text-rose-300' }}">{{ '%+.2f'|format(d.net) if d.net is not none else '—' }}</td>
+                            <td class="py-1 text-right font-mono text-slate-400">{{ '%+.2f'|format(d.cum_net) if d.cum_net is not none else '—' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+                <div class="text-[11px] text-slate-500 mt-2">Grouped by Entry_Time date (the repo's era convention). Cumulative starts at the first day in this window, not at $500.</div>
+            </div>
+
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-5 mb-5">
+                <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+                    <div class="text-sm font-semibold text-slate-200">What the journal noticed</div>
+                    <div class="text-xs text-slate-300 mt-2">
+                        <span class="font-semibold">{{ j.givebacks.was_ahead_n }}</span> of {{ b.n }} trades
+                        ({{ '%.1f'|format(j.givebacks.was_ahead_pct) if j.givebacks.was_ahead_pct is not none else '—' }}%)
+                        were at least +{{ '%.2f'|format(j.givebacks.heat_r_threshold) }}R ahead at some point and did not finish there:
+                    </div>
+                    <ul class="text-xs text-slate-300 mt-2 space-y-1">
+                        <li>· <span class="text-slate-400">{{ j.givebacks.scratched_runners }}</span> scratched on the ratchet (BE)</li>
+                        <li>· <span class="text-slate-400">{{ j.givebacks.stopped_after_profit }}</span> gave the gain back and hit the stop</li>
+                        <li>· <span class="text-slate-400">{{ j.givebacks.winners_with_heat }}</span> winners first ran ≥0.5R against</li>
+                        <li>· peak unrealised (median) <span class="font-mono">{{ '%+.2f'|format(j.givebacks.left_on_table_r_median) if j.givebacks.left_on_table_r_median is not none else '—' }}R</span>;
+                            sum of peaks <span class="font-mono">{{ '%+.2f'|format(j.givebacks.left_on_table_r_sum) if j.givebacks.left_on_table_r_sum is not none else '—' }}R</span></li>
+                    </ul>
+                    {% if j.givebacks.worst %}
+                    <div class="text-[11px] text-slate-500 mt-2">Largest pages:
+                        {% for w in j.givebacks.worst %}#{{ w.num }} {{ w.side }} {{ w.reason }} +{{ '%.2f'|format(w.mfe_r) }}R→{{ '%+.2f'|format(w.r or 0) }}R{% if not loop.last %} · {% endif %}{% endfor %}
+                    </div>
+                    {% endif %}
+                    <div class="text-[11px] text-slate-500 mt-2">A scratch is not a mistake — the 0.75R ratchet exists because the 0.30R version converted +$222 of runs into $0. This panel shows the trade-off; it does not argue for removing it.</div>
+                </div>
+                <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+                    <div class="text-sm font-semibold text-slate-200">What the risk layer blocked</div>
+                    <div class="text-xs text-slate-300 mt-2">
+                        {{ j.skips.n_24h }} full signals in the last {{ j.skips.hours }} h of the skip log:
+                    </div>
+                    <ul class="text-xs text-slate-300 mt-2 space-y-1">
+                        {% for reason, count in j.skips.reasons_24h.items() %}
+                        <li>· {{ reason }}: <span class="font-mono">{{ count }}</span></li>
+                        {% else %}
+                        <li>· none</li>
+                        {% endfor %}
+                    </ul>
+                    {% if j.skips.last %}
+                    <div class="text-[11px] text-slate-500 mt-2">last: {{ j.skips.last.Timestamp }} · {{ j.skips.last.Reason }} · ${{ j.skips.last.Price }}</div>
+                    {% endif %}
+                    <div class="text-[11px] text-slate-500 mt-2">skipped_trades.csv logs no side, so these are counts, not a success rate. The blocked-signal research is <span class="font-mono">tools/phantom_trades.py</span>.</div>
+                </div>
+            </div>
+
+            {% if j.board %}
+            {% set bd = j.board %}
+            <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4 mb-5">
+                <div class="flex flex-col md:flex-row md:items-center gap-2">
+                    <div class="text-sm font-semibold text-slate-200">🎯 Candidate indicators — measured on the bot's own entries</div>
+                    <div class="text-[11px] text-slate-500 md:ml-auto">{{ bd.n_entries }} closed · {{ bd.n_decisive }} decisive · {{ bd.permutations }} permutations</div>
+                </div>
+                <div class="rounded-lg px-3 py-2 mt-2 text-xs {{ 'bg-emerald-950/30 text-emerald-200 border border-emerald-800' if bd.verdict.startswith('1 ') or bd.verdict.startswith('2 ') else 'bg-slate-900/60 text-slate-300 border border-slate-700' }}">
+                    {{ bd.verdict }}
+                </div>
+                <div class="overflow-x-auto mt-3">
+                <table class="w-full text-xs text-slate-300">
+                    <thead class="text-slate-400"><tr>
+                        <th class="text-left pb-1">candidate</th><th class="text-left pb-1">split</th>
+                        <th class="text-right pb-1">high WR (dec)</th><th class="text-right pb-1">low WR (dec)</th>
+                        <th class="text-right pb-1">lift</th><th class="text-left pb-1 pl-3">verdict</th>
+                    </tr></thead>
+                    <tbody>
+                        {% for row in bd.rows %}
+                        <tr class="border-t border-slate-700/60">
+                            <td class="py-1 text-slate-300">{{ row.label }}</td>
+                            <td class="py-1 text-slate-500">{{ row.high_label }} / {{ row.low_label }}</td>
+                            <td class="py-1 text-right font-mono">{{ '%.1f'|format(row.high.wr) if row.high.wr is not none else '—' }}% ({{ row.high.decisive }})</td>
+                            <td class="py-1 text-right font-mono">{{ '%.1f'|format(row.low.wr) if row.low.wr is not none else '—' }}% ({{ row.low.decisive }})</td>
+                            <td class="py-1 text-right font-mono">{{ '%+.1f'|format(row.lift) if row.lift is not none else '—' }} pp</td>
+                            <td class="py-1 pl-3 {% if row.verdict.startswith('candidate') %}text-emerald-300{% elif row.verdict.startswith('inside noise') %}text-slate-500{% else %}text-amber-300{% endif %}">{{ row.verdict }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+                <div class="text-[11px] text-slate-500 mt-2">
+                    Best lift <span class="font-mono">{{ '%+.1f'|format(bd.observed_max_lift_pp) if bd.observed_max_lift_pp is not none else '—' }} pp</span>
+                    vs the 95th percentile of random-label best lifts
+                    <span class="font-mono">{{ '%+.1f'|format(bd.null_max_lift_95_pp) if bd.null_max_lift_95_pp is not none else '—' }} pp</span>
+                    (global p={{ '%.3f'|format(bd.p_global_wr) if bd.p_global_wr is not none else '—' }}).
+                    A candidate that clears this still needs a dated pre-registration — no engine gate changes from a dashboard panel.
+                </div>
+                {% for sk in bd.skipped %}
+                <div class="text-[11px] text-slate-500 mt-1">Not testable on this book: {{ sk.label }} — {{ sk.reason }}.</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 mb-5 text-[11px] text-slate-500">
+                Definitions: {{ j.definitions.decisive_wr }} · {{ j.definitions.all_in }} · {{ j.definitions.r }} · {{ j.definitions.net }} · {{ j.definitions.mfe_mae }}.
+                Terminal: <span class="font-mono text-slate-400">python3 tools/journal_report.py</span> ·
+                indicator measurement: <span class="font-mono text-slate-400">python3 tools/indicator_lab.py</span> ·
+                method: <span class="font-mono text-slate-400">docs/ANALYSIS-2026-10-23-indicators-and-self-journal.md</span>.
+                Display-only: no order, no write, no engine import.
+            </div>
+            {% else %}
+            <div class="rounded-2xl border border-slate-700 bg-slate-800 p-5">
+                <div class="text-lg font-semibold text-slate-200">📓 Journal unavailable</div>
+                <div class="text-sm text-slate-400 mt-1">{{ ctx.journal.reason if ctx.journal else 'the read layer did not load' }}</div>
+                <div class="text-xs text-slate-500 mt-2">This tab needs <span class="font-mono">trades.csv</span> and <span class="font-mono">forward_test_log.csv</span>; the other tabs are unaffected.</div>
+            </div>
+            {% endif %}
+        </div>
+        <!-- ================= END JOURNAL TAB ================= -->
+
 
 
         <!-- ================= DETAILS TAB (original dashboard) ================= -->
@@ -1540,7 +1879,7 @@ HTML_TEMPLATE = """
 
     </div>
     <script>
-    var TABS = ['simple', 'chart', 'boxes', 'details'];
+    var TABS = ['simple', 'chart', 'boxes', 'journal', 'details'];
     function showTab(name) {
         TABS.forEach(function(t) {
             var panel = document.getElementById('panel-' + t);
@@ -1562,7 +1901,7 @@ HTML_TEMPLATE = """
             var saved = localStorage.getItem('gold_tab');
             if (TABS.indexOf(saved) >= 0) start = saved;
         } catch(e) {}
-        // Also allow ?tab=simple|chart|boxes|details deep links
+        // Also allow ?tab=simple|chart|boxes|journal|details deep links
         try {
             var params = new URLSearchParams(window.location.search);
             var wanted = params.get('tab');
@@ -1852,6 +2191,56 @@ def chart_context(group=None, boxes_status=None):
         return {"ok": False, "reason": f"chart read failed: {exc}"}
 
 
+_journal_cache = {"trades_key": None, "at": 0.0, "report": None}
+
+
+def journal_context(status=None, log_tail=None):
+    """The self-journal read for the 📓 tab (display-only, cached ~2 min).
+
+    The expensive part (join 695 ledger rows to 50k bars, compute 17 candidate
+    series, run the permutation guard) is rebuilt only when a trade closes or
+    the cache ages out. The open trade and the skip counts are refreshed on
+    every request because they are cheap and move minute to minute.
+    """
+    if JN is None:
+        return {"ok": False, "reason": f"journal.py unavailable: {_JN_IMPORT_ERROR}"}
+    if PR is None:
+        return {"ok": False, "reason": "journal needs pressure.py for the shared parsers"}
+    import time as _time
+    now = _time.time()
+    key = _file_key(TRADES_FILE_PATH)
+    cached = _journal_cache["report"]
+    fresh = (cached is not None and key == _journal_cache["trades_key"]
+             and (now - _journal_cache["at"]) < JOURNAL_CACHE_SECONDS)
+    if not fresh:
+        try:
+            report = JN.build(PR.read_rows(LOG_FILE_PATH), PR.read_rows(TRADES_FILE_PATH),
+                              None,
+                              PR.read_rows(SKIP_FILE_PATH) if os.path.isfile(SKIP_FILE_PATH) else [],
+                              cost=JN.COST_USD, permutations=0)
+            scored = [e for e in report["entries"] if e["era"] == "struct-stop"]
+            report["board"] = JN.indicator_board(scored, permutations=JOURNAL_PERMUTATIONS)
+            _journal_cache.update({"trades_key": key, "at": now, "report": report})
+            cached = report
+        except Exception as exc:
+            return {"ok": False, "reason": f"journal build failed: {exc}"}
+    report = dict(cached)
+    try:
+        report["skips"] = JN.skips(PR.read_rows(SKIP_FILE_PATH) if os.path.isfile(SKIP_FILE_PATH) else [])
+    except Exception:
+        pass
+    price = None
+    for row in (log_tail or []):          # newest first from the page's tail read
+        price = PR.parse_float(row.get("Close"))
+        if price:
+            break
+    try:
+        report["open"] = JN.open_entry(report.get("series"), status or {}, JN.COST_USD, price=price)
+    except Exception:
+        report["open"] = None
+    return JN.dashboard_view(report)
+
+
 def open_trade_read(status, log_tail):
     """Unrealized progress of the open trade in $ and R (last logged close as price)."""
     if PR is None or not status.get("trade_active"):
@@ -1990,6 +2379,10 @@ def index():
         except Exception as exc:
             ctx["volatility"] = {"verdict": "unknown", "label": "Check unavailable", "icon": "❓", "headline": f"Simple summary failed: {exc}", "sub": "", "action": "", "factors": [], "counts": {"red":0,"amber":0,"green":0}, "volatile": False, "should_avoid": False, "as_of": ""}
             ctx["simple"] = {"mode": "paper", "equity": status.get("equity"), "market_sentences": [f"Simple summary failed: {exc}"], "bot_next": "—", "today_line": "—", "human_tip": "—", "stale_note": None, "as_of": ""}
+    try:
+        ctx["journal"] = journal_context(status, recent_rows)
+    except Exception as exc:
+        ctx["journal"] = {"ok": False, "reason": f"journal context failed: {exc}"}
     trade_read = open_trade_read(status, recent_rows)
     stale, stale_age = _stale_info(status.get("last_update"))
     hold_minutes = _hold_minutes(status.get("entry_time")) if status.get("trade_active") else None

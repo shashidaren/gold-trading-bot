@@ -165,8 +165,22 @@ class BoxReadTests(unittest.TestCase):
         self.assertTrue("box frozen at the break" in html or "no break to retest yet" in html)
         # the alert panel is a preview, never a sender, and one of the two states shows
         self.assertTrue("Would send now" in html or "Held" in html)
-        # a new tab must not break the switch itself (2026-10-23: chart added)
-        self.assertIn("var TABS = ['simple', 'chart', 'boxes', 'details']", html)
+        # a new tab must not break the switch itself (2026-10-23: chart + journal)
+        self.assertIn("var TABS = ['simple', 'chart', 'boxes', 'journal', 'details']", html)
+
+    def test_the_dashboard_renders_the_journal_tab(self):
+        os.environ["GOLD_DATA_DIR"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        import dashboard
+        html = dashboard.app.test_client().get("/?tab=journal").get_data(as_text=True)
+        for needle in ("Self-journal", 'id="panel-journal"', "Decisive win rate — current rule",
+                       "Candidate indicators — measured on the bot's own entries",
+                       "Newest pages", "What the journal noticed",
+                       "no engine gate changes from a dashboard panel",
+                       "Display-only: no order, no write, no engine import"):
+            self.assertIn(needle, html)
+        # display-only: no form, and the journal never offers an action button
+        self.assertNotIn("<form", html)
+        self.assertNotIn("Send order", html)
 
     def test_the_dashboard_renders_the_chart_tab(self):
         os.environ["GOLD_DATA_DIR"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
