@@ -109,6 +109,7 @@ snapshot block, still said FRESH.
 | **Large-N replay over broker M1 history** | `python3 tools/history_to_log.py mt5_history.csv --out history_utc.csv`, then `python3 tools/strategy_lab.py --bars history_utc.csv` |
 | **Boxes now + does box theory pay?** | `python3 tools/box_report.py` (`--root DIR`, `--spread $`, `--json`) — live 20-bar/1h/4h/prior-day boxes with structural stop/TP per edge, plus the measured breakout/fade verdict. In the browser: the dashboard's **📦 Boxes & Timing** tab (`?tab=boxes`) renders the same read plus the condition checklist. Read-only, display-only (`docs/ANALYSIS-2026-10-20-box-theory-manual-trading.md` §6) |
 | **Box chop + retest + how loud the alert is** | `python3 tools/box_report.py --alert-scan` — the live boxes, the measured "is it choppy?" read (recent 24 h vs the span in view), the frozen-box retest state, and a replay of how many Telegram notices the current rule would have sent (`--alert-days N`). Read-only, ~25 s. `docs/ANALYSIS-2026-10-21-box-chop-retest-alerts.md` |
+| **Session watch plan (07:00 / 13:00 UTC)** | `python3 tools/box_alert.py --plan --dry-run` (the exact message, nothing sent) · `--plan` (send if an anchor is due; `--loop` runs it automatically) · `--no-plan` (break notices only). Display-only: no order, no gate; deduped per date+session in the notifier's state file. `docs/PROPOSAL-2026-10-23-telegram-routing.md` |
 | **Box-watch Telegram notice (optional sidecar)** | `python3 tools/box_alert.py --once --dry-run` (the decision + the exact text, nothing sent) · `--test` (prove the bot/chat) · `--quiet` (the autosync `🔔` line: `disabled` / `not configured` / `Telegram pair found · notifier not running` / `running` / `notifier STOPPED`, states in `docs/AUTOSYNC.md` §3) · `--loop` (what `deploy/boxalert.service` runs). Reads the pair and its knobs from `/opt/gold/.env` itself, so no `set -a` step. Display-only: no order, and the only file it writes is its own state (dedupe + heartbeat) |
 | **Market context (tape / gates / §7 era / calibration)** | `python3 tools/pressure_report.py` (`--root DIR`, `--era structstop|maxhold|075|all`, `--json`) — the same read-only layer the dashboard renders |
 | **Where did strong (8/8) signals head? (rough estimate)** | `python3 tools/signal_outlook.py --root .` (`--era structstop|075|all`, `--json`) — forward-walk cone + base rates per side/era; display-only, `docs/ANALYSIS-2026-10-19-signal-outlook.md` |
@@ -154,6 +155,10 @@ snapshot block, still said FRESH.
 - `TWELVE_DATA_API_KEY`
 - `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`
 - `MT5_FEED_FILE` (optional; default `/opt/gold/mt5_last_candle.json`)
+- `GOLD_TELEGRAM_KINDS` (optional; `trade,exit,skip,risk,feed` subset, `none` = engine silent;
+  **unset = every message, unchanged**) — see `docs/PROPOSAL-2026-10-23-telegram-routing.md`
+- `GOLD_BOX_ALERTS` / `GOLD_BOX_ALERT_DAILY_CAP` / `GOLD_BOX_ALERT_*_COOLDOWN_MIN` (optional
+  box notifier; `0` disables it)
 
 ### Era timeline (UTC)
 
@@ -179,6 +184,7 @@ snapshot block, still said FRESH.
 | 2026-10-19 18:10 UTC (data refresh, **no runtime change**) | Checked-in book 636 closes; struct-stop n=139 (39W/65L/34BE/1TIME), mechanical guard PASS, interim §7 SCREEN MET (SL share 46.76%, gross −0.071R, 37.50% decisive). PASS still needs n≥150 + Wilson LB >32.1%; 11 trades remain and current LB is 28.8%. Gap-ride count remains at threshold 2/2 (#595/#610); no gap-through or damage. Quote logger 6.1 days, 5/14 complete days, 1/2 weekends, median $0.55. Scheduled 21:00 judgement pending. |
 | 2026-10-19 21:00 UTC (struct-stop time-gate judgement, **docs only; no runtime change**) | Judged the latest available synced snapshot at 18:10: n=139, geometry PASS, SCREEN MET, PASS not met. Recorded the explicit gap-ride counting rule; 2/2 scheduled-closure rides fire the pre-registered REVERT trigger despite $0 realized gap damage. The prescribed gap guard is not operationally defined (cutoff/open-position policy missing), and host data/executable are unverified, so no revert, guard, deployment, or 0.25 ATR test was made. New evidence/blocker: `docs/REVIEW-2026-10-19-struct-stop-judgement.md`. |
 | 2026-10-20 08:59 UTC (post-gate data refresh, **docs only; no runtime change**) | Checked-in book 644 closes (128W/277L/237BE/2TIME); struct-stop era grown to n=147 (43W/66L/37BE/1TIME), guard still PASS (0 inside level, 81.6% level-bound, +0.50 ATR clearance, 3.29 ATR risk). The n=150 arm **lapsed with the 10-19 time gate** and is not re-opened by the grown sample; the recorded judgement (SCREEN MET at n=139, PASS unavailable, gap trigger fired) stands. Post-gate readings: SL/day 5.50, SL share 44.90%, scratch 25.17%, gross −0.028R, decisive 39.45% [30.8–48.8]; gross era −$23.43. Gap rides unchanged at 2/2; quote logger 6.7 days, 6/14 complete, 1/2 weekends, $0.55 median. No guard, revert, test, or deploy. Evidence: `docs/REVIEW-2026-10-20-post-gate-refresh.md`. |
+| 2026-10-23 (Telegram routing + watch plan, **message policy only; no runtime/strategy change**) | Owner: the box-watch notice is buried in ~82 messages/day and staring at the screen for it is a long wait. Measured 10 trading days to 10-23: **36.8 skip notices/day (45% of the traffic)**, 14 entries, 14 exits, 4.1 BE-armed, 8 digests, ≈5.1 box notices (worst day 101). **Shipped:** `engine.py` tags every message with a kind (`trade/exit/skip/risk/feed`) and `GOLD_TELEGRAM_KINDS` selects which are sent — unset = today's behaviour byte for byte, `none` = silent, a typo falls back to everything; the filter never touches the trading path or the CSVs. `tools/autosync.sh` digest is rate-limited by `GOLD_DIGEST_EVERY_HOURS` (default 12, `0` = old 3-hourly) with an **incident bypass that always sends at once**, routine digests delivered silently, and a new `🧾 trades:` line summarising closes since the last digest. `pressure.box_plan_next/box_plan_text` + `tools/box_alert.py --plan` (also run inside `--loop`) send **one session watch plan at 07:00 and 13:00 UTC** — levels, both alert prices, what is blocking, ATR-percentile/tick-volume *context* and the 0-of-8 no-edge footer — deduped per (date, session), nothing sent if the box slept through the window or the market is shut. Traffic ≈82 → ≈7–9/day. Smoke **Scenario X** (routing, digest blocks, anchors, dedupe, failed-send retry). `engine.py`/`pressure.py` change means the engine restarts on deploy; the plan needs `deploy/boxalert.service` installed (still optional). Evidence: `docs/PROPOSAL-2026-10-23-telegram-routing.md`. Nothing in §4 moves; the §7 gap trigger and gap-guard blocker are untouched. |
 | 2026-10-23 11:59 UTC (journal + indicator audit, **display-only; no runtime change**) | **695 closed** (140W/300L/253BE/2TIME, 31.8% dec [27.6–36.3], net −$649.24 at $0.40), **198 in struct-stop era** (55W/89L/53BE/1TIME, 38.2% [30.7–46.3], net −$131.63), BUY #697 open @ $4 027.91. `check_data` 0 fail/8 warn, `handoff_check` FRESH, `check_structural_stop` PASS (0 inside), `check_gap_rides` **3/2 REACHED** (+#687 SELL 2026-10-22, no gap-through). New `tools/journal.py` self-journal (BUY vs SELL, ATR/session/hour buckets, 11 lab indicators with Fisher p) + `docs/INDICATOR-AUDIT-2026-10-23.md` — no extra indicator clears the 5 pp + side-split bar; strongest hints ATR-percentile quiet 55.6% vs volatile 31.5% (p=0.014) and volume spike 45% vs thin 20.5% (p=0.031 whole book) are context only. Dashboard Journal tab added (`pressure.journal_read` + `_extra_indicators_series`, `?tab=journal`), like Simple/Boxes/Chart it restarts the dashboard only (`docs/AUTOSYNC.md`). No engine/filter/gate/exit/sizing change; gap-guard blocker unchanged. |
 
 ## 1. Where things stand (as of **2026-10-23 — latest data through 11:59 UTC**)
@@ -216,6 +222,8 @@ The shipped defaults are M5 and 140 bars. Nothing here changes the open struct-s
 fired §7 gap trigger, or any threshold in §4.
 
 **Box watch, chop read and Telegram notifier (2026-10-21, display + tooling only):** asked whether the BUY/SELL watch cards could be improved, whether the tape is choppy, and for a Telegram message when the indicators line up. Three additions, all display-only: **(1)** a measured chop read (`pressure.box_chop`) — at the 14:59 snapshot **14 of 18 breaks in the last 24 h closed back inside within 15 min (78%) vs a 74% baseline**, so chop is *normal*, while the tape is genuinely range-bound (efficiency ratio 0.04/0.02) and the 20-bar box is compressed (3.0 ATR vs a 4.7 median); **(2)** retest tracking on a box **frozen at the break** (`pressure.box_retest`: `extended`/`retesting`/`held`/`failed`) — 94% of breaks are retested within 30 bars (median 3) and entering the held retest measured **59.0% vs a 57.2% reference, the same −$0.31/trade** as entering the break; **(3)** an optional Telegram notifier (`tools/box_alert.py`, `deploy/boxalert.service`) that sends one rate-limited message when the checklist, a fresh break, ≤10%-of-R geometry and no-chase all line up — measured volume **5.1/day** over a 7-day replay. **Both new reads were tested as filters and both came back negative** (a 10 pp "chop filter" found on overlapping events vanished and partly reversed under the one-position convention — the same trap as 09-28 pooled momentum). They gate nothing, they never touch `engine.py`, and the numbers travel with every read: `docs/ANALYSIS-2026-10-21-box-chop-retest-alerts.md`.
+
+**Telegram routing (2026-10-23, message policy only — no engine logic, gate or parameter change):** the owner asked to keep Telegram for the indicator notices only. Measured on the 10 trading days to 10-23 the chat carried **≈82 messages/day (worst 101)**, of which **36.8/day were cooldown/blackout skip notices** and ≈5.1/day were the box-watch notice. Now: the engine's messages carry a kind and `GOLD_TELEGRAM_KINDS` in `/opt/gold/.env` selects them (unset = unchanged, recommended `none` or `feed,risk`); the autosync digest is routine-twice-daily (`GOLD_DIGEST_EVERY_HOURS=12`), silent, with a new `🧾 trades:` trade report, and **incidents still send immediately and buzz**; the optional box notifier also sends a **07:00 / 13:00 UTC session watch plan** (levels, both alert prices, blockers, measured context, no-edge footer). Expected traffic ≈7–9/day. This changes nothing about what the engine trades, and it does not loosen the alert rule — the plan and the notice both carry the measured 0-of-8 verdict. `docs/PROPOSAL-2026-10-23-telegram-routing.md`; smoke Scenario X.
 
 **Journal + indicator audit (2026-10-23, display-only, no engine change):** owner asked for "more indicators?" and a self-journalling BUY/SELL tracker. **Shipped:** `tools/journal.py` — the self-journal (gross/net, BUY vs SELL, hour/session/weekday, RSI/ATR/wick/EMA geometry, streak, plus a lab that computes BB %B, MACD hist, Stoch %K, ADX, CCI, Donchian 20, ATR percentile, volume ratio, EMA slope, trend strength, BB width from the log alone). **Result on the live era (n=198, 38.2% dec):** no extra indicator clears the repo's adoption bar (n≥25, ≥5 pp, same direction within BUY and within SELL, holds in an up-tape subperiod, P/L/trade not worse than -$0.10). The two closest hints — **ATR percentile quiet <25th 55.6% vs volatile >75th 31.5% (Δ33.7 pp, p=0.014)** and **volume spike >1.3× 46.2% vs thin 20.5% (Δ24.7 pp, p=0.23; whole book 45.0% vs 20.5% p=0.031)** — are now shown as *context* in the dashboard Journal tab; volume is tick volume, not traded volume, so VWAP stays out. Other classics (Bollinger, MACD, Stoch, ADX, CCI, Donchian, BB width) test as side-proxies or noise. Audit doc: `docs/INDICATOR-AUDIT-2026-10-23.md`. **Dashboard Journal tab (display-only):** `pressure.journal_read()` + `pressure._extra_indicators_series()` wired into `dashboard.py` (`?tab=journal`), with gross vs net, buy vs sell bars, recent 30/10, session/ATR/hour splits, and last-bar BB/Stoch/ATR-pctile/MACD/Donchian reads. Like the Simple/Boxes/Chart tabs, a dashboard change restarts the dashboard only.
 
@@ -525,6 +533,26 @@ that doc):
 
 ## 6. Next steps (in order)
 
+**Telegram routing + session watch plan (2026-10-23): owner sign-off, then a normal deploy.**
+The engine change (`GOLD_TELEGRAM_KINDS`) means **`goldbot` restarts** on deploy; it is a message
+filter, not a strategy change, and with the knob unset the behaviour is identical. To actually
+get the intended chat (≈7–9 messages/day instead of ≈82) the owner must, after sign-off, put
+`GOLD_TELEGRAM_KINDS=none` (or `feed,risk` to keep ops alerts) and optionally
+`GOLD_DIGEST_EVERY_HOURS=12` in `/opt/gold/.env` — no code deploy is needed for those two
+values, but nothing changes without them. **The twice-daily watch plan (07:00 / 13:00 UTC) needs
+`deploy/boxalert.service` installed**; the unit is still optional and not installed by this
+change, so without it neither the plan nor the instant notice is sent (the digest would say
+`box alerts: Telegram pair found · notifier not running`). Prove it first with
+`python3 tools/box_alert.py --plan --dry-run` and `--test`. Revert is `.env`-only:
+unset the knob, `GOLD_DIGEST_EVERY_HOURS=0`, `--no-plan`. Full record + measured volume table:
+`docs/PROPOSAL-2026-10-23-telegram-routing.md`. **If the unit is never installed**, the plan can
+still be driven from cron (`*/5 7,13 * * * cd /opt/gold && GOLD_DATA_DIR=/opt/gold python3
+tools/box_alert.py --plan`), because it needs no daemon — only a run inside the 15-minute anchor
+window, and its dedupe makes extra runs harmless; the instant break notice is the part that needs
+`--loop`. The digest's `🔔` line now ends with `last plan … · next … UTC`, so a plan that never
+fires is visible without checking the box. This changes nothing in the struct-stop window,
+the fired §7 closure-gap trigger, or the still-blocked gap guard.
+
 **Chart & Placement tab (2026-10-23): review the tab, then deploy dashboard-only after sign-off**
 (`DASH_CHANGED` — the dashboard restarts, `goldbot` does not; a local render is
 `GOLD_DATA_DIR=. python3 dashboard.py`). It changes no gate, parameter or exit. The one thing it does
@@ -736,6 +764,8 @@ python3 tools/check_structural_stop.py            # stop-vs-level invariant (pos
 python3 tools/check_gap_rides.py                   # §7 closure-gap trigger: rides over a closure + the damage facts
 python3 tools/handoff_check.py                    # this file vs the data (FRESH); --update after a refresh
 python3 tools/xm_quote_report.py --quiet          # "not collecting yet" until mt5quotes-gold is installed; never errors
+GOLD_DATA_DIR=. python3 tools/box_alert.py --plan --dry-run  # the 07:00/13:00 watch-plan message, sent to nobody
+python3 tools/box_alert.py --quiet                # the digest's 🔔 line, now ending with the plan state
 python3 tools/pressure_report.py                 # dashboard read layer end to end (tape/gates/§7 era/calibration)
                                                   #   smoke Scenario U pins its mirrors to engine/trade_filter
 python3 tools/strategy_lab.py --bars forward_test_log.csv > /dev/null   # history mode still runs end to end on real bars
@@ -844,7 +874,8 @@ tools/broker_time.py    the EU/US DST rule for XM's server clock (verified only 
 tools/box_report.py   live boxes + the measured box verdict, the chop/retest read and `--alert-scan`
                    (how many Telegram notices the current rule would have sent)
 tools/box_alert.py    OPTIONAL display-only Telegram notifier: the same pressure.box_alert() decision
-                   the dashboard previews, rate-limited; writes only its own state (deploy/boxalert.service)
+                   the dashboard previews, rate-limited, PLUS the 07:00/13:00 UTC session watch
+                   plan (--plan, also run by --loop); writes only its own state (deploy/boxalert.service)
 tools/history_to_log.py broker-history (server time) -> validated UTC bars for `strategy_lab --bars`
 tools/             other analysis / integrity / report scripts (not on the hot path)
 /opt/gold/         live deploy root (autosync from main; never hand-edit)
@@ -875,7 +906,9 @@ tools/             other analysis / integrity / report scripts (not on the hot p
   `/opt/gold/.env` (put overrides there, not in the unit), and says `running` only while the loop's heartbeat
   is fresh: `Telegram pair found · notifier not running` = not installed, `notifier STOPPED` = it died (states:
   `docs/AUTOSYNC.md` §3). Test before installing:
-  `python3 tools/box_alert.py --once --dry-run`, then `--test` (no `set -a; . ./.env` needed). Volume measured at **5.1 messages/day**
+  `python3 tools/box_alert.py --once --dry-run`, then `--test` (no `set -a; . ./.env` needed). Since
+  2026-10-23 the unit has **two jobs**: the rate-limited break notice and the twice-daily session
+  watch plan (07:00 / 13:00 UTC; `--no-plan` drops the second). Volume measured at **5.1 messages/day**
   (`tools/box_report.py --alert-scan`); `GOLD_BOX_ALERT_DAILY_CAP` is the knob that binds.
 - A `dashboard.py` / `pressure.py` change is a **dashboard-only** deploy (`DASH_CHANGED`): the dashboard
   service restarts, `goldbot` does not. Tabs are `Simple` (default, plain-English volatility guard — green/amber/red, `should I trade now?`), `Chart & Placement` (`?tab=chart`, price chart + entry/stop/target + cost ruler), `Boxes & Timing` (`?tab=boxes`) and `Full` (all gates); preference is stored in `localStorage` + `?tab=` deep links, and `?tf=1|5|15` picks the chart timeframe. For a local render, point the reader at a checkout instead of the
