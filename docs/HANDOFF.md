@@ -112,6 +112,7 @@ snapshot block, still said FRESH.
 | **Box-watch Telegram notice (optional sidecar)** | `python3 tools/box_alert.py --once --dry-run` (the decision + the exact text, nothing sent) · `--test` (prove the bot/chat) · `--quiet` (the autosync `🔔` line: `disabled` / `not configured` / `Telegram pair found · notifier not running` / `running` / `notifier STOPPED`, states in `docs/AUTOSYNC.md` §3) · `--loop` (what `deploy/boxalert.service` runs). Reads the pair and its knobs from `/opt/gold/.env` itself, so no `set -a` step. Display-only: no order, and the only file it writes is its own state (dedupe + heartbeat) |
 | **Market context (tape / gates / §7 era / calibration)** | `python3 tools/pressure_report.py` (`--root DIR`, `--era structstop|maxhold|075|all`, `--json`) — the same read-only layer the dashboard renders |
 | **Where did strong (8/8) signals head? (rough estimate)** | `python3 tools/signal_outlook.py --root .` (`--era structstop|075|all`, `--json`) — forward-walk cone + base rates per side/era; display-only, `docs/ANALYSIS-2026-10-19-signal-outlook.md` |
+| Chart & Placement tab read layer | `python3 tools/test_manual_chart.py` (32 hermetic tests; the tab itself is `?tab=chart`, `?tf=1\|5\|15`) |
 | Loser features | `python3 tools/analyze_losers.py` |
 | Engine regression | `python3 tools/smoke_test.py` |
 | Force autosync now | `sudo /opt/gold/tools/autosync.sh` |
@@ -198,6 +199,20 @@ The pre-registered response is **REVERT with the gap guard first**; therefore th
 **The dashboard pressure composite remains a side proxy, not a signal.** The re-join at n=160 is still collinear with side and has no within-side `against` bucket (BUY 67 aligned / 4 mixed; SELL 86 aligned / 3 mixed). The owner's manual pressure/hold observation remains a separate, unmeasured hypothesis. The signal-outlook read still shows no directional edge after an 8/8 signal (50.4% [42–59] trade-way at 30m, median +0.02R; 50.7% [42–59] at 60m at n=139). These are base rates for manual context, never a forecast, entry gate, sizing, or hold-past-stop input.
 
 **Box theory (manual, unmeasured in the ledger):** asked 2026-10-20 whether boxes can be used for manual trades. Measured on the same tape (`tools/box_report.py`, `docs/ANALYSIS-2026-10-20-box-theory-manual-trading.md`): breakout and fade entries land on or below the driftless reference at both box sizes, and 74–75% of breaks close back inside within 15 min. **Verdict: box = a place to put a stop, not a signal.** Display/advice only — no gate, no runtime change; manual box trades are not in `trades.csv` and are not evidence until logged (bar: n≥100, positive after spread). The dashboard renders the same read in its **📦 Boxes & Timing** tab (`?tab=boxes`) — boxes, the seven-condition checklist, the setup card and the measured footer.
+
+**Chart & Placement tab (2026-10-23, display-only, no deploy action yet):** a fourth dashboard tab
+(`?tab=chart`, `chart.py`) draws the recent tape as candles (M1/M5/M15 toggle), overlays the same
+`pressure.box_geometry()` levels the Boxes tab reads, shades the sessions and the engine's blackout
+windows, and prints — per side — the entry, stop (outside the *far* box edge) and target (one box
+width) with the spread as a share of R. It exists because the dashboard had no price chart at all and
+because geometry, not prediction, is what survives in this repo's own measurements. **It adds no
+indicator that has not been measured:** Fibonacci, pivots, round numbers, VWAP, volume profile,
+trendlines, Ichimoku and MACD are deliberately absent (unmeasured, or undrawable on a tick-volume
+feed, or subjective), and the tab says so in its own copy. The cost ruler is arithmetic only. Like
+every other panel it is display-only: no gate, no order, no write, no `engine.py` import
+(`docs/PROPOSAL-2026-10-23-manual-chart-tab.md`; tests `tools/test_manual_chart.py`, 32 hermetic).
+The shipped defaults are M5 and 140 bars. Nothing here changes the open struct-stop window, the
+fired §7 gap trigger, or any threshold in §4.
 
 **Box watch, chop read and Telegram notifier (2026-10-21, display + tooling only):** asked whether the BUY/SELL watch cards could be improved, whether the tape is choppy, and for a Telegram message when the indicators line up. Three additions, all display-only: **(1)** a measured chop read (`pressure.box_chop`) — at the 14:59 snapshot **14 of 18 breaks in the last 24 h closed back inside within 15 min (78%) vs a 74% baseline**, so chop is *normal*, while the tape is genuinely range-bound (efficiency ratio 0.04/0.02) and the 20-bar box is compressed (3.0 ATR vs a 4.7 median); **(2)** retest tracking on a box **frozen at the break** (`pressure.box_retest`: `extended`/`retesting`/`held`/`failed`) — 94% of breaks are retested within 30 bars (median 3) and entering the held retest measured **59.0% vs a 57.2% reference, the same −$0.31/trade** as entering the break; **(3)** an optional Telegram notifier (`tools/box_alert.py`, `deploy/boxalert.service`) that sends one rate-limited message when the checklist, a fresh break, ≤10%-of-R geometry and no-chase all line up — measured volume **5.1/day** over a 7-day replay. **Both new reads were tested as filters and both came back negative** (a 10 pp "chop filter" found on overlapping events vanished and partly reversed under the one-position convention — the same trap as 09-28 pooled momentum). They gate nothing, they never touch `engine.py`, and the numbers travel with every read: `docs/ANALYSIS-2026-10-21-box-chop-retest-alerts.md`.
 
@@ -507,6 +522,16 @@ that doc):
 
 ## 6. Next steps (in order)
 
+**Chart & Placement tab (2026-10-23): review the tab, then deploy dashboard-only after sign-off**
+(`DASH_CHANGED` — the dashboard restarts, `goldbot` does not; a local render is
+`GOLD_DATA_DIR=. python3 dashboard.py`). It changes no gate, parameter or exit. The one thing it does
+*not* do yet is **log manual trades**: until those are recorded with box high/low, side, entry, stop,
+target and exit reason, the advice in the tab cannot become evidence and the box doc's bar
+(n≥100 manual trades, positive expectancy after the measured spread) stays unreachable. That logger
+is the owner's call and would write its own file, never `trades.csv`. Also open: whether to draw the
+open paper trade (entry/SL/TP/ratchet) on the chart — cheap, and useful for seeing why the engine did
+what it did.
+
 Dashboard + notifier PR: review the read-only panels and the alert rule, then deploy
 **dashboard-only** after sign-off; no engine restart. The 2026-10-20 manual watch cards
 (BUY/SELL price references, hypothetical stop/target, costed payoff, stale/chase warnings)
@@ -802,6 +827,9 @@ dashboard.py       Flask status page (read-only)
 pressure.py        read-only market-context layer for the dashboard (tape pressure, engine-gate read,
                    location/risk, portfolio state, §7 era card, feed health, box geometry/chop/retest
                    and the pure box-alert decision + rate limiter) — stdlib only, no writes
+chart.py           read-only chart + placement layer for the Chart & Placement tab: M1->M5/M15
+                   aggregation, pixel-space chart primitives (candles/levels/session bands), the cost
+                   ruler, and the entry/stop/target cards — stdlib only, no writes, no engine import
 tools/strategy_lab.py   canonical costed/stateful/era-matched replay (exit+gate decisions)
 tools/check_structural_stop.py  ledger-side invariant guard for the 2026-10-05 change (+ deploy-boundary evidence)
 tools/handoff_check.py  machine-checks the snapshot block at the top of THIS file (autosync digest: 📝 handoff)
@@ -847,7 +875,7 @@ tools/             other analysis / integrity / report scripts (not on the hot p
   `python3 tools/box_alert.py --once --dry-run`, then `--test` (no `set -a; . ./.env` needed). Volume measured at **5.1 messages/day**
   (`tools/box_report.py --alert-scan`); `GOLD_BOX_ALERT_DAILY_CAP` is the knob that binds.
 - A `dashboard.py` / `pressure.py` change is a **dashboard-only** deploy (`DASH_CHANGED`): the dashboard
-  service restarts, `goldbot` does not. Tabs are `Simple` (default, plain-English volatility guard — green/amber/red, `should I trade now?`) ↔ `Full` (all gates); preference is stored in `localStorage` + `?tab=details` deep link. For a local render, point the reader at a checkout instead of the
+  service restarts, `goldbot` does not. Tabs are `Simple` (default, plain-English volatility guard — green/amber/red, `should I trade now?`), `Chart & Placement` (`?tab=chart`, price chart + entry/stop/target + cost ruler), `Boxes & Timing` (`?tab=boxes`) and `Full` (all gates); preference is stored in `localStorage` + `?tab=` deep links, and `?tf=1|5|15` picks the chart timeframe. For a local render, point the reader at a checkout instead of the
   live root: `GOLD_DATA_DIR=. python3 dashboard.py` (also `GOLD_LOG_FILE`, `GOLD_TRADES_FILE`,
   `GOLD_SKIP_FILE`, `GOLD_STATUS_FILE`); defaults stay `/opt/gold/*`.
 - Logs: `journalctl -u goldbot -f`; autosync log `/var/log/gold_autosync.log`.
