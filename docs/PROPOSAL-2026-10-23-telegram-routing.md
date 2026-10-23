@@ -165,9 +165,11 @@ inside within 15 min. This is a heads-up, not a signal.
    ```
 
    The instant break notice is the part that genuinely needs `--loop` (it is evaluated on
-   every closed bar). The autosync digest's `🔔` line now ends with the plan state
-   (`last plan 10-23 07:01 UTC (London open) · next NY open 13:00 UTC`), so a plan that never
-   fires is visible from the one message you already read.
+   every closed bar). **Every** `🔔` state now ends with the plan status
+   (`last plan 10-23 07:01 UTC (London open) · next NY open 13:00 UTC`), including
+   `notifier not running` — so the cron-only setup reads honestly: *the break notice is off,
+   the plan is alive*. A plan that never fires is therefore visible from the one message you
+   already read, and a dead plan cannot piggyback on a healthy-looking digest.
 
 **Revert:** unset `GOLD_TELEGRAM_KINDS` (engine back to every message) and set
 `GOLD_DIGEST_EVERY_HOURS=0` (digest every run). No code rollback required; `--no-plan` drops the

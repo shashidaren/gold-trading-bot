@@ -3291,6 +3291,7 @@ _args_x = types.SimpleNamespace(state=_plan_state, dry_run=False, log="x", statu
                                 trades="x", spread=None, env_file="/dev/null")
 _messages = []
 _orig_send = BA.send_telegram
+_orig_read_status = BA.read_status
 BA.send_telegram = lambda text, **k: (_messages.append(text), (True, "sent"))[1]
 _orig_alert_env = os.environ.get("GOLD_BOX_ALERTS")
 os.environ.pop("GOLD_BOX_ALERTS", None)
@@ -3325,6 +3326,7 @@ try:
 
 finally:
     BA.send_telegram = _orig_send
+    BA.read_status = _orig_read_status
     if _orig_alert_env is not None:
         os.environ["GOLD_BOX_ALERTS"] = _orig_alert_env
     shutil.rmtree(os.path.dirname(_plan_state), ignore_errors=True)
@@ -3343,6 +3345,13 @@ _running_x = BA.digest_line({"loop": {"heartbeat": "2026-10-23 09:00:00", "inter
                              "plan": {"2026-10-23 London open": "2026-10-23 07:01:02"}},
                             None, now=datetime(2026, 10, 23, 9, 1, 0),
                             env={"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "c"})
+_cron_x = BA.digest_line({"sent": {}, "count": 0, "day": None, "last_sent": None,
+                          "history": [], "plan": {"2026-10-23 London open": "2026-10-23 07:01:02"}},
+                         None, now=datetime(2026, 10, 23, 9, 0, 0),
+                         env={"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "c"})
+check("X: a cron-driven plan is visible even though no --loop ever ran",
+      "notifier not running" in _cron_x and "last plan 10-23 07:01 UTC (London open)" in _cron_x
+      and "next NY open 13:00 UTC" in _cron_x, _cron_x)
 check("X: the running digest line carries the plan phrase",
       _running_x.startswith("box alerts: running") and "last plan" in _running_x, _running_x)
 

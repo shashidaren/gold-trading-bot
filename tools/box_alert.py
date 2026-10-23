@@ -405,13 +405,21 @@ def digest_line(state, decision=None, now=None, env=None, env_file=None):
     tail = f"last {last['ts'][5:16]} UTC {last['side']}" if last else "none sent yet"
     sent = f"{today} sent today · {tail}"
     health, beat = loop_health(state, now)
+    plan = plan_status(state, now)
     if health == "never":
-        # The pair alone is not a notifier: without a running --loop nothing is sent.
+        # The pair alone is not a sender: without a --loop nothing sends the instant
+        # notice. The session plan is different - it needs no daemon, so it can be (and,
+        # on a box with no unit, has to be) driven from cron. Reporting "not running"
+        # without saying which of the two is alive would make a working plan invisible
+        # and a dead one look the same (2026-09-29: silence is not health).
         return ("box alerts: Telegram pair found · notifier not running "
-                "(optional: install deploy/boxalert.service)"
-                + (f" · {sent}" if (last or today) else ""))
+                "(optional: install deploy/boxalert.service; the session plan also runs "
+                "from cron)"
+                + (f" · {sent}" if (last or today) else "")
+                + f" · {plan}")
     if health == "stopped":
-        return f"box alerts: notifier STOPPED (last heartbeat {beat:%m-%d %H:%M} UTC) · {sent}"
+        return (f"box alerts: notifier STOPPED (last heartbeat {beat:%m-%d %H:%M} UTC) · "
+                f"{sent} · {plan}")
     if decision and decision.get("fire"):
         sent += " · a candidate is live now"
     return f"box alerts: running · {sent} · {plan_status(state, now)}"
