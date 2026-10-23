@@ -446,7 +446,7 @@ managed.
 `check_structural_stop.py` **PASS** at n=198 (0 inside level, 83.3% level-bound, +0.50 ATR clearance);
 `check_gap_rides.py` still **2/2**; `pressure_report.py` era n=198 **SCREEN MET** (all bars);
 `test_manual_chart` 32, `test_box_alert` 34, `test_box_report` 14, `test_box_watch` 6,
-`test_signal_outlook` 9, `test_dashboard_context` 15, `test_indicators` 17, `test_journal` 16;
+`test_signal_outlook` 9, `test_dashboard_context` 15, `test_indicators` 17, `test_journal` 17;
 `smoke_test.py` PASSED (A–X); `handoff_check.py` **FRESH (0 advisory drift)**.
 
 **Next.** Owner reviews the tab and the analysis; if approved it is a **dashboard-only** deploy
