@@ -361,3 +361,95 @@ each state: pair-not-running, running (a real `--loop` reading `.env` with nothi
 disabled, not configured; the token appeared in no output. **Not run:** a real Telegram send and
 anything on the production host. After merge, the next autosync deploys it (tools-only: smoke gate
 runs, engine not restarted; an installed box-alert unit is restarted).
+
+## 2026-10-23 — self-journal, success rate, and a measured answer on "more indicators" (display/tooling only, no runtime change)
+
+**No `engine.py` / `trade_filter.py` change, no parameter, gate, exit or cost change, no deploy, no
+order.** The open structural-stop window, the recorded n=139 judgement and the fired §7 closure-gap
+trigger are untouched; the gap guard is still the owner's undefined blocker.
+
+**Question.** "Can we add more indicators to improve the bot, and can it self-journal the BUY/SELL and
+show the success rate?" Answered by building the missing **measurement** layer first, because the repo's
+own rule is that an indicator which has not been measured is decoration.
+
+**What was added.**
+1. **`indicators.py`** — 18 causal candidate fields in 15 families the engine does **not** use: ADX/DMI
+   (+DI, −DI, ADX), MACD histogram (exported MACD/signal), Bollinger %B and bandwidth, Stochastic %K,
+   Keltner position, Donchian position, Kaufman efficiency ratio, ATR percentile, rolling RVOL, RSI slope
+   and candle anatomy (body, close-location, gap in ATR). Stdlib only, no I/O, each row sees only bars
+   before it. `engine_parity()` recomputes ATR/RSI/EMA against the logged values (compare at **i−1**: the
+   log row carries the previous bar's state); measured deltas ATR 0.002/0.007, RSI 0.029/0.058,
+   EMA50 0.0024/0.005. EMA200 parity is approximate only (the engine seeds differently), and no Wilder
+   ATR/RSI is claimed — the engine uses simple means.
+2. **`journal.py`** — the self-journal. One record per closed trade with its pre-entry context (18 fields),
+   outcome, **R recovered from the reward leg** (`|TP−Entry|/1.5`, so the BE ratchet cannot fake risk),
+   MFE/MAE measured from bars after the entry bar to the exit bar, and a one-line thesis. Reports decisive
+   WR with a Wilson CI, all-in rate, R/trade, payoff, profit factor, drawdown, streaks; per side, session
+   and day; **give-backs**; **skips**; and `indicator_board()` — bucket lifts against a **family-wise
+   permutation floor**. Cost is charged on every closed trade including scratches.
+3. **Dashboard 📓 Journal tab** (`?tab=journal`, display-only, 120 s cache): the method note, the book and
+   era tables, the give-backs, the open trade, the candidate scoreboard and the noise floor. It imports
+   no engine module, writes nothing and places no order.
+4. **`tools/journal_report.py`** and **`tools/indicator_lab.py`** — the owner-facing read-only CLIs
+   (`--csv` export, `--json`, `--board-era`, `--era`, `--tape-era`, `--horizon`, `--stride`,
+   `--permutations`).
+5. **Tests:** `tools/test_indicators.py` **17**, `tools/test_journal.py` **16**, and the dashboard-context
+   suite grew to **15** (five-tab assertion + a Journal-tab test); smoke **Scenario X** (9 checks).
+   `tools/test_dashboard_context.py` hard-codes the tab list, so every new tab must update it in the same
+   commit — that is why the tab and its assertion shipped together.
+
+**The measured answer: no new entry indicator on this evidence.**
+- **Entries (the bot's own era, n=198 / 144 decisive, 200 permutations):** every one of the 18 candidates
+  is inside the noise. Best bucket lift **RVOL +17.3 pp**; the best lift random labels produce is
+  **+25.0 pp** — family-wise **p = 0.525** (R: 0.315 vs 0.463, p 0.510). Per-feature p ≈ 0.16 is not
+  evidence; only the family-wise statistic decides. Reported lifts: ATR percentile −13.4, BB bandwidth
+  −12.1, Donchian −11.9, %B −11.4, %K −10.0, gap +10.0, MACD hist −8.3, body +7.6, close-location +6.9,
+  ER +6.5, Keltner −6.3, +DI +1.2, ADX −0.4. Several are **negative**, i.e. the "better-looking" reading
+  is *worse* in this sample.
+- **Whole tape (30-minute forward windows, stride 30, 1,606 windows, gaps censored, overlapping):**
+  always-BUY 47.1% [44.7–49.6]; median |drift| 2.50 ATR. All nine directional rules land at
+  **48.8–50.0%** (EMA 49.1, MACD 49.5, ADX 49.4, %K/%D 49.4, BB %B 49.1, Donchian 48.8, ER 50.0,
+  RSI slope 49.9, body 49.3), every CI straddles 50, and none survives the multiple-look correction.
+- **Regime:** higher ADX/ATR% is *quieter* (ADX ≥ 20 → 2.33 ATR median |drift| vs 2.86 below), and no
+  bucket lifts drift. "Trending" is not a licence to expect follow-through.
+- **Excluded on purpose:** VWAP and volume profile (the feed carries **tick** volume), Fibonacci, pivots
+  and round numbers (unmeasured), Ichimoku and chart patterns (subjective/undrawable on this feed),
+  divergences (not causal in the way they are usually drawn). The analysis doc says so.
+
+**The journal's read of the book (checked-in data through 2026-10-23 11:59 UTC).**
+- **695 closed:** 140W/300L/253BE/2TIME; decisive **31.8%** [27.6–36.3]; all-in 20.1%; **−0.13R**/trade;
+  net **−$649.24** at $0.40 (gross −$371.24); max drawdown −$657.44; payoff 1.55; PF 0.72; median hold
+  10 min; longest stop-loss run 13.
+- **Current rule (n=198):** decisive **38.2%** [30.7–46.3], −0.046R, gross −$52.43, net −$131.63,
+  era drawdown $117.02. **Before the rule (n=497):** 28.7%, −0.18R, −$517.61.
+- **Side:** BUY 27.4% / −0.22R / −$424.88 (325) vs SELL 36.0% / −0.06R / −$224.36 (370). The SELL book is
+  less bad, not good.
+- **Session:** Asia/rollover 37.5% / −0.04R / −$136.00 (297) vs London/NY 27.4% / −0.20R / −$513.24 (398).
+- **Give-backs:** **140/695 (20.1%)** were once **+0.75R** ahead and did not finish there — 133 scratched on
+  the ratchet, 6 stopped after profit, 46 winners ran ≥ 0.5R against; median peak +1.06R. Read **before**
+  anyone quotes it as an argument against the 0.75R ratchet: the panel exists because the ratchet turned
+  about **+$222** of running profit into scratches, and the counterfactual (hold to TP) was never tested
+  costed/stateful. It is a record of what happened, not a proposal.
+- **Skips (last 24 h):** 35 — SL cooldown 24, blackout 11; all-time 1,607 (cooldown 1,090, blackout 470,
+  daily loss 23, ATR 14).
+- **Open:** BUY #697 @ 4027.91, stop 4019.21, target 4040.96, risk $8.70 — shown, never counted in a rate.
+
+**Why the numbers are trustworthy.** R comes from the reward leg, not the stop (the ratchet rewrites
+stops); MFE/MAE start after the entry bar; context uses the last bar *strictly before* the entry minute;
+the open trade is excluded from every rate; Wilson intervals everywhere; the scoreboard's noise floor is
+recomputed per run with a fixed seed (7) and a family-wise max — the same multiple-testing trap that
+produced the 2026-09-28 pooled-momentum "edge". Tests are hermetic (synthetic tapes, no wall clock,
+`GOLD_DATA_DIR=.`), and the dashboard suite runs in a temp venv because system Python is PEP-668
+managed.
+
+**Verification.** `py_compile` all touched modules OK; `check_data.py` **0 fail / 8 warn**;
+`check_structural_stop.py` **PASS** at n=198 (0 inside level, 83.3% level-bound, +0.50 ATR clearance);
+`check_gap_rides.py` still **2/2**; `pressure_report.py` era n=198 **SCREEN MET** (all bars);
+`test_manual_chart` 32, `test_box_alert` 34, `test_box_report` 14, `test_box_watch` 6,
+`test_signal_outlook` 9, `test_dashboard_context` 15, `test_indicators` 17, `test_journal` 16;
+`smoke_test.py` PASSED (A–X); `handoff_check.py` **FRESH (0 advisory drift)**.
+
+**Next.** Owner reviews the tab and the analysis; if approved it is a **dashboard-only** deploy
+(`DASH_CHANGED` — `goldbot` is not restarted). Nothing is queued for the engine. Re-open the indicator
+question only on a substantially larger era with `python3 tools/indicator_lab.py --permutations 500`,
+and then only through a dated pre-registration — not by adding a line to `engine.py`.

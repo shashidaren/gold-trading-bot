@@ -17,22 +17,22 @@ from the first commit.
 <!-- HANDOFF-SNAPSHOT machine-checked by tools/handoff_check.py; refresh with --update -->
 | key | value |
 |---|---|
-| as_of_utc | 2026-10-21 14:59 |
-| data_collection | unknown |
-| closed_trades | 661 |
-| outcomes | 130W/287L/242BE/2TIME |
-| decisive_wr_pct | 31.2 |
-| engine_ledger_usd | 134.89 |
-| true_equity_usd | 117.94 |
+| as_of_utc | 2026-10-23 11:59 |
+| data_collection | 321 |
+| closed_trades | 695 |
+| outcomes | 140W/300L/253BE/2TIME |
+| decisive_wr_pct | 31.8 |
+| engine_ledger_usd | 145.72 |
+| true_equity_usd | 128.76 |
 | cost_usd_per_side | 0.20 |
-| net_pnl_usd_at_cost | -646.46 |
+| net_pnl_usd_at_cost | -649.24 |
 | cutover_utc | 2026-10-06 03:00 |
-| structstop_era_trades | 164 |
-| structstop_era_outcomes | 45W/76L/42BE/1TIME |
-| log_bars | 47379 |
-| log_last_bar_utc | 2026-10-21 14:59 |
-| skip_rows | 1555 |
-| open_trade | none |
+| structstop_era_trades | 198 |
+| structstop_era_outcomes | 55W/89L/53BE/1TIME |
+| log_bars | 49956 |
+| log_last_bar_utc | 2026-10-23 11:59 |
+| skip_rows | 1607 |
+| open_trade | BUY #697 @ 4027.91 |
 <!-- /HANDOFF-SNAPSHOT -->
 
 This block is the **only machine-checked part of the file**: `python3 tools/handoff_check.py`
@@ -60,6 +60,7 @@ snapshot block, still said FRESH.
    python3 tools/handoff_check.py       # is THIS file still true AND still whole? STALE -> `--update`, then rewrite §1/§4/§5/§6 (§11)
    python3 tools/win_rate_report.py
    python3 tools/momentum_regime.py     # regime/side + the 09-28 hypothesis & its bar
+   python3 tools/journal_report.py      # self-journal: every BUY/SELL, its context and the success rate
    python3 tools/check_structural_stop.py   # struct-stop guard: must PASS (it also proves the deploy boundary)
    python3 tools/check_gap_rides.py     # §7 closure-gap revert trigger: the count + the damage facts
    ```
@@ -108,6 +109,8 @@ snapshot block, still said FRESH.
 | **Measured spreads / cost / server clock / contract spec** (once `mt5quotes-gold` runs) | `python3 tools/xm_quote_report.py` (`--quiet` = the digest line) |
 | **Large-N replay over broker M1 history** | `python3 tools/history_to_log.py mt5_history.csv --out history_utc.csv`, then `python3 tools/strategy_lab.py --bars history_utc.csv` |
 | **Boxes now + does box theory pay?** | `python3 tools/box_report.py` (`--root DIR`, `--spread $`, `--json`) — live 20-bar/1h/4h/prior-day boxes with structural stop/TP per edge, plus the measured breakout/fade verdict. In the browser: the dashboard's **📦 Boxes & Timing** tab (`?tab=boxes`) renders the same read plus the condition checklist. Read-only, display-only (`docs/ANALYSIS-2026-10-20-box-theory-manual-trading.md` §6) |
+| **Self-journal + success rate** | `python3 tools/journal_report.py` (`--csv PATH`, `--json`, `--board-era structstop\|pre\|all`, `--permutations N`) — every closed BUY/SELL with its pre-entry context, R, MFE/MAE, per side/session/day, give-backs and the measured candidate scoreboard. Display-only, read-only |
+| **Do more indicators help?** | `python3 tools/indicator_lab.py` (`--era`, `--tape-era`, `--horizon`, `--stride`, `--permutations`, `--json`) — entry-bucket lift vs a family-wise permutation floor, a forward walk of every directional rule, and the regime/|drift| read. Read-only, exits 0 |
 | **Box chop + retest + how loud the alert is** | `python3 tools/box_report.py --alert-scan` — the live boxes, the measured "is it choppy?" read (recent 24 h vs the span in view), the frozen-box retest state, and a replay of how many Telegram notices the current rule would have sent (`--alert-days N`). Read-only, ~25 s. `docs/ANALYSIS-2026-10-21-box-chop-retest-alerts.md` |
 | **Box-watch Telegram notice (optional sidecar)** | `python3 tools/box_alert.py --once --dry-run` (the decision + the exact text, nothing sent) · `--test` (prove the bot/chat) · `--quiet` (the autosync `🔔` line: `disabled` / `not configured` / `Telegram pair found · notifier not running` / `running` / `notifier STOPPED`, states in `docs/AUTOSYNC.md` §3) · `--loop` (what `deploy/boxalert.service` runs). Reads the pair and its knobs from `/opt/gold/.env` itself, so no `set -a` step. Display-only: no order, and the only file it writes is its own state (dedupe + heartbeat) |
 | **Market context (tape / gates / §7 era / calibration)** | `python3 tools/pressure_report.py` (`--root DIR`, `--era structstop|maxhold|075|all`, `--json`) — the same read-only layer the dashboard renders |
@@ -159,6 +162,7 @@ snapshot block, still said FRESH.
 
 | When | What |
 |------|------|
+| 2026-10-23 11:59 UTC (data refresh + **display/tooling only; no runtime change**) | Checked-in book 695 closes (140W/300L/253BE/2TIME; 31.8% decisive [27.6–36.3]), engine ledger $145.72, true equity $128.76, net −$649.24 at $0.40; open **BUY #697 @ $4027.91**. Struct-stop era n=198 (55W/89L/53BE/1TIME; 38.19% decisive [30.7–46.3], gross R/trade −0.046, gross −$52.43, DD $117.02); guard PASS (0 inside level, 83.3% level-bound, +0.50 ATR clearance, 3.32 ATR risk). Gap rides still **2/2**; logger 7/14 days. **New:** self-journal + indicator lab (`journal.py`, `indicators.py`, 📓 Journal tab, two CLIs). Measured verdict: none of 18 candidates separates the bot's entries beyond chance (best +17.3 pp vs +25.0 pp random-label 95th, p=0.525), and no directional rule beats a coin flip on 1,606 forward windows. No guard, revert, test, deploy or engine change. Evidence: `docs/ANALYSIS-2026-10-23-indicators-and-self-journal.md`. |
 | 2026-10-21 ~23:00 UTC (**ops/tooling fix, no runtime change**) | **`🔔 box alerts: not configured` was false.** The 18:00 digest, the first to run the phase PR #49 added (deployed 17:46), reported no `TELEGRAM_BOT_TOKEN/CHAT_ID` in the very message that pair had delivered. `autosync.sh` keeps the pair in its own unexported `TG_TOKEN`/`TG_CHAT`, and `box_alert.py` read only its inherited environment. Fix: the tool reads its own keys from `$GOLD_DATA_DIR/.env` (environment wins, like the engine's `load_dotenv`), and autosync passes `GOLD_DATA_DIR=$GOLD_DIR`. The line now also says whether the notifier is **running** (a `--loop` heartbeat in its own state file); otherwise "pair found" would have read as a healthy notifier. Also fixed: the documented `GOLD_BOX_ALERT_GLOBAL_COOLDOWN_MIN` was never read, and the message footer ignored the knobs. A pre-existing failing test that read the live CSVs was made hermetic. `test_box_alert.py` 34 pass, smoke PASSED, sandboxed real `autosync.sh` shows every state. `engine.py`/`trade_filter.py`/`pressure.py`/`dashboard.py` untouched; the notifier remains **not installed** unless the owner installs it. |
 | 2026-10-21 11:59 UTC (session refresh, **docs only; no runtime change**) | Re-ran every session check on the 11:59 UTC snapshot (collection 303): `check_data.py` 0 fail / 8 warn; `handoff_check.py` FRESH after snapshot + §1 refresh; `check_structural_stop.py` PASS at n=160 (0 inside level); `check_gap_rides.py` still 2/2, 0 gapped through, 0 worse exit; `pressure_report.py` SCREEN MET on all five checks, era n=160 (44W/74L/41BE/1TIME), decisive WR 37.3% [29.1–46.3], R/trade −0.065; `xm_quote_report.py` 7.8 days (7/14 complete, 1/2 weekends), median spread $0.55 vs the $0.40 assumption. Snapshot block + §1 refreshed, old §1 archived to `docs/HANDOFF-HISTORY.md`. No guard, revert, test, or deploy. |
 | 2026-10-19 (dashboard PR) | Read-only risk/map/costed-evidence panels; no runtime change or deploy claimed. |
@@ -180,27 +184,29 @@ snapshot block, still said FRESH.
 | 2026-10-19 21:00 UTC (struct-stop time-gate judgement, **docs only; no runtime change**) | Judged the latest available synced snapshot at 18:10: n=139, geometry PASS, SCREEN MET, PASS not met. Recorded the explicit gap-ride counting rule; 2/2 scheduled-closure rides fire the pre-registered REVERT trigger despite $0 realized gap damage. The prescribed gap guard is not operationally defined (cutoff/open-position policy missing), and host data/executable are unverified, so no revert, guard, deployment, or 0.25 ATR test was made. New evidence/blocker: `docs/REVIEW-2026-10-19-struct-stop-judgement.md`. |
 | 2026-10-20 08:59 UTC (post-gate data refresh, **docs only; no runtime change**) | Checked-in book 644 closes (128W/277L/237BE/2TIME); struct-stop era grown to n=147 (43W/66L/37BE/1TIME), guard still PASS (0 inside level, 81.6% level-bound, +0.50 ATR clearance, 3.29 ATR risk). The n=150 arm **lapsed with the 10-19 time gate** and is not re-opened by the grown sample; the recorded judgement (SCREEN MET at n=139, PASS unavailable, gap trigger fired) stands. Post-gate readings: SL/day 5.50, SL share 44.90%, scratch 25.17%, gross −0.028R, decisive 39.45% [30.8–48.8]; gross era −$23.43. Gap rides unchanged at 2/2; quote logger 6.7 days, 6/14 complete, 1/2 weekends, $0.55 median. No guard, revert, test, or deploy. Evidence: `docs/REVIEW-2026-10-20-post-gate-refresh.md`. |
 
-## 1. Where things stand (as of **2026-10-21 — latest data through 14:59 UTC**)
+## 1. Where things stand (as of **2026-10-23 — latest data through 11:59 UTC**)
 
-**Current stance (session refresh; judgement recorded 2026-10-19 21:19 UTC):** paper-only; `engine.py` remains `TRADING_MODE = "FORWARD_TEST"`. No engine, filter, parameter, gate or deployment change was made in this session. The checked-in data is the latest available synced snapshot, not a host heartbeat; production process/revision and any unsynced rows remain operator-only and unverified.
+**Current stance (self-journal / indicator-measurement session; judgement recorded 2026-10-19 21:19 UTC):** paper-only; `engine.py` remains `TRADING_MODE = "FORWARD_TEST"`. No engine, filter, parameter, gate or deployment change was made. The checked-in data is the latest available synced snapshot, not a host heartbeat; production process/revision and any unsynced rows remain operator-only and unverified.
 
-**The book:** **661 closed trades** (130W/287L/242BE/2TIME; 31.2% decisive [26.9–35.8]), engine ledger **$134.89**, true equity **$117.94**, net **−$646.46** at the assumed $0.40 round trip (−0.135R/trade). **No paper trade is open** in the checked-in status (the 11:59 snapshot's BUY #659 closed during the 14:59 rows). `data_collection` reads `unknown` in the machine block because this branch's history does not contain the host's `data collection N` commits; it recomputes on the box. Quote logging has 7.8 days (7/14 complete UTC days, 1/2 complete weekends) and a first-look median $0.55 spread/round trip; on 79 matched entry/exit pairs the measured round trip averages/medians $0.55 vs the assumed $0.40, so $0.40 remains the registered cost assumption until the 14-day/two-weekend target is met and re-costed via `win_rate_report.py --spread`.
+**The book:** **695 closed trades** (140W/300L/253BE/2TIME; **31.8% decisive [27.6–36.3]**), engine ledger **$145.72**, true equity **$128.76**, net **−$649.24** at the assumed $0.40 round trip (−0.135R/trade). **One paper trade is open** in the checked-in status: **BUY #697 @ $4027.91** (stop $4019.21, target $4040.96, entered 11:17 UTC). `data_collection` = **321**. Quote logging has 7.8 days (7/14 complete UTC days, 1/2 complete weekends) and a first-look median $0.55 spread/round trip; on 79 matched entry/exit pairs the measured round trip averages/medians $0.55 vs the assumed $0.40, so $0.40 remains the registered cost assumption until the 14-day/two-weekend target is met and re-costed via `win_rate_report.py --spread`.
 
-**The structural-stop evaluation was judged at its registered time gate (2026-10-19 21:00 UTC).** That judgement used the latest then-available snapshot, **n=139**; the n=150 arm was never reached, and under the registered "whichever comes first" wording the arm **lapsed with the gate** — later era growth is an observation, not a re-opened PASS/SCREEN judgement (see `docs/REVIEW-2026-10-20-post-gate-refresh.md`). The era has since grown to **n=164** (45W/76L/42BE/1TIME) on the post-gate rows. The mechanical guard still **PASSES**: 0 post-cutover stops inside the tested level, 81.7% level-bound, median risk 3.3 ATR.
+**The structural-stop evaluation was judged at its registered time gate (2026-10-19 21:00 UTC).** That judgement used the latest then-available snapshot, **n=139**; the n=150 arm was never reached, and under the registered "whichever comes first" wording the arm **lapsed with the gate** — later era growth is an observation, not a re-opened PASS/SCREEN judgement (see `docs/REVIEW-2026-10-20-post-gate-refresh.md`). The era has since grown to **n=198** (55W/89L/53BE/1TIME; 13 entry dates) on the post-gate rows. The mechanical guard still **PASSES**: 0 post-cutover stops inside the tested level, **83.3% level-bound**, median clearance +0.50 ATR, median risk 3.32 ATR.
 
-Readings on n=164 (observation only — the recorded decision is the n=139 one): SL/day **5.85**, SL share **46.3%** (≤47.0%), scratch share **25.6%**, gross R/trade **−0.068R**, decisive WR **37.2% [29.1–46.1]**. Gross era P&L is **−$63.25**, era drawdown $113.31. The recorded judgement still stands: **SCREEN MET, PASS NOT MET** on the sample the bar was judged on, and **no demonstrated edge**. Do not quote the grown-sample numbers as a verdict.
+Readings on n=198 (observation only — the recorded decision is the n=139 one): SL/day **5.93**, SL share **44.95%** (≤47.0%), scratch share **26.77%**, gross R/trade **−0.046R** ($−0.26/trade ÷ mean 1R $5.82, win_rate_report scale), decisive WR **38.19% [30.7–46.3]**. Gross era P&L is **−$52.43**, era drawdown **$117.02**. The recorded judgement still stands: **SCREEN MET, PASS NOT MET** on the sample the bar was judged on, and **no demonstrated edge**. Do not quote the grown-sample numbers as a verdict.
 
-**The separate §7 closure-gap REVERT trigger remains FIRED.** Counting a post-cutover trade open across a >5-minute log hole classified as a scheduled daily/weekly closure gives **2/2** (#595, #610); no new ride has been added since the post-gate refresh. Neither ride reopened through its stop or exited worse; one stop was ratcheted to entry, and no weekend closure has been ridden. These damage facts do not add a condition to the registered count. The bar and counting rule are recorded in `docs/REVIEW-2026-10-19-struct-stop-judgement.md` §3.
+**Self-journal + indicator measurement (2026-10-23, display-only; no runtime change):** asked whether more indicators could improve the bot and whether it can self-journal its BUY/SELL decisions and report a success rate. Added **`indicators.py`** (15 candidate families — ADX/DMI, MACD, Bollinger %B/bandwidth, Stochastic, Keltner, Donchian, efficiency ratio, ATR percentile, RVOL, RSI slope, body/close-location/gap — deterministic, stdlib, causal), **`journal.py`** (one record per closed trade with the pre-entry context, outcome, R, MFE/MAE and a one-line thesis; decisive WR with Wilson CI, all-in rate, R/trade, payoff, profit factor, drawdown and streaks; per side/session/day; give-backs; the open trade), the **📓 Journal** dashboard tab (`?tab=journal`), and `tools/journal_report.py` / `tools/indicator_lab.py`. **The measured answer to "more indicators" is NO on this sample.** On the bot's own 198-entry era (144 decisive) the best bucket lift is RVOL **+17.3 pp**, while random labels produce a best lift of **+25.0 pp** (family-wise p = 0.525); on **1,606** whole-tape 30-minute windows all nine directional rules sit at **48.8–50.0%**, every CI straddles 50, and none survives the multiple-look correction. The journal's own read: book decisive **31.8%** at −0.13R/trade and net −$649.24; current-rule era **38.2%** at −0.03R/trade and −$131.63 net; **140 of 695 trades (20.1%)** were once **+0.75R** ahead and did not finish there (133 scratched on the ratchet, 6 gave the gain back and hit the stop). No engine change, no deploy. Method, tables and limits: `docs/ANALYSIS-2026-10-23-indicators-and-self-journal.md`.
+
+**The separate §7 closure-gap REVERT trigger remains FIRED.** Counting a post-cutover trade open across a >5-minute log hole classified as a scheduled daily/weekly closure gives **2/2** (#595, #610); the 34 trades added since the post-gate refresh added no ride. Neither ride reopened through its stop or exited worse; one stop was ratcheted to entry, and no weekend closure has been ridden. These damage facts do not add a condition to the registered count. The bar and counting rule are recorded in `docs/REVIEW-2026-10-19-struct-stop-judgement.md` §3.
 
 The pre-registered response is **REVERT with the gap guard first**; therefore the 0.25 ATR level test is not eligible. The guard is still not operationally specified (no approved cutoff or open-position policy), and the production host/data state is unverified. **The owner was asked directly on 2026-10-20 and chose to leave it undefined for now:** scope "leave it blocked for now", schedule source "not sure yet", cutoff 30 min *if* a window is ever adopted — a preference attached to no adopted scope, **not** an approved `N` (`docs/REVIEW-2026-10-20-post-gate-refresh.md` §4; do not re-ask the same questions). This session records the refreshed state but does **not** invent a guard, revert code, or deploy. **Next eligible action:** the owner's own dated pre-registration of the guard (including cutoff, schedule source, and whether it blocks new entries or also closes open paper positions), then a reviewed guard change and the prescribed revert in order; verify fresh host data and executable before any deployment. Until then, the checked-in engine still contains the structural stop and remains paper-only.
 
-**Accounting incident reconciled (2026-10-19):** malformed rows #626–645 were quarantined from backed-up evidence using `tools/repair_phantom_ledger.py`; the checked-in ledger is now 657 valid closed trades and passes `check_data.py` (0 fail; 8 documented warnings). The raw-row reconciliation and evidence are in `docs/REVIEW-2026-10-19-negative-balance.md` and `incident_backups/`. **Host-side verification of the running executable/revision remains operator-only**; do not infer production process health from this checkout alone.
+**Accounting incident reconciled (2026-10-19):** malformed rows #626–645 were quarantined from backed-up evidence using `tools/repair_phantom_ledger.py`; the checked-in ledger is now 695 valid closed trades and passes `check_data.py` (0 fail; 8 documented warnings). The raw-row reconciliation and evidence are in `docs/REVIEW-2026-10-19-negative-balance.md` and `incident_backups/`. **Host-side verification of the running executable/revision remains operator-only**; do not infer production process health from this checkout alone.
 
-**The dashboard pressure composite remains a side proxy, not a signal.** The re-join at n=160 is still collinear with side and has no within-side `against` bucket (BUY 67 aligned / 4 mixed; SELL 86 aligned / 3 mixed). The owner's manual pressure/hold observation remains a separate, unmeasured hypothesis. The signal-outlook read still shows no directional edge after an 8/8 signal (50.4% [42–59] trade-way at 30m, median +0.02R; 50.7% [42–59] at 60m at n=139). These are base rates for manual context, never a forecast, entry gate, sizing, or hold-past-stop input.
+**The dashboard pressure composite remains a side proxy, not a signal.** The re-join at n=198 is still collinear with side and has no within-side `against` bucket (BUY 75 aligned / 5 mixed; SELL 113 aligned / 5 mixed). The owner's manual pressure/hold observation remains a separate, unmeasured hypothesis. The signal-outlook read still shows no directional edge after an 8/8 signal (50.4% [42–59] trade-way at 30m, median +0.02R at n=139), and the 2026-10-23 whole-tape walk finds the same ~49–50% for every candidate direction rule. These are base rates for manual context, never a forecast, entry gate, sizing, or hold-past-stop input.
 
 **Box theory (manual, unmeasured in the ledger):** asked 2026-10-20 whether boxes can be used for manual trades. Measured on the same tape (`tools/box_report.py`, `docs/ANALYSIS-2026-10-20-box-theory-manual-trading.md`): breakout and fade entries land on or below the driftless reference at both box sizes, and 74–75% of breaks close back inside within 15 min. **Verdict: box = a place to put a stop, not a signal.** Display/advice only — no gate, no runtime change; manual box trades are not in `trades.csv` and are not evidence until logged (bar: n≥100, positive after spread). The dashboard renders the same read in its **📦 Boxes & Timing** tab (`?tab=boxes`) — boxes, the seven-condition checklist, the setup card and the measured footer.
 
-**Chart & Placement tab (2026-10-23, display-only, no deploy action yet):** a fourth dashboard tab
+**Chart & Placement tab (2026-10-23, display-only, no deploy action yet):** one of the dashboard tabs
 (`?tab=chart`, `chart.py`) draws the recent tape as candles (M1/M5/M15 toggle), overlays the same
 `pressure.box_geometry()` levels the Boxes tab reads, shades the sessions and the engine's blackout
 windows, and prints — per side — the entry, stop (outside the *far* box edge) and target (one box
@@ -306,7 +312,7 @@ evade the SL-based breaker; that breaker is not a data-integrity safeguard.
 | London blackout | 07:55–09:00 UTC, **BUY only** | `trade_filter.py` `BLACKOUT_WINDOWS` |
 | NY / rollover blackouts | both sides | `trade_filter.py` `BLACKOUT_WINDOWS` |
 
-**Current mechanical check (latest checked-in snapshot, 2026-10-20 08:59 UTC):** `tools/check_structural_stop.py` PASS at n=147, with zero post-cutover stops inside the level, 81.6% level-bound, median clearance +0.50 ATR and median risk 3.29 ATR. This verifies geometry only. The time-gate judgement (recorded at n=139) is in §1/§6 and `docs/REVIEW-2026-10-19-struct-stop-judgement.md`: SCREEN MET, PASS not met, and the separate closure-gap REVERT trigger fired; implementation is blocked on the undefined guard rule. The grown n=147 sample is an observation, not a re-judgement (`docs/REVIEW-2026-10-20-post-gate-refresh.md` §3).
+**Current mechanical check (latest checked-in snapshot, 2026-10-23 11:59 UTC):** `tools/check_structural_stop.py` PASS at n=198, with zero post-cutover stops inside the level, 83.3% level-bound, median clearance +0.50 ATR and median risk 3.32 ATR. This verifies geometry only. The time-gate judgement (recorded at n=139) is in §1/§6 and `docs/REVIEW-2026-10-19-struct-stop-judgement.md`: SCREEN MET, PASS not met, and the separate closure-gap REVERT trigger fired; implementation is blocked on the undefined guard rule. The grown n=198 sample is an observation, not a re-judgement (`docs/REVIEW-2026-10-20-post-gate-refresh.md` §3).
 
 **Mirrored, and pinned:** the read-only dashboard layer needs some of these thresholds, so it keeps its own
 copies in `pressure.py` (`docs/ANALYSIS-2026-10-16-dashboard-pressure.md`) — it must not import the engine, and
@@ -382,12 +388,21 @@ entry guard / flat-before-close policy is a named candidate (§5a/REVIEW-10-05
 ## 5. Evidence base (don't re-derive)
 
 Key documents:
+- **`docs/ANALYSIS-2026-10-23-indicators-and-self-journal.md` (latest, display-only):** the self-journal
+  and candidate-indicator measurement. Headline: on the bot's own 198-entry era (144 decisive) **no**
+  candidate separates outcomes beyond the random-label best lift (best bucket RVOL **+17.3 pp** vs a
+  **+25.0 pp** null 95th percentile, family-wise p = 0.525); on 1,606 whole-tape 30-minute windows all
+  nine directional rules sit at **48.8–50.0%**, every CI straddles 50, and none survives the multiple-look
+  correction. Journal at 11:59 UTC: 695 closed (**31.8%** decisive [27.6–36.3], net **−$649.24**), era
+  n=198 (**38.2%** [30.7–46.3], net **−$131.63**), **140/695** once **+0.75R** ahead (133 ratchet
+  scratches, 6 stop-outs after profit). Tools: `journal.py`, `indicators.py`,
+  `tools/journal_report.py`, `tools/indicator_lab.py`, dashboard **📓 Journal** tab. No engine change.
 - **Structural-stop time-gate judgement (recorded 2026-10-19 21:19 UTC; checked-in data through 18:10 UTC on that day, n=139):** `tools/pressure_report.py --root . --era structstop` at the judgement reported all five §7 SCREEN checks inside their bars (B1 5.91 SL/day, B2 46.76% SL share, B3 24.46% scratch share, C1 −0.071R gross, C2 37.50% decisive [28.8–47.1]); **SCREEN MET, PASS NOT MET** (n<150; Wilson LB 28.8% is not >32.1%). Gross era P&L there was −$56.01; at the assumed $0.40 round trip, net −$111.61 (−0.142R/trade); at the quote logger's $0.55 first-look median, −$132.46 (−0.168R/trade). The §7 gap count was **2/2 and the REVERT trigger FIRED**, despite no gap-through or realized gap damage. The pre-registered response requires the gap guard first, but its cutoff/open-position policy is undefined; no code change, deploy, or 0.25 ATR test was made. Full judgement and blocker: `docs/REVIEW-2026-10-19-struct-stop-judgement.md`. **Post-gate refresh (2026-10-20 08:59 UTC, docs only):** era n=147 (43W/66L/37BE/1TIME), guard still PASS (0 inside level, 81.6% level-bound, +0.50 ATR median clearance, 3.29 ATR median risk), gap count still **2/2**, logger 6/14 complete days. Those are observations on a grown sample: the n=150 arm **lapsed with the 10-19 gate** and is not re-opened by crossing it later — see `docs/REVIEW-2026-10-20-post-gate-refresh.md` §3.
 - `docs/ANALYSIS-2026-10-16-dashboard-pressure.md` (**latest, display-only**): documents the dashboard's
   market-context layer (`pressure.py`, `tools/pressure_report.py`) and composite weights. Its dated
   calibration (n=120 struct-stop + n=347 max-hold) found the composite *collinear with side — not
-  separable within-side*; the latest re-join at n=147 confirms the same verdict (BUY pressure 49–81,
-  SELL 14–49, no `against` bucket on either side). The other panels provide setup/location/risk context;
+  separable within-side*; the latest re-join at n=198 confirms the same verdict (BUY 75 aligned / 5 mixed,
+  SELL 113 aligned / 5 mixed, no `against` bucket on either side). The other panels provide setup/location/risk context;
   none authorizes a gate, a change to the judged stop experiment, or the still-blocked gap-guard action.
 - `docs/PREREG-2026-10-15-level-test-0.25.md` (**pre-registration, not deployed**): the 0.25 ATR level test, its bars and REVERT rules. It is **blocked by the fired 10-19 closure-gap trigger** and is not the next eligible change.
 - `docs/ANALYSIS-2026-10-15-stop-loss-rate.md` (**analysis, no runtime change**): "too many stop losses" —
@@ -522,6 +537,16 @@ that doc):
 
 ## 6. Next steps (in order)
 
+**Self-journal + indicator lab (2026-10-23): review, then deploy dashboard-only after sign-off.**
+`journal.py`, `indicators.py`, the dashboard's **📓 Journal** tab (`?tab=journal`) and two read-only
+CLIs (`tools/journal_report.py`, `tools/indicator_lab.py`). It changes no gate, parameter or exit and
+is a **dashboard-only** deploy (`DASH_CHANGED`; `goldbot` is not restarted). The measured answer to
+"add more indicators" is **no on this sample** (§1/§5 and the analysis doc), so nothing is queued for
+the engine. To re-open the question, wait until the era roughly doubles and re-run
+`python3 tools/indicator_lab.py --permutations 500`; a candidate that then clears the noise floor
+becomes a dated pre-registration, never a live tweak. The journal is derived from the tracked files,
+so it cannot drift from the ledger; the open trade is shown but excluded from every rate.
+
 **Chart & Placement tab (2026-10-23): review the tab, then deploy dashboard-only after sign-off**
 (`DASH_CHANGED` — the dashboard restarts, `goldbot` does not; a local render is
 `GOLD_DATA_DIR=. python3 dashboard.py`). It changes no gate, parameter or exit. The one thing it does
@@ -544,9 +569,9 @@ disables it. **Digest-line fix (later 10-21):** the 18:00 digest's `🔔 box ale
 was a wiring bug (autosync never hands its Telegram pair to a child), not a missing pair. After the
 fix merges, expect `🔔 box alerts: Telegram pair found · notifier not running (optional: install
 deploy/boxalert.service)` until the owner installs the unit, then `running · …`
-(`docs/AUTOSYNC.md` §3). The machine snapshot now reflects 2026-10-21 14:59 UTC (661 closed, n=164, no open
-trade); the earlier 08:59/11:59 narratives remain dated assessments, not new experiment
-judgements. **The gap-guard blocker is unchanged** — no runtime change was made.
+(`docs/AUTOSYNC.md` §3). The machine snapshot now reflects 2026-10-23 11:59 UTC (695 closed, era n=198, open
+BUY #697 @ $4027.91); the earlier 08:59/11:59 narratives remain dated assessments, not
+new experiment judgements. **The gap-guard blocker is unchanged** — no runtime change was made.
 
 **Priority incident blocker (2026-10-19):** recovery tool and safeguards are prepared
 for owner merge; full smoke + repair tests pass. Merge alone does not repair the host.
@@ -562,7 +587,7 @@ the detailed evidence and backlog. Dated pre-registrations/reviews are the sourc
 of truth for experiment thresholds; always refresh from current data.
 
 0. **Ops verification first (still open):** the latest checked-in CSV/log reaches
-   2026-10-21 11:59 UTC and its final 60 logged minutes are complete as of that row;
+   2026-10-23 11:59 UTC and its final 60 logged minutes are complete as of that row;
    at this session's documentation time that snapshot is the current one. This does not
    prove the production process/revision or systemd hardening, so confirm the
    heartbeat/alerts/dedup deployment and `mt5.service` hardening **on the host**.
@@ -731,6 +756,9 @@ python3 tools/momentum_regime.py     # same, plus prints the registered bar
 python3 tools/strategy_lab.py --calib-only        # funnel recall must stay ~100% per era
 python3 tools/check_structural_stop.py            # stop-vs-level invariant (post-cutover: 0, PASS) + boundary evidence
 python3 tools/check_gap_rides.py                   # §7 closure-gap trigger: rides over a closure + the damage facts
+python3 tools/journal_report.py                    # self-journal: every BUY/SELL, its context, success rates, scoreboard
+python3 tools/indicator_lab.py                     # "do more indicators help?" on entries + the whole tape
+python3 tools/test_indicators.py && python3 tools/test_journal.py   # 17 + 16 hermetic tests
 python3 tools/handoff_check.py                    # this file vs the data (FRESH); --update after a refresh
 python3 tools/xm_quote_report.py --quiet          # "not collecting yet" until mt5quotes-gold is installed; never errors
 python3 tools/pressure_report.py                 # dashboard read layer end to end (tape/gates/§7 era/calibration)
@@ -827,6 +855,12 @@ dashboard.py       Flask status page (read-only)
 pressure.py        read-only market-context layer for the dashboard (tape pressure, engine-gate read,
                    location/risk, portfolio state, §7 era card, feed health, box geometry/chop/retest
                    and the pure box-alert decision + rate limiter) — stdlib only, no writes
+indicators.py      candidate indicators the engine does NOT use (ADX/DMI, MACD, Bollinger, Stochastic,
+                   Keltner, Donchian, efficiency ratio, ATR percentile, RVOL, candle anatomy) — causal,
+                   stdlib only, no I/O; the measurement layer decides what, if anything, they are worth
+journal.py         read-only self-journal: per-trade context/outcome/R/MFE-MAE, honest success accounting,
+                   per side/session/day, give-backs, open trade, and the permutation-guarded candidate
+                   scoreboard — stdlib only, no writes, no engine import
 chart.py           read-only chart + placement layer for the Chart & Placement tab: M1->M5/M15
                    aggregation, pixel-space chart primitives (candles/levels/session bands), the cost
                    ruler, and the entry/stop/target cards — stdlib only, no writes, no engine import
@@ -840,6 +874,10 @@ tools/xm_quote_report.py  what the logger measured: spreads, cost vs the assumed
 tools/broker_time.py    the EU/US DST rule for XM's server clock (verified only by observed offsets)
 tools/box_report.py   live boxes + the measured box verdict, the chop/retest read and `--alert-scan`
                    (how many Telegram notices the current rule would have sent)
+tools/journal_report.py  the self-journal printed; --csv exports the flat per-trade record
+                   (python3 tools/journal_report.py)
+tools/indicator_lab.py   "does another indicator help?" — entry-bucket scoreboard with a family-wise
+                   permutation guard, a forward-walk on the whole tape, and the regime/|drift| table
 tools/box_alert.py    OPTIONAL display-only Telegram notifier: the same pressure.box_alert() decision
                    the dashboard previews, rate-limited; writes only its own state (deploy/boxalert.service)
 tools/history_to_log.py broker-history (server time) -> validated UTC bars for `strategy_lab --bars`
@@ -875,7 +913,7 @@ tools/             other analysis / integrity / report scripts (not on the hot p
   `python3 tools/box_alert.py --once --dry-run`, then `--test` (no `set -a; . ./.env` needed). Volume measured at **5.1 messages/day**
   (`tools/box_report.py --alert-scan`); `GOLD_BOX_ALERT_DAILY_CAP` is the knob that binds.
 - A `dashboard.py` / `pressure.py` change is a **dashboard-only** deploy (`DASH_CHANGED`): the dashboard
-  service restarts, `goldbot` does not. Tabs are `Simple` (default, plain-English volatility guard — green/amber/red, `should I trade now?`), `Chart & Placement` (`?tab=chart`, price chart + entry/stop/target + cost ruler), `Boxes & Timing` (`?tab=boxes`) and `Full` (all gates); preference is stored in `localStorage` + `?tab=` deep links, and `?tf=1|5|15` picks the chart timeframe. For a local render, point the reader at a checkout instead of the
+  service restarts, `goldbot` does not. Tabs are `Simple` (default, plain-English volatility guard — green/amber/red, `should I trade now?`), `Chart & Placement` (`?tab=chart`, price chart + entry/stop/target + cost ruler), `Boxes & Timing` (`?tab=boxes`), `Journal` (`?tab=journal`, the audit trail + success rates + candidate scoreboard) and `Full` (all gates); preference is stored in `localStorage` + `?tab=` deep links, and `?tf=1|5|15` picks the chart timeframe. For a local render, point the reader at a checkout instead of the
   live root: `GOLD_DATA_DIR=. python3 dashboard.py` (also `GOLD_LOG_FILE`, `GOLD_TRADES_FILE`,
   `GOLD_SKIP_FILE`, `GOLD_STATUS_FILE`); defaults stay `/opt/gold/*`.
 - Logs: `journalctl -u goldbot -f`; autosync log `/var/log/gold_autosync.log`.
@@ -904,6 +942,7 @@ tools/             other analysis / integrity / report scripts (not on the hot p
 | Now | Edge not confirmed — remain paper-only. |
 | **Judged 2026-10-19 21:00 UTC (latest checked-in rows through 18:10; n=139)** | `docs/REVIEW-2026-10-19-struct-stop-judgement.md`: geometry PASS; SCREEN MET; PASS not met. The closure-gap count is 2/2 under the documented rule, so the extra §7 REVERT trigger FIRED. No runtime change was made because the required gap guard has no owner-approved cutoff or open-position policy; the checked-in engine remains on the structural stop, paper-only. |
 | **Post-gate refresh (2026-10-20 08:59 UTC; era n=147)** | `docs/REVIEW-2026-10-20-post-gate-refresh.md`: all session checks pass, era grew to n=147 with bars inside their thresholds and the gap count still 2/2. The n=150 arm **lapsed with the time gate** — do not re-judge PASS on the grown sample; a re-opened arm needs a new dated pre-registration. Blocker unchanged: owner-defined gap guard, then the prescribed revert. |
+| **2026-10-23 (display/tooling only)** | Self-journal + indicator lab shipped: `journal.py`, `indicators.py`, the **📓 Journal** tab and two read-only CLIs; smoke **Scenario X** and 33 new hermetic tests. The measured answer to “add more indicators” is no on the current sample; nothing was added to the engine. Review the tab, then deploy dashboard-only after sign-off. |
 | **Next: owner-defined gap guard, then prescribed REVERT** | Define and pre-register the closure guard's cutoff, schedule source, and action for open positions; verify current host rows and running executable. Only then review the guard change and structural-stop revert in the registered order. **Asked 2026-10-20 — owner left scope blocked and the schedule unresolved (30 min noted only as a preference); no rule exists yet.** | The 0.25 ATR level-test is **blocked by the fired trigger**; do not proceed to it or guess/deploy a guard. |
 | ~2–4 months | Seek 100+ trades across multiple regimes for the first serious edge assessment. |
 | 6–12 months | Consider a separate live-readiness review only if durable positive expectancy after realistic costs is demonstrated and the owner explicitly approves. |
