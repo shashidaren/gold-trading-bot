@@ -2,7 +2,7 @@ import os
 import csv
 import json
 from datetime import datetime, timezone
-from flask import Flask, render_template_string
+from flask import Flask, render_template_string, request
 
 try:  # display-only helper library (see pressure.py's docstring)
     import pressure as PR
@@ -11,6 +11,14 @@ except Exception as _exc:  # never take the dashboard down over the read layer
     _PR_IMPORT_ERROR = str(_exc)
 else:
     _PR_IMPORT_ERROR = ""
+
+try:  # display-only chart + placement read (see chart.py's docstring)
+    import chart as CH
+except Exception as _exc:  # never take the dashboard down over the read layer
+    CH = None
+    _CH_IMPORT_ERROR = str(_exc)
+else:
+    _CH_IMPORT_ERROR = ""
 
 app = Flask(__name__)
 
@@ -83,8 +91,9 @@ HTML_TEMPLATE = """
         <div class="flex items-center gap-2 mb-6 border-b border-slate-800 pb-2">
             <button id="tab-simple" onclick="showTab('simple')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-amber-500 text-slate-900">✨ Simple Summary</button>
             <button id="tab-boxes" onclick="showTab('boxes')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📦 Boxes &amp; Timing</button>
+            <button id="tab-chart" onclick="showTab('chart')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">🧭 Chart &amp; Placement</button>
             <button id="tab-details" onclick="showTab('details')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📊 Full Dashboard</button>
-            <span class="ml-auto text-[11px] text-slate-500 hidden md:inline">Simple is calm/volatile at a glance · Boxes is location + the condition checklist · Full shows every gate. All <span class="text-slate-300">paper only</span> — no real orders.</span>
+            <span class="ml-auto text-[11px] text-slate-500 hidden md:inline">Simple is the mood · Chart shows <em>where</em> a trade would go · Boxes is the checklist · Full shows every gate. All <span class="text-slate-300">paper only</span> — no real orders.</span>
         </div>
 
         <!-- ================= SIMPLE TAB ================= -->
@@ -468,6 +477,281 @@ HTML_TEMPLATE = """
             {% endif %}
         </div>
         <!-- ================= END BOXES TAB ================= -->
+
+
+        <!-- ================= CHART & PLACEMENT TAB ================= -->
+        <div id="panel-chart" class="hidden">
+            {% if ctx.chart and ctx.chart.ok %}
+            {% set c = ctx.chart %}
+            {% set v = c.view %}
+            {% set pv = c.verdict %}
+
+            <!-- Plain-English verdict -->
+            <div class="rounded-2xl border p-5 mb-5
+                {% if pv.tone == 'ok' %} bg-emerald-950/30 border-emerald-700
+                {% elif pv.tone == 'warn' %} bg-amber-950/30 border-amber-700
+                {% elif pv.tone == 'block' %} bg-rose-950/30 border-rose-700
+                {% else %} bg-slate-800 border-slate-700 {% endif %}">
+                <div class="flex flex-col md:flex-row md:items-center gap-4">
+                    <div class="text-4xl">{% if pv.tone == 'ok' %}🧭{% elif pv.tone == 'warn' %}⏳{% elif pv.tone == 'block' %}⛔{% else %}💤{% endif %}</div>
+                    <div class="flex-1">
+                        <div class="text-lg font-semibold">{{ pv.headline }}</div>
+                        <div class="text-sm text-slate-300 mt-1">{{ pv.detail }}</div>
+                        {% if pv.missing %}
+                        <div class="text-xs text-slate-400 mt-2">Not met:
+                            {% for m in pv.missing %}<span class="inline-block px-1.5 py-0.5 rounded bg-slate-900/70 border border-slate-700 mr-1 mb-1">{{ m }}</span>{% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    <div class="text-right text-xs text-slate-400 space-y-1 shrink-0">
+                        <div>close <span class="font-mono text-slate-100">${{ "%.2f"|format(v.close) }}</span></div>
+                        <div>ATR <span class="font-mono text-slate-100">${{ "%.2f"|format(v.atr or 0) }}</span></div>
+                        <div>last bar <span class="font-mono text-slate-200">{{ v.as_of }} UTC</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- The chart -->
+            <div class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 mb-5">
+                <div class="flex flex-wrap items-center gap-2 mb-3">
+                    <h3 class="text-sm font-semibold text-slate-200 mr-auto">Price — the last {{ v.n_candles }} candles</h3>
+                    <span class="text-[11px] text-slate-500">bar size</span>
+                    {% for g in c.groups %}
+                    <a href="?tab=chart&tf={{ g }}"
+                       class="px-2 py-1 rounded text-[11px] font-semibold border
+                       {% if g == c.group %} bg-amber-500 text-slate-900 border-amber-500
+                       {% else %} bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700 {% endif %}">M{{ g }}</a>
+                    {% endfor %}
+                </div>
+
+                <svg viewBox="0 0 {{ v.width }} {{ v.height }}" class="w-full h-auto" preserveAspectRatio="xMidYMid meet" role="img"
+                     aria-label="Gold price chart with box levels and session shading">
+                    <rect x="0" y="0" width="{{ v.width }}" height="{{ v.height }}" fill="#0f172a"/>
+                    <!-- session + stand-aside bands -->
+                    {% for b in v.bands %}
+                    <rect x="{{ b.x0 }}" y="{{ v.plot.t }}" width="{{ b.w }}" height="{{ v.plot.h }}"
+                          fill="{% if b.session == 'Asia' %}#334155{% elif b.session == 'London' %}#3730a3{% elif b.session == 'New York' %}#065f46{% else %}#78350f{% endif %}" opacity="0.30"/>
+                    {% if b.blackout %}
+                    <rect x="{{ b.x0 }}" y="{{ v.plot.t }}" width="{{ b.w }}" height="{{ v.plot.h }}" fill="#ef4444"
+                          opacity="{{ '0.18' if b.blackout == 'both' else '0.09' }}"/>
+                    {% endif %}
+                    {% endfor %}
+                    <!-- grid -->
+                    {% for t in v.ticks %}
+                    <line x1="{{ v.plot.l }}" x2="{{ v.plot.l + v.plot.w }}" y1="{{ t.y }}" y2="{{ t.y }}"
+                          stroke="#334155" stroke-width="0.5" stroke-dasharray="2 5"/>
+                    <text x="{{ v.plot.l + v.plot.w + 6 }}" y="{{ t.y + 3 }}" fill="#64748b" font-size="9" font-family="ui-monospace,monospace">{{ t.label }}</text>
+                    {% endfor %}
+                    <!-- candles -->
+                    {% for k in v.candles %}
+                    <line x1="{{ k.cx }}" x2="{{ k.cx }}" y1="{{ k.y_high }}" y2="{{ k.y_low }}"
+                          stroke="{% if k.up %}#34d399{% else %}#fb7185{% endif %}" stroke-width="0.9"
+                          opacity="{{ '0.4' if k.partial else '0.95' }}"/>
+                    <rect x="{{ k.bx }}" y="{{ k.y_top }}" width="{{ k.w }}" height="{{ k.body_h }}"
+                          fill="{% if k.up %}#34d399{% else %}#fb7185{% endif %}"
+                          opacity="{{ '0.4' if k.partial else '0.95' }}"/>
+                    {% endfor %}
+                    <!-- box / level lines -->
+                    {% for l in v.levels %}
+                    {% if l.in_range %}
+                    <line x1="{{ v.plot.l }}" x2="{{ v.plot.l + v.plot.w }}" y1="{{ l.y }}" y2="{{ l.y }}"
+                          stroke="{% if l.kind == 'engine' %}#fbbf24{% elif l.kind == 'day' %}#22d3ee{% else %}#94a3b8{% endif %}"
+                          stroke-width="{{ '1.3' if l.kind == 'engine' else '0.8' }}"
+                          stroke-dasharray="{% if l.kind == 'engine' %}none{% elif l.kind == 'day' %}1 3{% else %}5 4{% endif %}"
+                          opacity="{{ '0.9' if l.kind == 'engine' else '0.6' }}"/>
+                    <text x="{{ v.plot.l + 4 }}" y="{{ l.y - 3 }}"
+                          fill="{% if l.kind == 'engine' %}#fbbf24{% elif l.kind == 'day' %}#67e8f9{% else %}#94a3b8{% endif %}"
+                          font-size="8.5" font-family="ui-monospace,monospace"
+                          opacity="{{ '0.95' if l.kind == 'engine' else '0.7' }}">{{ l.label }} {{ "%.2f"|format(l.price) }}</text>
+                    {% endif %}
+                    {% endfor %}
+                    <!-- current price -->
+                    <line x1="{{ v.plot.l }}" x2="{{ v.plot.l + v.plot.w }}" y1="{{ v.close_y }}" y2="{{ v.close_y }}"
+                          stroke="#e2e8f0" stroke-width="0.6" stroke-dasharray="1 3" opacity="0.5"/>
+                    <rect x="{{ v.plot.l + v.plot.w + 2 }}" y="{{ v.close_y - 6 }}" width="84" height="12" rx="2" fill="#e2e8f0"/>
+                    <text x="{{ v.plot.l + v.plot.w + 5 }}" y="{{ v.close_y + 3 }}" fill="#0f172a" font-size="8.5"
+                          font-weight="bold" font-family="ui-monospace,monospace">{{ "%.2f"|format(v.close) }}</text>
+                    <!-- offscreen levels: never dropped, pinned to the edge -->
+                    {% for l in v.levels if not l.in_range %}
+                    <text x="{{ v.plot.l + 4 }}" y="{{ 10 if l.offscreen_above else v.height - 12 }}"
+                          fill="#67e8f9" font-size="8.5" opacity="0.75" font-family="ui-monospace,monospace">
+                        {{ '↑' if l.offscreen_above else '↓' }} {{ l.label }} {{ "%.2f"|format(l.price) }} ({{ 'above' if l.offscreen_above else 'below' }} this view)
+                    </text>
+                    {% endfor %}
+                    <!-- times -->
+                    {% for t in v.times %}
+                    <text x="{{ t.x }}" y="{{ v.height - 3 }}" fill="#64748b" font-size="9" text-anchor="middle"
+                          font-family="ui-monospace,monospace">{{ t.label }}</text>
+                    {% endfor %}
+                </svg>
+
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-[11px] text-slate-400">
+                    <span><span class="text-amber-400">━━</span> bot's 20-bar level</span>
+                    <span><span class="text-slate-400">╌╌</span> 1h / 4h box</span>
+                    <span><span class="text-cyan-400">┈┈</span> prior-day high/low</span>
+                    <span><span class="inline-block w-2 h-3 bg-rose-800/60 align-middle"></span> stand aside (both sides)</span>
+                    <span><span class="inline-block w-2 h-3 bg-rose-800/30 align-middle"></span> stand aside (buys only)</span>
+                </div>
+                <p class="text-[11px] text-slate-500 mt-2">
+                    Older bars fade out — the right-most candle is still forming. Levels come from closed bars and roll every bar.
+                    This is the broker's demo GOLD feed (≈$4,000 scale), <span class="text-slate-300">not spot XAUUSD</span>, so it will not match TradingView tick-for-tick.
+                </p>
+            </div>
+
+            <!-- Placement -->
+            <div class="mb-5">
+                <div class="flex items-baseline gap-2 mb-2">
+                    <h3 class="text-lg font-semibold">Where the trade would go</h3>
+                    <span class="text-xs text-slate-500">three numbers — entry, stop, target — and whether they are worth taking</span>
+                </div>
+                {% if c.plan_box %}
+                <p class="text-xs text-slate-400 mb-2">Built on the <span class="text-slate-200 font-semibold">{{ c.plan_box }}</span> box — the tightest one a stop can sit outside of.</p>
+                {% endif %}
+                {% if c.box_note %}
+                <p class="text-[11px] text-amber-300/90 mb-2">⚠ {{ c.box_note }}</p>
+                {% endif %}
+                {% if c.plan %}
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {% for card in c.plan %}
+                    <div class="rounded-xl border p-4
+                        {% if card.verdict == 'skip' %} border-rose-800 bg-rose-950/20
+                        {% elif card.verdict == 'watch' %} border-amber-700 bg-amber-950/20
+                        {% else %} border-emerald-700 bg-emerald-950/20 {% endif %}">
+                        <div class="flex items-center gap-2">
+                            <span class="text-lg font-bold {% if card.side == 'BUY' %}text-emerald-300{% else %}text-rose-300{% endif %}">{{ card.side }}</span>
+                            <span class="px-2 py-0.5 rounded text-[10px] font-bold tracking-wide
+                                {% if card.verdict == 'skip' %} bg-rose-800 text-rose-100
+                                {% elif card.verdict == 'watch' %} bg-amber-700 text-amber-50
+                                {% else %} bg-emerald-700 text-emerald-50 {% endif %}">{{ card.verdict_text }}</span>
+                        </div>
+                        <p class="text-xs text-slate-300 mt-1">{{ card.headline }}</p>
+
+                        <dl class="grid grid-cols-3 gap-2 mt-3">
+                            <div class="bg-slate-900/60 rounded-lg p-2">
+                                <dt class="text-[10px] text-slate-400 uppercase tracking-wide">Entry</dt>
+                                <dd class="font-mono text-sm text-slate-100">${{ "%.2f"|format(card.entry or 0) }}</dd>
+                            </div>
+                            <div class="bg-slate-900/60 rounded-lg p-2">
+                                <dt class="text-[10px] text-slate-400 uppercase tracking-wide">Stop</dt>
+                                <dd class="font-mono text-sm text-rose-300">${{ "%.2f"|format(card.stop or 0) }}</dd>
+                            </div>
+                            <div class="bg-slate-900/60 rounded-lg p-2">
+                                <dt class="text-[10px] text-slate-400 uppercase tracking-wide">Target</dt>
+                                <dd class="font-mono text-sm text-emerald-300">${{ "%.2f"|format(card.target or 0) }}</dd>
+                            </div>
+                        </dl>
+
+                        <div class="grid grid-cols-3 gap-2 mt-2 text-[11px] text-slate-400">
+                            <div>risk <span class="font-mono text-slate-200">${{ "%.2f"|format(card.risk_usd or 0) }}</span></div>
+                            <div>reward <span class="font-mono text-slate-200">${{ "%.2f"|format(card.reward_usd or 0) }}</span></div>
+                            <div>R:R <span class="font-mono {% if (card.rr or 0) >= 1 %}text-emerald-300{% else %}text-rose-300{% endif %}">{{ "%.2f"|format(card.rr or 0) }}:1</span></div>
+                        </div>
+                        <div class="mt-1 text-[11px] text-slate-400">
+                            spread is <span class="font-mono {% if (card.cost_pct or 0) > 10 %}text-rose-300{% else %}text-emerald-300{% endif %}">{{ "%.0f"|format(card.cost_pct or 0) }}%</span>
+                            of your risk (${{ "%.2f"|format(card.cost_usd or 0) }} round trip)
+                        </div>
+
+                        {% if card.verdict == 'skip' %}
+                        <ul class="mt-3 space-y-1">
+                            {% for r in card.reasons %}
+                            <li class="text-xs text-rose-200/90">✗ {{ r }}</li>
+                            {% endfor %}
+                        </ul>
+                        <p class="text-[11px] text-slate-400 mt-2">No edge has been measured in this geometry either way — this is a <span class="text-slate-300">geometry check</span>, not a forecast.</p>
+                        {% else %}
+                        <p class="text-xs text-slate-300 mt-3">{{ card.stop_sentence }}</p>
+                        <p class="text-xs text-slate-300 mt-1">{{ card.target_sentence }}</p>
+                        {% endif %}
+                        <p class="text-[11px] text-slate-500 mt-2">{{ card.state }}</p>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="rounded-xl border border-slate-700 bg-slate-800 p-4 text-sm text-slate-400">
+                    No box to place a trade against right now — the feed is still warming up, or no box could be built from the recent bars.
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Cost ruler -->
+            {% if c.cost and c.cost.ok %}
+            <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4 mb-5">
+                <div class="flex items-baseline gap-2">
+                    <h3 class="text-lg font-semibold">💸 The cost ruler</h3>
+                    <span class="text-xs text-slate-500">why the stop distance decides the trade before you enter it</span>
+                </div>
+                <p class="text-xs text-slate-400 mt-1">
+                    The spread is charged once on every trade, win or lose. A short stop makes it a big share of your risk.
+                    At ATR ${{ "%.2f"|format(c.cost.atr or 0) }} you need a stop of at least
+                    <span class="text-amber-300 font-semibold">{{ "%.1f"|format(c.cost.min_mult['0.55']) }} ATR</span>
+                    (≈ ${{ "%.2f"|format(c.cost.min_mult['0.55'] * (c.cost.atr or 0)) }}) just to keep the cost under 10% of R.
+                </p>
+                <div class="mt-3 space-y-1.5">
+                    {% for r in c.cost.rows %}
+                    <div class="flex items-center gap-2 text-xs">
+                        <span class="w-16 shrink-0 font-mono text-slate-400">{{ "%.1f"|format(r.mult) }} ATR</span>
+                        <span class="w-16 shrink-0 font-mono text-slate-300">${{ "%.2f"|format(r.risk_usd) }}</span>
+                        <span class="flex-1 bg-slate-900 rounded h-4 overflow-hidden">
+                            <span class="block h-4 rounded
+                                {% if r.zone == 'red' %} bg-rose-500/70
+                                {% elif r.zone == 'amber' %} bg-amber-500/70
+                                {% else %} bg-emerald-500/70 {% endif %}"
+                                style="width: {{ [ (r.share['0.55'] / 40.0 * 100), 100 ] | min }}%"></span>
+                        </span>
+                        <span class="w-24 shrink-0 text-right font-mono
+                            {% if r.zone == 'red' %} text-rose-300 {% elif r.zone == 'amber' %} text-amber-300 {% else %} text-emerald-300 {% endif %}">
+                            {{ "%.0f"|format(r.share['0.55']) }}% of R
+                        </span>
+                    </div>
+                    {% endfor %}
+                </div>
+                <p class="text-[11px] text-slate-500 mt-3">
+                    % is the share of risk eaten by a $0.55 round trip (the quote logger's measured median). The registered model is $0.40 —
+                    at that cost a 3 ATR stop pays 9.0%. Green ≤10%, amber ≤20%, red above. Rule of thumb:
+                    <span class="text-slate-300">never take a trade whose stop is under ~3 ATR on this tape.</span>
+                </p>
+            </div>
+            {% endif %}
+
+            <!-- How to read -->
+            <div class="rounded-2xl border border-slate-700 bg-slate-800/60 p-4 mb-5">
+                <details>
+                    <summary class="cursor-pointer text-sm font-semibold text-slate-200">📖 New to charts? Read this first (5 things, 60 seconds)</summary>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+                        {% for title, body in c.how_to_read %}
+                        <div class="text-xs text-slate-400 leading-snug">
+                            <span class="text-slate-200 font-semibold block">{{ title }}</span>
+                            {{ body }}
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <p class="text-[11px] text-slate-500 mt-3">
+                        That is the whole list on purpose — see the last item for what is deliberately absent and why.
+                        The chart is a thinking aid, not a signal: nothing on it has been shown to predict direction.
+                    </p>
+                </details>
+            </div>
+
+            <!-- Honesty footer -->
+            <div class="rounded-xl border border-slate-700/60 bg-slate-900/60 p-3 text-[11px] text-slate-500">
+                <span class="text-slate-300 font-semibold">Measured, not assumed:</span>
+                8 box breakout/fade geometries tested, <span class="text-rose-400">0 cleared the no-edge reference</span>;
+                74–75% of closes outside a box are back inside within 15 minutes; the 8/8 signal is 50.4% [42–59] trade-way at 30 minutes.
+                So this tab shows <span class="text-slate-300">where</span> a trade would sit and <span class="text-slate-300">what it costs</span> — it does not predict direction.
+                Display-only, paper only: no order is placed, no gate changes, nothing is written.
+                Method: <span class="font-mono">docs/PROPOSAL-2026-10-23-manual-chart-tab.md</span> ·
+                <span class="font-mono">docs/ANALYSIS-2026-10-20-box-theory-manual-trading.md</span>
+            </div>
+
+            {% else %}
+            <div class="rounded-2xl border border-slate-700 bg-slate-800 p-5">
+                <div class="text-lg font-semibold text-slate-200">🧭 Chart read unavailable</div>
+                <div class="text-sm text-slate-400 mt-1">{{ ctx.chart.reason if ctx.chart else 'the read layer did not load' }}</div>
+                <div class="text-xs text-slate-500 mt-2">The other tabs still work — this panel needs <span class="font-mono">forward_test_log.csv</span> to hold enough recent bars.</div>
+            </div>
+            {% endif %}
+        </div>
+        <!-- ================= END CHART & PLACEMENT TAB ================= -->
 
 
         <!-- ================= DETAILS TAB (original dashboard) ================= -->
@@ -1256,7 +1540,7 @@ HTML_TEMPLATE = """
 
     </div>
     <script>
-    var TABS = ['simple', 'boxes', 'details'];
+    var TABS = ['simple', 'chart', 'boxes', 'details'];
     function showTab(name) {
         TABS.forEach(function(t) {
             var panel = document.getElementById('panel-' + t);
@@ -1278,11 +1562,18 @@ HTML_TEMPLATE = """
             var saved = localStorage.getItem('gold_tab');
             if (TABS.indexOf(saved) >= 0) start = saved;
         } catch(e) {}
-        // Also allow ?tab=simple|boxes|details deep links
+        // Also allow ?tab=simple|chart|boxes|details deep links
         try {
             var params = new URLSearchParams(window.location.search);
             var wanted = params.get('tab');
             if (TABS.indexOf(wanted) >= 0) start = wanted;
+            // ?tf=N keeps the chart timeframe when a tab link is shared
+            var tf = params.get('tf');
+            if (tf && ['1','5','15'].indexOf(tf) >= 0) {
+                document.querySelectorAll('a[href^="?tab=chart"]').forEach(function(a) {
+                    a.setAttribute('href', '?tab=chart&tf=' + tf);
+                });
+            }
         } catch(e) {}
         showTab(start);
     })();
@@ -1449,6 +1740,7 @@ def pressure_context():
 
 
 _box_cache = {"key": None, "geom": None, "regime": None}
+_chart_cache = {"key": None, "group": None, "view": None}
 
 
 def box_context(portfolio=None, feed=None):
@@ -1477,6 +1769,87 @@ def box_context(portfolio=None, feed=None):
                              regime=_box_cache["regime"])
     except Exception as exc:
         return {"ok": False, "reason": f"box status failed: {exc}"}
+
+
+def chart_context(group=None, boxes_status=None):
+    """The price chart + placement read for the Chart tab (display-only).
+
+    Geo is rebuilt only when the log file or the timeframe changes; the cost
+    ruler and the plan cards are cheap and always fresh. Nothing here can place,
+    size or block a trade — it is the same contract as pressure.py.
+    """
+    if CH is None:
+        return {"ok": False, "reason": f"chart.py unavailable: {_CH_IMPORT_ERROR}"}
+    group = group if group in CH.GROUPS else CH.DEFAULT_GROUP
+    key = _file_key(LOG_FILE_PATH)
+    geometry = (boxes_status or {}).get("geometry") or {}
+
+    def plan_for(boxes_status):
+        """Placement cards built from the *tightest usable* box, via pressure.
+
+        The geometry maths stays in pressure.box_watch_cards (the tested source);
+        chart.pick_box only decides which box a stop can sensibly be built on and
+        says what it skipped. Narrowing the geometry is the whole trick: calling
+        the same function with one box keeps both tabs from disagreeing.
+        """
+        if not geometry.get("ok"):
+            return [], None, None
+        chosen, note = CH.pick_box(geometry.get("boxes"), geometry.get("close"),
+                                   geometry.get("atr"))
+        if chosen is None:
+            return [], note, None
+        sub = dict(geometry)
+        sub["boxes"] = [chosen]
+        sub["nearest"] = {"box": chosen["name"],
+                          "side": "BUY" if (chosen.get("dist_up_atr") or 0) <= (chosen.get("dist_down_atr") or 0) else "SELL",
+                          "edge": chosen["high"] if (chosen.get("dist_up_atr") or 0) <= (chosen.get("dist_down_atr") or 0) else chosen["low"],
+                          "distance_usd": min(abs(chosen.get("dist_up_usd") or 0),
+                                              abs(chosen.get("dist_down_usd") or 0)),
+                          "distance_atr": min(abs(chosen.get("dist_up_atr") or 0),
+                                              abs(chosen.get("dist_down_atr") or 0)),
+                          "width": chosen.get("width")}
+        # A live break on a *different* box must not be relabelled as a break here.
+        trig = dict(geometry.get("trigger") or {})
+        if trig.get("box") != chosen["name"]:
+            trig = {"state": "none", "side": None, "box": chosen["name"],
+                    "detail": f"no edge tested on the last bar ({chosen['name']})"}
+        sub["trigger"] = trig
+        try:
+            cards = PR.box_watch_cards(sub, (boxes_status or {}).get("checks") or [],
+                                       datetime.now(timezone.utc).replace(tzinfo=None))
+        except Exception:
+            cards = []
+        return cards, note, chosen["name"]
+    if (_chart_cache["view"] is None or key != _chart_cache["key"]
+            or group != _chart_cache["group"]):
+        try:
+            rows = PR.tail_rows(LOG_FILE_PATH, 4000, window_bytes=1024 * 1024)
+            _chart_cache["view"] = CH.view(rows=rows, boxes=geometry.get("boxes"),
+                                           group=group)
+            _chart_cache["key"] = key
+            _chart_cache["group"] = group
+        except Exception as exc:
+            return {"ok": False, "reason": f"chart build failed: {exc}"}
+    view = _chart_cache["view"]
+    try:
+        atr = view.get("atr") or geometry.get("atr")
+        cards, box_note, box_name = plan_for(boxes_status)
+        return {
+            "ok": bool(view.get("ok")),
+            "reason": view.get("reason"),
+            "view": view,
+            "group": group,
+            "groups": CH.GROUPS,
+            "cost": CH.cost_ruler(atr),
+            "plan": CH.plan_cards(cards, atr=atr),
+            "plan_box": box_name,
+            "box_note": box_note,
+            "verdict": CH.plain_verdict(boxes_status),
+            "how_to_read": CH.HOW_TO_READ,
+            "spread_usd": (boxes_status or {}).get("spread_usd"),
+        }
+    except Exception as exc:
+        return {"ok": False, "reason": f"chart read failed: {exc}"}
 
 
 def open_trade_read(status, log_tail):
@@ -1589,8 +1962,14 @@ def index():
     trades = recent_trades(TRADES_FILE_PATH, n=20)
     eras = compute_era_stats(TRADES_FILE_PATH)
     ctx = pressure_context()
+    chart_tf = None
+    try:
+        chart_tf = int(request.args.get("tf") or 0) or None
+    except (TypeError, ValueError):
+        chart_tf = None
     if PR and not ctx.get("error"):
         ctx["boxes"] = box_context(ctx.get("portfolio"), ctx.get("feed"))
+        ctx["chart"] = chart_context(chart_tf, ctx.get("boxes"))
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         quotes = PR.tail_rows(os.path.join(DATA_DIR, "xm_data", "quotes-" + now.strftime("%Y-%m-%d") + ".csv"), 240)
         ctx["risk_now"] = PR.risk_read(status, quotes, now)
