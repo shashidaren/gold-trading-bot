@@ -3,7 +3,10 @@
 **Status: BUILT the same day (see §0) — display-only, not deployed, no gate or
 parameter touched.** §1–§9 are the reasoning that produced the build; §0 records
 what actually shipped and what was deliberately cut. Every number below is from
-this checkout and reproducible — commands are in §9.
+this checkout and reproducible — commands are in §9. **Later same-day follow-up:**
+the deferred manual logger is now built as the separate `/scalp` workspace and its
+own host-local journal; this Chart & Placement tab remains read-only. See
+`docs/MANUAL-SCALPING.md` and HANDOFF §1/§6.
 
 ---
 
@@ -17,7 +20,7 @@ than asked again:
 |---|---|---|
 | Default timeframe | **M5** (140 bars ≈ 11.7 h), toggle `?tf=1|5|15` | An M1 gold chart is 4-ATR noise — the box doc's own finding — and would make every level look meaningless. M15 is one click away. |
 | Tier 3 (Fibonacci/pivots/round numbers) | **Excluded for now** | A beginner cannot calibrate a subjective tool, and drawing an unmeasured one teaches them to trust it. Pivots and round numbers remain the best *next* candidates for a real `strategy_lab.py --bars` test. |
-| Manual-trade logging | **Not built yet** | It would write a file and needs a schema decision; the read-only tab is the safe first step. Recorded in HANDOFF §6 as the owner's call. |
+| Manual-trade logging | **Built later in `/scalp`** | The owner approved a separate workspace. Its schema and atomic host-local journal are in `docs/MANUAL-SCALPING.md`; this chart tab still writes nothing. |
 | Draw the open paper trade | Deferred | Nothing open in the current ledger; it is a small follow-up when there is one. |
 
 **Files:** `chart.py` (new, stdlib-only read layer), `dashboard.py` (tab + route +
