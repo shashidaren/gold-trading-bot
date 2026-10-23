@@ -2,7 +2,7 @@ import os
 import csv
 import json
 from datetime import datetime, timezone
-from flask import Flask, render_template_string, request
+from flask import Flask, redirect, render_template_string, request, url_for
 
 try:  # display-only helper library (see pressure.py's docstring)
     import pressure as PR
@@ -20,6 +20,16 @@ except Exception as _exc:  # never take the dashboard down over the read layer
 else:
     _CH_IMPORT_ERROR = ""
 
+try:  # separate manual workspace: calculator + self-reported journal only
+    import manual_scalp as MS
+    from scalp_template import SCALP_TEMPLATE
+except Exception as _exc:  # the existing bot dashboard must still render
+    MS = None
+    SCALP_TEMPLATE = ""
+    _MS_IMPORT_ERROR = str(_exc)
+else:
+    _MS_IMPORT_ERROR = ""
+
 app = Flask(__name__)
 
 DATA_DIR = os.getenv("GOLD_DATA_DIR", "/opt/gold")
@@ -27,6 +37,8 @@ LOG_FILE_PATH = os.getenv("GOLD_LOG_FILE", os.path.join(DATA_DIR, "forward_test_
 STATUS_FILE_PATH = os.getenv("GOLD_STATUS_FILE", os.path.join(DATA_DIR, "status.json"))
 TRADES_FILE_PATH = os.getenv("GOLD_TRADES_FILE", os.path.join(DATA_DIR, "trades.csv"))
 SKIP_FILE_PATH = os.getenv("GOLD_SKIP_FILE", os.path.join(DATA_DIR, "skipped_trades.csv"))
+MANUAL_JOURNAL_FILE_PATH = os.getenv(
+    "GOLD_MANUAL_JOURNAL_FILE", os.path.join(DATA_DIR, "manual_scalp_journal.json"))
 
 # Display-only mirrors of live engine constants (do not drive trading).
 # The gate thresholds live in pressure.py, which smoke Scenario U pins to
@@ -88,11 +100,12 @@ HTML_TEMPLATE = """
         </header>
 
         <!-- Simple / Details tabs -->
-        <div class="flex items-center gap-2 mb-6 border-b border-slate-800 pb-2">
+        <div class="flex flex-wrap items-center gap-2 mb-6 border-b border-slate-800 pb-2">
             <button id="tab-simple" onclick="showTab('simple')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-amber-500 text-slate-900">✨ Simple Summary</button>
             <button id="tab-journal" onclick="showTab('journal')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📒 Journal</button>
             <button id="tab-boxes" onclick="showTab('boxes')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📦 Boxes &amp; Timing</button>
             <button id="tab-chart" onclick="showTab('chart')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">🧭 Chart &amp; Placement</button>
+            <a href="/scalp" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">⚡ Manual Scalping</a>
             <button id="tab-details" onclick="showTab('details')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📊 Full Dashboard</button>
             <span class="ml-auto text-[11px] text-slate-500 hidden md:inline">Simple is the mood · Chart shows <em>where</em> a trade would go · Boxes is the checklist · Full shows every gate. All <span class="text-slate-300">paper only</span> — no real orders.</span>
         </div>
@@ -1674,6 +1687,14 @@ HTML_TEMPLATE = """
             }
         });
         try { localStorage.setItem('gold_tab', name); } catch(e) {}
+        // Keep the refresh URL in sync too: a stale ?tab=chart deep link must
+        // not override the tab the operator selected after the page loaded.
+        // replaceState avoids adding a browser-history entry for every refresh.
+        try {
+            var url = new URL(window.location.href);
+            url.searchParams.set('tab', name);
+            window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+        } catch(e) {}
     }
     (function() {
         var start = 'simple';
@@ -2163,6 +2184,114 @@ def index():
         ctx=ctx,
         trade_read=trade_read,
     )
+
+
+# ── Separate manual scalping workspace ─────────────────────────────────────
+# This page is intentionally outside the auto-refreshing bot tab switcher.  Its
+# only writes go to MANUAL_JOURNAL_FILE_PATH; there is no order route and no
+# read/write connection to the engine ledger or state.
+
+def _scalp_tf(value):
+    text = str(value or "").strip().upper()
+    if text.startswith("M"):
+        text = text[1:]
+    try:
+        group = int(text)
+    except (TypeError, ValueError):
+        group = 0
+    groups = CH.GROUPS if CH else (1, 5, 15)
+    return group if group in groups else (CH.DEFAULT_GROUP if CH else 5)
+
+
+def _empty_manual_summary():
+    return {"total": 0, "open": 0, "skipped": 0, "closed": 0,
+            "net_pnl": 0.0, "average_r": None, "wins": 0, "losses": 0,
+            "flat": 0, "review_remaining": 100}
+
+
+def _scalp_page(tf=5, values=None, error=None, notice=None, status=200):
+    if MS is None:
+        return (f"Manual scalping workspace unavailable: {_MS_IMPORT_ERROR}", 503)
+    tf = _scalp_tf(tf)
+    boxes = {"ok": False, "checks": [], "spread_usd": MS.DEFAULT_SPREAD,
+             "reason": "market context unavailable"}
+    chart = {"ok": False, "reason": "market chart unavailable", "plan": []}
+    if PR is not None and CH is not None:
+        try:
+            base = PR.build()
+            boxes = box_context(base.get("portfolio"), base.get("feed"))
+            chart = chart_context(tf, boxes)
+        except Exception as exc:
+            chart = {"ok": False, "reason": f"manual market read failed: {exc}", "plan": []}
+
+    journal_error = None
+    try:
+        journal = MS.JournalStore(MANUAL_JOURNAL_FILE_PATH).read(limit=100)
+    except Exception as exc:
+        journal_error = str(exc)
+        journal = {"rows": [], "summary": _empty_manual_summary()}
+
+    close = ((chart.get("view") or {}).get("close") if chart.get("ok") else None)
+    spread = boxes.get("spread_usd") or MS.DEFAULT_SPREAD
+    form = {
+        "side": "BUY", "entry": f"{close:.2f}" if close else "",
+        "stop": "", "target": "", "account_balance": "500",
+        "risk_pct": "1", "spread": f"{spread:.2f}", "contract_size": "100",
+        "volume_step": "0.01", "timeframe": f"M{tf}", "setup": "", "notes": "",
+    }
+    for key in tuple(form):
+        if values is not None and values.get(key) is not None:
+            form[key] = values.get(key)
+
+    references = {}
+    for card in chart.get("plan") or []:
+        if all(card.get(key) is not None for key in ("side", "entry", "stop", "target")):
+            references[card["side"]] = {key: card[key] for key in ("entry", "stop", "target")}
+
+    html = render_template_string(
+        SCALP_TEMPLATE, tf=tf, chart=chart, boxes=boxes, journal=journal,
+        journal_error=journal_error, form=form, references=references,
+        error=error, notice=notice,
+    )
+    response = app.make_response((html, status))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.route("/scalp")
+def scalp():
+    notices = {
+        "taken": "External decision recorded as OPEN. No order was placed.",
+        "skipped": "Skipped idea recorded. No order was placed.",
+        "closed": "External close recorded in the manual journal. No broker action was taken.",
+    }
+    return _scalp_page(tf=_scalp_tf(request.args.get("tf")),
+                       notice=notices.get(request.args.get("notice")))
+
+
+@app.route("/scalp/journal", methods=["POST"])
+def scalp_journal_create():
+    if MS is None:
+        return (f"Manual scalping workspace unavailable: {_MS_IMPORT_ERROR}", 503)
+    tf = _scalp_tf(request.form.get("timeframe"))
+    try:
+        row = MS.JournalStore(MANUAL_JOURNAL_FILE_PATH).create(request.form)
+    except (MS.ValidationError, MS.JournalError) as exc:
+        return _scalp_page(tf=tf, values=request.form, error=str(exc), status=400)
+    notice = "taken" if row["status"] == "OPEN" else "skipped"
+    return redirect(url_for("scalp", tf=tf, notice=notice, _anchor="journal"))
+
+
+@app.route("/scalp/journal/<record_id>/close", methods=["POST"])
+def scalp_journal_close(record_id):
+    if MS is None:
+        return (f"Manual scalping workspace unavailable: {_MS_IMPORT_ERROR}", 503)
+    tf = _scalp_tf(request.form.get("timeframe"))
+    try:
+        MS.JournalStore(MANUAL_JOURNAL_FILE_PATH).close(record_id, request.form)
+    except (MS.ValidationError, MS.JournalError) as exc:
+        return _scalp_page(tf=tf, error=str(exc), status=400)
+    return redirect(url_for("scalp", tf=tf, notice="closed", _anchor="journal"))
 
 
 if __name__ == "__main__":

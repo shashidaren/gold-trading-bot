@@ -17,22 +17,22 @@ from the first commit.
 <!-- HANDOFF-SNAPSHOT machine-checked by tools/handoff_check.py; refresh with --update -->
 | key | value |
 |---|---|
-| as_of_utc | 2026-10-23 11:59 |
-| data_collection | 321 |
-| closed_trades | 695 |
-| outcomes | 140W/300L/253BE/2TIME |
-| decisive_wr_pct | 31.8 |
-| engine_ledger_usd | 145.72 |
-| true_equity_usd | 128.76 |
+| as_of_utc | 2026-10-23 14:59 |
+| data_collection | 324 |
+| closed_trades | 696 |
+| outcomes | 140W/301L/253BE/2TIME |
+| decisive_wr_pct | 31.7 |
+| engine_ledger_usd | 137.02 |
+| true_equity_usd | 120.06 |
 | cost_usd_per_side | 0.20 |
-| net_pnl_usd_at_cost | -649.24 |
+| net_pnl_usd_at_cost | -658.34 |
 | cutover_utc | 2026-10-06 03:00 |
-| structstop_era_trades | 198 |
-| structstop_era_outcomes | 55W/89L/53BE/1TIME |
-| log_bars | 49956 |
-| log_last_bar_utc | 2026-10-23 11:59 |
-| skip_rows | 1607 |
-| open_trade | BUY #697 @ 4027.91 |
+| structstop_era_trades | 199 |
+| structstop_era_outcomes | 55W/90L/53BE/1TIME |
+| log_bars | 50136 |
+| log_last_bar_utc | 2026-10-23 14:59 |
+| skip_rows | 1617 |
+| open_trade | none |
 <!-- /HANDOFF-SNAPSHOT -->
 
 This block is the **only machine-checked part of the file**: `python3 tools/handoff_check.py`
@@ -66,7 +66,8 @@ snapshot block, still said FRESH.
    **Read §1 first**: the structural-stop time gate was judged at **2026-10-19 21:00 UTC** using the
    latest then-available snapshot (through 18:10 UTC, n=139). Geometry and SCREEN pass, but PASS does not
    (n<150; Wilson LB 28.8% ≤32.1%). The **§7 closure-gap trigger FIRED at 2/2** under the counting
-   rule in `docs/REVIEW-2026-10-19-struct-stop-judgement.md` §3. Its registered response is REVERT
+   rule in `docs/REVIEW-2026-10-19-struct-stop-judgement.md` §3 (**now 3/2** after #687; the registered
+  judgement and response are unchanged). Its registered response is REVERT
    with the gap guard first; the guard's cutoff/open-position policy is undefined, so no runtime
    change or 0.25 ATR test was made. The **2026-10-20 refresh** (`docs/REVIEW-2026-10-20-post-gate-refresh.md`)
    re-ran every check on the 08:59 UTC snapshot, moved the era to n=147 and recorded that the n=150
@@ -74,12 +75,14 @@ snapshot block, still said FRESH.
    registration and host verification are the blockers; see §1 and §6. The n=127 file
    `docs/REVIEW-2026-10-19-struct-stop-screen.md` is the earlier
    interim record. The BTC-port verdicts are in `docs/ANALYSIS-2026-10-13-btc-port-assessment.md` §3
-   (context: the 10-13 block in `docs/HANDOFF-HISTORY.md`). The quote logger sample remains short
-   (6.7 days, 6/14 complete UTC days, 1/2 weekends, first-look $0.55); retain the registered $0.40
-   round trip. The large-N history dump/convert/replay is still a first-run-on-the-box task:
-   `docs/ACCELERATE-TESTING.md` §2. The dashboard's pressure/setup/location/feed panels are
-   **display-only** (`docs/ANALYSIS-2026-10-16-dashboard-pressure.md`); a dashboard change only
-   restarts the dashboard, never the engine (`docs/AUTOSYNC.md`).
+  (context: the 10-13 block in `docs/HANDOFF-HISTORY.md`). The quote logger has **9/14 complete UTC
+  days and 1/2 weekends**, median $0.55, but its latest report is STALE (newest row ~0.4 h old);
+  retain the registered $0.40 round trip until the full sample target and process health are verified.
+  The large-N history dump/convert/replay is still a first-run-on-the-box task:
+  `docs/ACCELERATE-TESTING.md` §2. The dashboard's pressure/setup/location/feed panels are
+  **display-only** (`docs/ANALYSIS-2026-10-16-dashboard-pressure.md`); `/scalp` writes only its separate
+  manual journal (`docs/MANUAL-SCALPING.md`). Dashboard/helper changes restart only the dashboard,
+  never the engine (`docs/AUTOSYNC.md`).
 
 3. **10-05 re-review is DONE:** `docs/REVIEW-2026-10-05.md`. Max-hold isolation
    closed (n=209, 1 TIME exit, cap never bound in-session); fallback step-2
@@ -114,6 +117,7 @@ snapshot block, still said FRESH.
 | **Market context (tape / gates / §7 era / calibration)** | `python3 tools/pressure_report.py` (`--root DIR`, `--era structstop|maxhold|075|all`, `--json`) — the same read-only layer the dashboard renders |
 | **Where did strong (8/8) signals head? (rough estimate)** | `python3 tools/signal_outlook.py --root .` (`--era structstop|075|all`, `--json`) — forward-walk cone + base rates per side/era; display-only, `docs/ANALYSIS-2026-10-19-signal-outlook.md` |
 | Chart & Placement tab read layer | `python3 tools/test_manual_chart.py` (32 hermetic tests; the tab itself is `?tab=chart`, `?tf=1\|5\|15`) |
+| Manual Scalping workspace | Page: `/scalp?tf=5` (M1/M15 optional). Pure calculator/journal: `python3 tools/test_manual_scalp.py`; Flask routes + ledger isolation: `.venv/bin/python tools/test_scalp_dashboard.py`. Guide/schema: `docs/MANUAL-SCALPING.md`. Journal writes only `manual_scalp_journal.json`; no orders |
 | Loser features | `python3 tools/analyze_losers.py` |
 | Engine regression | `python3 tools/smoke_test.py` |
 | Force autosync now | `sudo /opt/gold/tools/autosync.sh` |
@@ -159,6 +163,8 @@ snapshot block, still said FRESH.
   **unset = every message, unchanged**) — see `docs/PROPOSAL-2026-10-23-telegram-routing.md`
 - `GOLD_BOX_ALERTS` / `GOLD_BOX_ALERT_DAILY_CAP` / `GOLD_BOX_ALERT_*_COOLDOWN_MIN` (optional
   box notifier; `0` disables it)
+- `GOLD_MANUAL_JOURNAL_FILE` (optional; default `$GOLD_DATA_DIR/manual_scalp_journal.json`) — host-local
+  `/scalp` self-reported journal only; never the bot ledger and never a broker credential/order setting
 
 ### Era timeline (UTC)
 
@@ -186,24 +192,25 @@ snapshot block, still said FRESH.
 | 2026-10-20 08:59 UTC (post-gate data refresh, **docs only; no runtime change**) | Checked-in book 644 closes (128W/277L/237BE/2TIME); struct-stop era grown to n=147 (43W/66L/37BE/1TIME), guard still PASS (0 inside level, 81.6% level-bound, +0.50 ATR clearance, 3.29 ATR risk). The n=150 arm **lapsed with the 10-19 time gate** and is not re-opened by the grown sample; the recorded judgement (SCREEN MET at n=139, PASS unavailable, gap trigger fired) stands. Post-gate readings: SL/day 5.50, SL share 44.90%, scratch 25.17%, gross −0.028R, decisive 39.45% [30.8–48.8]; gross era −$23.43. Gap rides unchanged at 2/2; quote logger 6.7 days, 6/14 complete, 1/2 weekends, $0.55 median. No guard, revert, test, or deploy. Evidence: `docs/REVIEW-2026-10-20-post-gate-refresh.md`. |
 | 2026-10-23 (Telegram routing + watch plan, **message policy only; no runtime/strategy change**) | Owner: the box-watch notice is buried in ~82 messages/day and staring at the screen for it is a long wait. Measured 10 trading days to 10-23: **36.8 skip notices/day (45% of the traffic)**, 14 entries, 14 exits, 4.1 BE-armed, 8 digests, ≈5.1 box notices (worst day 101). **Shipped:** `engine.py` tags every message with a kind (`trade/exit/skip/risk/feed`) and `GOLD_TELEGRAM_KINDS` selects which are sent — unset = today's behaviour byte for byte, `none` = silent, a typo falls back to everything; the filter never touches the trading path or the CSVs. `tools/autosync.sh` digest is rate-limited by `GOLD_DIGEST_EVERY_HOURS` (default 12, `0` = old 3-hourly) with an **incident bypass that always sends at once**, routine digests delivered silently, and a new `🧾 trades:` line summarising closes since the last digest. `pressure.box_plan_next/box_plan_text` + `tools/box_alert.py --plan` (also run inside `--loop`) send **one session watch plan at 07:00 and 13:00 UTC** — levels, both alert prices, what is blocking, ATR-percentile/tick-volume *context* and the 0-of-8 no-edge footer — deduped per (date, session), nothing sent if the box slept through the window or the market is shut. Traffic ≈82 → ≈7–9/day. Smoke **Scenario X** (routing, digest blocks, anchors, dedupe, failed-send retry). `engine.py`/`pressure.py` change means the engine restarts on deploy; the plan needs `deploy/boxalert.service` installed (still optional). Evidence: `docs/PROPOSAL-2026-10-23-telegram-routing.md`. Nothing in §4 moves; the §7 gap trigger and gap-guard blocker are untouched. |
 | 2026-10-23 11:59 UTC (journal + indicator audit, **display-only; no runtime change**) | **695 closed** (140W/300L/253BE/2TIME, 31.8% dec [27.6–36.3], net −$649.24 at $0.40), **198 in struct-stop era** (55W/89L/53BE/1TIME, 38.2% [30.7–46.3], net −$131.63), BUY #697 open @ $4 027.91. `check_data` 0 fail/8 warn, `handoff_check` FRESH, `check_structural_stop` PASS (0 inside), `check_gap_rides` **3/2 REACHED** (+#687 SELL 2026-10-22, no gap-through). New `tools/journal.py` self-journal (BUY vs SELL, ATR/session/hour buckets, 11 lab indicators with Fisher p) + `docs/INDICATOR-AUDIT-2026-10-23.md` — no extra indicator clears the 5 pp + side-split bar; strongest hints ATR-percentile quiet 55.6% vs volatile 31.5% (p=0.014) and volume spike 45% vs thin 20.5% (p=0.031 whole book) are context only. Dashboard Journal tab added (`pressure.journal_read` + `_extra_indicators_series`, `?tab=journal`), like Simple/Boxes/Chart it restarts the dashboard only (`docs/AUTOSYNC.md`). No engine/filter/gate/exit/sizing change; gap-guard blocker unchanged. |
+| 2026-10-23 14:59 UTC (Manual Scalping workspace + refresh, **dashboard/journal-only; no runtime change**) | Owner approved a separate manual page. Built `/scalp` with the shared M1/M5/M15 chart, health context, costed risk/size calculator and a separate atomic self-reported JSON journal (`manual_scalp_journal.json`, git-ignored); no order route and no bot-ledger/state writes. Added `manual_scalp.py`, `scalp_template.py`, routes, operating guide and pure/Flask tests; autosync now restarts the dashboard for its helper modules too, never the engine. Snapshot refreshed to **696 closed**, **199 struct-stop-era trades** (55W/90L/53BE/1TIME), no open trade; guard PASS (0 inside), gap count **3/2**, handoff FRESH. Recorded n=139 judgement and gap-guard blocker unchanged. Pure calculator/journal, chart, existing-dashboard and route tests pass; full `tools/smoke_test.py` PASSED. |
 
-## 1. Where things stand (as of **2026-10-23 — latest data through 11:59 UTC**)
+## 1. Where things stand (as of **2026-10-23 — latest data through 14:59 UTC**)
 
 **Current stance (session refresh; judgement recorded 2026-10-19 21:19 UTC):** paper-only; `engine.py` remains `TRADING_MODE = "FORWARD_TEST"`. No engine, filter, parameter, gate or deployment change was made in this session. The checked-in data is the latest available synced snapshot, not a host heartbeat; production process/revision and any unsynced rows remain operator-only and unverified.
 
-**The book:** **695 closed trades** (140W/300L/253BE/2TIME; 31.8% decisive [27.6–36.3]), engine ledger **$145.72**, true equity **$128.76**, net **−$649.24** at the assumed $0.40 round trip (−0.121R/trade). **Open paper trade BUY #697 @ $4 027.91** from 11:17 UTC (11:59 bar $4 024.07, ATR $1.85, RSI 45.4). `data_collection` was `unknown` in older snapshots; the 321 collection here is the checked-in data. Quote logging still ~7.8 days (7/14 complete UTC days, 1/2 weekends) and median $0.55; on ~80 matched pairs measured $0.55 vs assumed $0.40, so $0.40 remains registered until the 14-day target is met (`win_rate_report.py --spread`).
+**The book:** **696 closed trades** (140W/301L/253BE/2TIME; 31.7% decisive [27.6–36.2]), engine ledger **$137.02**, true equity **$120.06**, net **−$658.34** at the assumed $0.40 round trip (−0.215R/trade on the report's mean-1R scale). **No paper trade is open** at the snapshot; the 14:59 bar is $3 999.53, ATR $3.03, RSI 57.1. `data_collection` was `unknown` in older snapshots; the 324 collection here is the checked-in data. Quote logging has **9/14 complete UTC days, 1/2 weekends**, median $0.55; the latest report is STALE (newest row ~0.4 h old), so process health remains an ops check. The $0.40 model stays registered until the 14-day/two-weekend target is met (`win_rate_report.py --spread`).
 
-**The structural-stop evaluation was judged at its registered time gate (2026-10-19 21:00 UTC).** That judgement used the latest then-available snapshot, **n=139**; the n=150 arm was never reached, and under the registered "whichever comes first" wording the arm **lapsed with the gate** — later era growth is an observation, not a re-opened PASS/SCREEN judgement (see `docs/REVIEW-2026-10-20-post-gate-refresh.md`). The era has since grown to **n=198** (55W/89L/53BE/1TIME) on the post-gate rows. The mechanical guard still **PASSES**: 0 post-cutover stops inside the tested level, 83.3% level-bound, median risk 3.32 ATR, median clearance +0.50 ATR.
+**The structural-stop evaluation was judged at its registered time gate (2026-10-19 21:00 UTC).** That judgement used the latest then-available snapshot, **n=139**; the n=150 arm was never reached, and under the registered "whichever comes first" wording the arm **lapsed with the gate** — later era growth is an observation, not a re-opened PASS/SCREEN judgement (see `docs/REVIEW-2026-10-20-post-gate-refresh.md`). The era has since grown to **n=199** (55W/90L/53BE/1TIME) on the post-gate rows. The mechanical guard still **PASSES**: 0 post-cutover stops inside the tested level, 83.4% level-bound, median risk 3.32 ATR, median clearance +0.50 ATR.
 
-Readings on n=198 (observation only — the recorded decision is the n=139 one): SL/day **5.50–5.91** across the post-gate snapshots, SL share **44.9%** (≤47.0%), scratch share **26.8%**, gross R/trade **−0.045R**, decisive WR **38.2% [30.7–46.3]**. Gross era P&L **−$52.43** (net **−$131.63** at $0.40), drawdown $113.31. The recorded judgement still stands: **SCREEN MET, PASS NOT MET** on the sample the bar was judged on, and **no demonstrated edge**. Do not quote the grown-sample numbers as a verdict.
+Readings on n=199 (observation only — the recorded decision is the n=139 one): SL/day **6.00**, SL share **45.23%** (≤47.0%), scratch share **26.63%**, gross R/trade **−0.053R**, decisive WR **37.93% [30.4–46.0]**. Gross era P&L **−$61.13** (net **−$140.73** at $0.40), drawdown $117.02. The recorded judgement still stands: **SCREEN MET, PASS NOT MET** on the sample the bar was judged on, and **no demonstrated edge**. Do not quote the grown-sample numbers as a verdict.
 
 **The separate §7 closure-gap REVERT trigger remains FIRED — now 3/2.** Counting a post-cutover trade open across a >5-minute log hole classified as a scheduled daily/weekly closure gives **3** (#595, #610, #687) vs threshold 2; #687 (SELL 2026-10-22 20:20→22:24, 124 min, SELL stop $4 029.78) is also post-cutover and daily-break, like #595/#610. Neither #595/#610 reopened through its stop or exited worse; one stop was ratcheted to entry, and no weekend closure has been ridden — #687 also reopened $4.46 above its SELL stop with $0.00 adverse past it. These damage facts do not add a condition to the registered count. The bar and counting rule are recorded in `docs/REVIEW-2026-10-19-struct-stop-judgement.md` §3; damage rows unchanged, count now 3/2 (see `tools/check_gap_rides.py`).
 
 The pre-registered response is **REVERT with the gap guard first**; therefore the 0.25 ATR level test is not eligible. The guard is still not operationally specified (no approved cutoff or open-position policy), and the production host/data state is unverified. **The owner was asked directly on 2026-10-20 and chose to leave it undefined for now:** scope "leave it blocked for now", schedule source "not sure yet", cutoff 30 min *if* a window is ever adopted — a preference attached to no adopted scope, **not** an approved `N` (`docs/REVIEW-2026-10-20-post-gate-refresh.md` §4; do not re-ask the same questions). This session records the refreshed state but does **not** invent a guard, revert code, or deploy. **Next eligible action:** the owner's own dated pre-registration of the guard (including cutoff, schedule source, and whether it blocks new entries or also closes open paper positions), then a reviewed guard change and the prescribed revert in order; verify fresh host data and executable before any deployment. Until then, the checked-in engine still contains the structural stop and remains paper-only.
 
-**Accounting incident reconciled (2026-10-19):** malformed rows #626–645 were quarantined from backed-up evidence using `tools/repair_phantom_ledger.py`; the checked-in ledger is now 657 valid closed trades and passes `check_data.py` (0 fail; 8 documented warnings). The raw-row reconciliation and evidence are in `docs/REVIEW-2026-10-19-negative-balance.md` and `incident_backups/`. **Host-side verification of the running executable/revision remains operator-only**; do not infer production process health from this checkout alone.
+**Accounting incident reconciled (2026-10-19):** malformed rows #626–645 were quarantined from backed-up evidence using `tools/repair_phantom_ledger.py`; at that reconciliation the checked-in ledger held 657 valid closed trades and passed `check_data.py` (0 fail; 8 documented warnings). The raw-row reconciliation and evidence are in `docs/REVIEW-2026-10-19-negative-balance.md` and `incident_backups/`. **Host-side verification of the running executable/revision remains operator-only**; do not infer production process health from this checkout alone.
 
-**The dashboard pressure composite remains a side proxy, not a signal.** The re-join at n=160 is still collinear with side and has no within-side `against` bucket (BUY 67 aligned / 4 mixed; SELL 86 aligned / 3 mixed). The owner's manual pressure/hold observation remains a separate, unmeasured hypothesis. The signal-outlook read still shows no directional edge after an 8/8 signal (50.4% [42–59] trade-way at 30m, median +0.02R; 50.7% [42–59] at 60m at n=139). These are base rates for manual context, never a forecast, entry gate, sizing, or hold-past-stop input.
+**The dashboard pressure composite remains a side proxy, not a signal.** The current re-join at n=199 is still collinear with side and has no within-side `against` bucket (BUY 76 aligned / 5 mixed; SELL 113 aligned / 5 mixed). The owner's manual pressure/hold observation remains a separate, unmeasured hypothesis. The signal-outlook read still shows no directional edge after an 8/8 signal (50.4% [42–59] trade-way at 30m, median +0.02R; 50.7% [42–59] at 60m at n=139). These are base rates for manual context, never a forecast, entry gate, sizing, or hold-past-stop input.
 
 **Box theory (manual, unmeasured in the ledger):** asked 2026-10-20 whether boxes can be used for manual trades. Measured on the same tape (`tools/box_report.py`, `docs/ANALYSIS-2026-10-20-box-theory-manual-trading.md`): breakout and fade entries land on or below the driftless reference at both box sizes, and 74–75% of breaks close back inside within 15 min. **Verdict: box = a place to put a stop, not a signal.** Display/advice only — no gate, no runtime change; manual box trades are not in `trades.csv` and are not evidence until logged (bar: n≥100, positive after spread). The dashboard renders the same read in its **📦 Boxes & Timing** tab (`?tab=boxes`) — boxes, the seven-condition checklist, the setup card and the measured footer.
 
@@ -220,6 +227,26 @@ every other panel it is display-only: no gate, no order, no write, no `engine.py
 (`docs/PROPOSAL-2026-10-23-manual-chart-tab.md`; tests `tools/test_manual_chart.py`, 32 hermetic).
 The shipped defaults are M5 and 140 bars. Nothing here changes the open struct-stop window, the
 fired §7 gap trigger, or any threshold in §4.
+
+**Manual Scalping workspace (2026-10-23, dashboard + manual-journal write only; no engine change):**
+the owner approved a separate manual page rather than crowding the bot tabs. **`/scalp`** now combines
+the existing M5/M1/M15 chart and box levels, compact feed/session/risk/volatility/chop context, an
+editable entry/stop/target + cash-risk + spread + contract calculator, and a separate decision journal.
+It deliberately has **no auto-refresh**, so market refreshes cannot erase an editing ticket. Copying a
+Chart & Placement BUY/SELL reference does not change its SKIP/WATCH verdict. The calculator charges the
+round-trip spread on both legs, rounds lots **down** to the volume step, and the server recalculates every
+submission and close. Defaults ($500 calculation balance, 1% risk, $0.55 spread, 100 oz/lot, 0.01 step)
+are editable and **not broker-read**; the operator must verify the real contract/cost. **No order route
+exists:** “Record externally taken” and “Record close” only journal self-reported external activity.
+Rows are `SKIPPED` / `OPEN` / `CLOSED` in host-local, git-ignored **`manual_scalp_journal.json`**
+(`GOLD_MANUAL_JOURNAL_FILE` overrides), never `trades.csv` or engine state. Writes are atomic, mode 0600;
+corruption is shown as an error, never reset to empty. This is the one dashboard page that writes, and it
+writes only that file; the existing bot panels remain read-only. Self-reported rows are not broker-verified
+or evidence of edge; the ≥100-closed-trade, positive-after-cost review bar still applies. Full schema,
+formulas and operating rules: `docs/MANUAL-SCALPING.md`. Tests: `tools/test_manual_scalp.py` and
+`tools/test_scalp_dashboard.py` (the route test hashes `trades.csv` before/after skip→taken→close).
+Autosync `DASH_CHANGED` now includes the dashboard helpers (`pressure.py`, `chart.py`, `manual_scalp.py`,
+`scalp_template.py`) as well as `dashboard.py`; `CORE_CHANGED` and the engine remain untouched.
 
 **Box watch, chop read and Telegram notifier (2026-10-21, display + tooling only):** asked whether the BUY/SELL watch cards could be improved, whether the tape is choppy, and for a Telegram message when the indicators line up. Three additions, all display-only: **(1)** a measured chop read (`pressure.box_chop`) — at the 14:59 snapshot **14 of 18 breaks in the last 24 h closed back inside within 15 min (78%) vs a 74% baseline**, so chop is *normal*, while the tape is genuinely range-bound (efficiency ratio 0.04/0.02) and the 20-bar box is compressed (3.0 ATR vs a 4.7 median); **(2)** retest tracking on a box **frozen at the break** (`pressure.box_retest`: `extended`/`retesting`/`held`/`failed`) — 94% of breaks are retested within 30 bars (median 3) and entering the held retest measured **59.0% vs a 57.2% reference, the same −$0.31/trade** as entering the break; **(3)** an optional Telegram notifier (`tools/box_alert.py`, `deploy/boxalert.service`) that sends one rate-limited message when the checklist, a fresh break, ≤10%-of-R geometry and no-chase all line up — measured volume **5.1/day** over a 7-day replay. **Both new reads were tested as filters and both came back negative** (a 10 pp "chop filter" found on overlapping events vanished and partly reversed under the one-position convention — the same trap as 09-28 pooled momentum). They gate nothing, they never touch `engine.py`, and the numbers travel with every read: `docs/ANALYSIS-2026-10-21-box-chop-retest-alerts.md`.
 
@@ -291,7 +318,9 @@ feed** (~4.4k), not spot XAUUSD.
 
 ## 4. Current risk gates (trade_filter.py)
 
-Dashboard PR: no risk gates, parameters or cost assumptions changed.
+Dashboard + Manual Scalping workspace: no risk gates, parameters, engine sizing or registered cost
+assumptions changed. The `/scalp` calculator is manual arithmetic only; its editable inputs never drive
+`trade_filter.py` or `engine.py`, and its journal is not portfolio state.
 
 **Recovery PR (2026-10-19):** candle/tick paper exits reject invalid/nonfinite/zero
 position geometry before booking P&L; startup retains finite negative/zero balances
@@ -317,7 +346,7 @@ evade the SL-based breaker; that breaker is not a data-integrity safeguard.
 | London blackout | 07:55–09:00 UTC, **BUY only** | `trade_filter.py` `BLACKOUT_WINDOWS` |
 | NY / rollover blackouts | both sides | `trade_filter.py` `BLACKOUT_WINDOWS` |
 
-**Current mechanical check (latest checked-in snapshot, 2026-10-20 08:59 UTC):** `tools/check_structural_stop.py` PASS at n=147, with zero post-cutover stops inside the level, 81.6% level-bound, median clearance +0.50 ATR and median risk 3.29 ATR. This verifies geometry only. The time-gate judgement (recorded at n=139) is in §1/§6 and `docs/REVIEW-2026-10-19-struct-stop-judgement.md`: SCREEN MET, PASS not met, and the separate closure-gap REVERT trigger fired; implementation is blocked on the undefined guard rule. The grown n=147 sample is an observation, not a re-judgement (`docs/REVIEW-2026-10-20-post-gate-refresh.md` §3).
+**Current mechanical check (latest checked-in snapshot, 2026-10-23 14:59 UTC):** `tools/check_structural_stop.py` PASS at n=199, with zero post-cutover stops inside the level, 83.4% level-bound, median clearance +0.50 ATR and median risk 3.32 ATR. This verifies geometry only. The time-gate judgement (recorded at n=139) is in §1/§6 and `docs/REVIEW-2026-10-19-struct-stop-judgement.md`: SCREEN MET, PASS not met, and the separate closure-gap REVERT trigger fired; implementation is blocked on the undefined guard rule. The grown n=199 sample is an observation, not a re-judgement (`docs/REVIEW-2026-10-20-post-gate-refresh.md` §3).
 
 **Mirrored, and pinned:** the read-only dashboard layer needs some of these thresholds, so it keeps its own
 copies in `pressure.py` (`docs/ANALYSIS-2026-10-16-dashboard-pressure.md`) — it must not import the engine, and
@@ -393,12 +422,15 @@ entry guard / flat-before-close policy is a named candidate (§5a/REVIEW-10-05
 ## 5. Evidence base (don't re-derive)
 
 Key documents:
+- `docs/MANUAL-SCALPING.md` (**workflow/tooling, not strategy evidence**): `/scalp` calculator formulas,
+  contract/cost caveats, self-reported journal schema and atomic-file behavior. It adds no outcome sample
+  and changes no measured verdict. The bot-ledger isolation test is a safety check, not an edge result.
 - **Structural-stop time-gate judgement (recorded 2026-10-19 21:19 UTC; checked-in data through 18:10 UTC on that day, n=139):** `tools/pressure_report.py --root . --era structstop` at the judgement reported all five §7 SCREEN checks inside their bars (B1 5.91 SL/day, B2 46.76% SL share, B3 24.46% scratch share, C1 −0.071R gross, C2 37.50% decisive [28.8–47.1]); **SCREEN MET, PASS NOT MET** (n<150; Wilson LB 28.8% is not >32.1%). Gross era P&L there was −$56.01; at the assumed $0.40 round trip, net −$111.61 (−0.142R/trade); at the quote logger's $0.55 first-look median, −$132.46 (−0.168R/trade). The §7 gap count was **2/2 and the REVERT trigger FIRED**, despite no gap-through or realized gap damage. The pre-registered response requires the gap guard first, but its cutoff/open-position policy is undefined; no code change, deploy, or 0.25 ATR test was made. Full judgement and blocker: `docs/REVIEW-2026-10-19-struct-stop-judgement.md`. **Post-gate refresh (2026-10-20 08:59 UTC, docs only):** era n=147 (43W/66L/37BE/1TIME), guard still PASS (0 inside level, 81.6% level-bound, +0.50 ATR median clearance, 3.29 ATR median risk), gap count still **2/2**, logger 6/14 complete days. Those are observations on a grown sample: the n=150 arm **lapsed with the 10-19 gate** and is not re-opened by crossing it later — see `docs/REVIEW-2026-10-20-post-gate-refresh.md` §3.
 - `docs/ANALYSIS-2026-10-16-dashboard-pressure.md` (**latest, display-only**): documents the dashboard's
   market-context layer (`pressure.py`, `tools/pressure_report.py`) and composite weights. Its dated
   calibration (n=120 struct-stop + n=347 max-hold) found the composite *collinear with side — not
-  separable within-side*; the latest re-join at n=147 confirms the same verdict (BUY pressure 49–81,
-  SELL 14–49, no `against` bucket on either side). The other panels provide setup/location/risk context;
+  separable within-side*; the current re-join at n=199 confirms the same verdict (BUY 76 aligned / 5
+  mixed, SELL 113 aligned / 5 mixed, no `against` bucket on either side). The other panels provide setup/location/risk context;
   none authorizes a gate, a change to the judged stop experiment, or the still-blocked gap-guard action.
 - `docs/PREREG-2026-10-15-level-test-0.25.md` (**pre-registration, not deployed**): the 0.25 ATR level test, its bars and REVERT rules. It is **blocked by the fired 10-19 closure-gap trigger** and is not the next eligible change.
 - `docs/ANALYSIS-2026-10-15-stop-loss-rate.md` (**analysis, no runtime change**): "too many stop losses" —
@@ -553,15 +585,22 @@ window, and its dedupe makes extra runs harmless; the instant break notice is th
 fires is visible without checking the box. This changes nothing in the struct-stop window,
 the fired §7 closure-gap trigger, or the still-blocked gap guard.
 
-**Chart & Placement tab (2026-10-23): review the tab, then deploy dashboard-only after sign-off**
-(`DASH_CHANGED` — the dashboard restarts, `goldbot` does not; a local render is
-`GOLD_DATA_DIR=. python3 dashboard.py`). It changes no gate, parameter or exit. The one thing it does
-*not* do yet is **log manual trades**: until those are recorded with box high/low, side, entry, stop,
-target and exit reason, the advice in the tab cannot become evidence and the box doc's bar
-(n≥100 manual trades, positive expectancy after the measured spread) stays unreachable. That logger
-is the owner's call and would write its own file, never `trades.csv`. Also open: whether to draw the
-open paper trade (entry/SL/TP/ratchet) on the chart — cheap, and useful for seeing why the engine did
-what it did.
+**Chart & Placement + Manual Scalping (2026-10-23): review, then deploy dashboard-only after sign-off.**
+The manual-logging follow-up is now **built** at `/scalp` (`docs/MANUAL-SCALPING.md`), no longer an open
+schema decision. It records side, timeframe, entry/stop/target, the full cost/contract/size snapshot,
+setup/notes, and — for externally closed rows — exit price/reason, net P&L and R in its own host-local
+JSON file, never `trades.csv`. Owner checks before use: open `/scalp`, verify the editable balance/risk,
+actual spread and broker contract/volume step, and confirm the two record buttons do not place orders.
+`DASH_CHANGED` restarts the dashboard for `dashboard.py` or its listed helpers; `goldbot` does not restart.
+Local render: `GOLD_DATA_DIR=. GOLD_MANUAL_JOURNAL_FILE=/tmp/manual_scalp_journal.json python3 dashboard.py`.
+Refresh follow-up (2026-10-23): main-dashboard tab switches now update `?tab=` with
+`history.replaceState` as well as localStorage, so the 15-second meta-refresh cannot replay an old
+`?tab=chart` deep link and pull the operator away from Journal, Boxes, Simple, or Full. Explicit
+deep links still win on first load, and chart `tf` is preserved. No engine behavior changes.
+Next evidence action is operational, not a strategy change: accumulate and review ≥100 closed manual rows
+with positive expectancy after measured costs before believing a method. Still open from the Chart tab:
+whether to draw the bot's open paper trade (entry/SL/TP/ratchet) on the chart. No engine/gate/exit work is
+authorized by this dashboard feature.
 
 Dashboard + notifier PR: review the read-only panels and the alert rule, then deploy
 **dashboard-only** after sign-off; no engine restart. The 2026-10-20 manual watch cards
@@ -575,9 +614,9 @@ disables it. **Digest-line fix (later 10-21):** the 18:00 digest's `🔔 box ale
 was a wiring bug (autosync never hands its Telegram pair to a child), not a missing pair. After the
 fix merges, expect `🔔 box alerts: Telegram pair found · notifier not running (optional: install
 deploy/boxalert.service)` until the owner installs the unit, then `running · …`
-(`docs/AUTOSYNC.md` §3). The machine snapshot now reflects 2026-10-21 14:59 UTC (661 closed, n=164, no open
-trade); the earlier 08:59/11:59 narratives remain dated assessments, not new experiment
-judgements. **The gap-guard blocker is unchanged** — no runtime change was made.
+(`docs/AUTOSYNC.md` §3). The current machine snapshot is the marked block at the top of this file;
+the earlier 08:59/11:59 narratives remain dated assessments, not new experiment judgements.
+**The gap-guard blocker is unchanged** — no runtime change was made.
 
 **Priority incident blocker (2026-10-19):** recovery tool and safeguards are prepared
 for owner merge; full smoke + repair tests pass. Merge alone does not repair the host.
@@ -593,8 +632,7 @@ the detailed evidence and backlog. Dated pre-registrations/reviews are the sourc
 of truth for experiment thresholds; always refresh from current data.
 
 0. **Ops verification first (still open):** the latest checked-in CSV/log reaches
-   2026-10-21 11:59 UTC and its final 60 logged minutes are complete as of that row;
-   at this session's documentation time that snapshot is the current one. This does not
+   2026-10-23 14:59 UTC; at this session's documentation time that snapshot is the current one. This does not
    prove the production process/revision or systemd hardening, so confirm the
    heartbeat/alerts/dedup deployment and `mt5.service` hardening **on the host**.
    Runbook + drop-in in `docs/REVIEW-2026-09-29-feed-outage.md` §7
@@ -618,16 +656,16 @@ of truth for experiment thresholds; always refresh from current data.
    `SL_CLEAR_ATR = 0.5` + `RR_TARGET` TP. At the judged **n=139** the geometry guard and A1–A5 pass; the
    registered **SCREEN MET** (SL/day 5.91, SL share 46.76%, scratch 24.46%, gross −0.071R/trade, decisive
    WR 37.50% [28.8–47.1]). **PASS NOT MET**: n<150 and Wilson LB 28.8% is not >32.1%.
-   The era has since grown to **n=147** with all bars still inside their thresholds (SL/day 5.50, SL share
-   44.90%, scratch 25.17%, gross −0.028R, decisive 39.45% [30.8–48.8]; gross −$23.43). Those are
+   The era has since grown to **n=199** with all bars still inside their thresholds (SL/day 6.00, SL share
+   45.23%, scratch 26.63%, gross −0.053R, decisive 37.93% [30.4–46.0]; gross −$61.13). Those are
    **post-gate observations, not a re-judgement**: the n=150 confirmatory arm lapsed when the time gate
    came first, and crossing 150 later must not be used to re-run SCREEN/PASS
    (`docs/REVIEW-2026-10-20-post-gate-refresh.md` §3). A genuinely re-opened arm needs a new dated
    pre-registration written before the data is used.
    The separate closure-gap rule is resolved: counting post-cutover trades open across a >5-minute
-   log hole classified as a scheduled daily/weekly closure, `check_gap_rides.py` reports **2/2**
-   (#595/#610) and the eight post-gate trades added no ride, so the §7 extra REVERT trigger **FIRED**,
-   despite $0 realized gap damage. The
+   log hole classified as a scheduled daily/weekly closure, `check_gap_rides.py` reports **3/2**
+   (#595/#610/#687), so the §7 extra REVERT trigger remains **FIRED**, despite $0 realized gap damage
+   on those rows. The
    registered response is **REVERT with the gap guard first**; the already-registered 0.25 ATR test
    does not proceed. The guard remains only an unadopted candidate: its cutoff and whether it blocks
    entries only or closes open positions are unspecified. **No guard, revert, strategy change or host
@@ -717,9 +755,10 @@ of truth for experiment thresholds; always refresh from current data.
    *Done (on the branch):* machine-checked handoff + digest line, `docs/AUTOSYNC.md`, the guard/harness fixes,
    `win_rate_report.py --spread`, the GOLD quote + spec logger and report, the large-N history path.
    *Owner decided:* leave `NOTIFY` as it is.
-   *Quote logger in progress (checked 2026-10-20 08:59 UTC):* `python3 tools/xm_quote_report.py` reports
-   6.7 days collected, 6/14 complete UTC days and 1/2 complete weekends; first-look median spread/round trip is
-   about $0.55. Keep the $0.40 assumption until the report reaches 14 complete days including 2 weekends, then
+   *Quote logger in progress (checked 2026-10-23 14:59 UTC):* `python3 tools/xm_quote_report.py` reports
+   9/14 complete UTC days and 1/2 complete weekends; median spread/round trip is about $0.55. Its latest
+   report is STALE (newest row ~0.4 h old), so verify the service on the host rather than assuming collection
+   is healthy. Keep the $0.40 assumption until the report reaches 14 complete days including 2 weekends, then
    re-cost with `win_rate_report.py --spread` / `strategy_lab.py --cost`. Spread alone does not measure all
    slippage/commission. Verify the observed server offset around the 2026-10-25 DST change; do not guess — the
    data so far shows a single **+3 h** offset, and the EU rule (**2026-10-25 01:00 UTC**) and US rule
@@ -729,7 +768,7 @@ of truth for experiment thresholds; always refresh from current data.
    *Not for gold now:* `live_readiness` / `live_path_probe` / order executor / GO-LIVE window (no positive point
    estimate to stage), `reconcile_stale_trade` (no stuck trade; #577 verified).
 
-7. **Dashboard read layer (2026-10-16) — display-only, keep it that way.** `pressure.py` mirrors
+7. **Dashboard market read layer (2026-10-16) — display-only, keep it that way.** `pressure.py` mirrors
    `engine.py`/`trade_filter.py` constants instead of importing them, and **Scenario U pins every
    mirror** (plus the §7 thresholds and `LIVE_CUTOVER`) so a change to either side fails the deploy gate
    — if a threshold moves, move it in both places in the same commit. The panel's era card reports the
@@ -856,13 +895,19 @@ data drop, not just after code changes.
 ```
 engine.py          signals + structural stop + BE ratchet + max-hold TIME + state machine
 trade_filter.py    portfolio gates (cooldown, daily breaker, blackouts, ATR)
-dashboard.py       Flask status page (read-only)
+dashboard.py       Flask status page: existing bot panels are read-only; separate /scalp page has
+                   journal-only POST routes (no order API, no engine/ledger/state writes)
 pressure.py        read-only market-context layer for the dashboard (tape pressure, engine-gate read,
                    location/risk, portfolio state, §7 era card, feed health, box geometry/chop/retest
                    and the pure box-alert decision + rate limiter) — stdlib only, no writes
-chart.py           read-only chart + placement layer for the Chart & Placement tab: M1->M5/M15
-                   aggregation, pixel-space chart primitives (candles/levels/session bands), the cost
-                   ruler, and the entry/stop/target cards — stdlib only, no writes, no engine import
+chart.py           read-only chart + placement layer for the Chart & Placement tab and /scalp:
+                   M1->M5/M15 aggregation, pixel-space chart primitives (candles/levels/session bands),
+                   cost ruler, entry/stop/target cards — stdlib only, no writes, no engine import
+manual_scalp.py    costed manual ticket arithmetic + atomic self-reported journal store; stdlib only,
+                   no engine/broker import; writes only GOLD_MANUAL_JOURNAL_FILE
+scalp_template.py  separate non-auto-refreshing /scalp HTML/JS preview; no I/O or order controls
+manual_scalp_journal.json  host-local, git-ignored manual decisions (SKIPPED/OPEN/CLOSED), not evidence
+                   or bot state; default /opt/gold/, override with GOLD_MANUAL_JOURNAL_FILE
 tools/strategy_lab.py   canonical costed/stateful/era-matched replay (exit+gate decisions)
 tools/check_structural_stop.py  ledger-side invariant guard for the 2026-10-05 change (+ deploy-boundary evidence)
 tools/handoff_check.py  machine-checks the snapshot block at the top of THIS file (autosync digest: 📝 handoff)
@@ -910,10 +955,14 @@ tools/             other analysis / integrity / report scripts (not on the hot p
   2026-10-23 the unit has **two jobs**: the rate-limited break notice and the twice-daily session
   watch plan (07:00 / 13:00 UTC; `--no-plan` drops the second). Volume measured at **5.1 messages/day**
   (`tools/box_report.py --alert-scan`); `GOLD_BOX_ALERT_DAILY_CAP` is the knob that binds.
-- A `dashboard.py` / `pressure.py` change is a **dashboard-only** deploy (`DASH_CHANGED`): the dashboard
-  service restarts, `goldbot` does not. Tabs are `Simple` (default, plain-English volatility guard — green/amber/red, `should I trade now?`), `Chart & Placement` (`?tab=chart`, price chart + entry/stop/target + cost ruler), `Boxes & Timing` (`?tab=boxes`) and `Full` (all gates); preference is stored in `localStorage` + `?tab=` deep links, and `?tf=1|5|15` picks the chart timeframe. For a local render, point the reader at a checkout instead of the
-  live root: `GOLD_DATA_DIR=. python3 dashboard.py` (also `GOLD_LOG_FILE`, `GOLD_TRADES_FILE`,
-  `GOLD_SKIP_FILE`, `GOLD_STATUS_FILE`); defaults stay `/opt/gold/*`.
+- A `dashboard.py` / `pressure.py` / `chart.py` / `manual_scalp.py` / `scalp_template.py` change is a
+  **dashboard-only** deploy (`DASH_CHANGED`): the dashboard service restarts, `goldbot` does not. Main
+  tabs are `Simple`, `Journal`, `Chart & Placement`, `Boxes & Timing` and `Full`; `/scalp` is a separate
+  non-auto-refreshing manual workspace, not a tab in that switcher. Main-tab preference uses
+  `localStorage` + `?tab=`; `?tf=1|5|15` picks chart timeframe here and on `/scalp`. For a local render:
+  `GOLD_DATA_DIR=. python3 dashboard.py` (also `GOLD_LOG_FILE`, `GOLD_TRADES_FILE`, `GOLD_SKIP_FILE`,
+  `GOLD_STATUS_FILE`, `GOLD_MANUAL_JOURNAL_FILE`); defaults stay `/opt/gold/*`. The manual JSON journal
+  is git-ignored/host-local and is not an autosync merge or deploy artifact. See `docs/MANUAL-SCALPING.md`.
 - Logs: `journalctl -u goldbot -f`; autosync log `/var/log/gold_autosync.log`.
 
 ## 11. How to keep this file honest
