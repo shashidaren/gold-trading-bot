@@ -986,7 +986,7 @@ HTML_TEMPLATE = """
                     </tbody>
                 </table>
                 </div>
-                <div class="text-[11px] text-slate-500 mt-2">Grouped by Entry_Time date (the repo's era convention). Cumulative starts at the first day in this window, not at $500.</div>
+                <div class="text-[11px] text-slate-500 mt-2">Grouped by Entry_Time date (the repo's era convention). Cumulative is since the first ledger day, not since a $500 balance.</div>
             </div>
 
             <div class="grid grid-cols-1 xl:grid-cols-2 gap-5 mb-5">
@@ -1001,8 +1001,8 @@ HTML_TEMPLATE = """
                         <li>· <span class="text-slate-400">{{ j.givebacks.scratched_runners }}</span> scratched on the ratchet (BE)</li>
                         <li>· <span class="text-slate-400">{{ j.givebacks.stopped_after_profit }}</span> gave the gain back and hit the stop</li>
                         <li>· <span class="text-slate-400">{{ j.givebacks.winners_with_heat }}</span> winners first ran ≥0.5R against</li>
-                        <li>· peak unrealised (median) <span class="font-mono">{{ '%+.2f'|format(j.givebacks.left_on_table_r_median) if j.givebacks.left_on_table_r_median is not none else '—' }}R</span>;
-                            sum of peaks <span class="font-mono">{{ '%+.2f'|format(j.givebacks.left_on_table_r_sum) if j.givebacks.left_on_table_r_sum is not none else '—' }}R</span></li>
+                        <li>· median give-back (peak − final) <span class="font-mono">{{ '%+.2f'|format(j.givebacks.left_on_table_r_median) if j.givebacks.left_on_table_r_median is not none else '—' }}R</span>;
+                            sum of give-backs <span class="font-mono">{{ '%+.2f'|format(j.givebacks.left_on_table_r_sum) if j.givebacks.left_on_table_r_sum is not none else '—' }}R</span></li>
                     </ul>
                     {% if j.givebacks.worst %}
                     <div class="text-[11px] text-slate-500 mt-2">Largest pages:
@@ -1014,7 +1014,7 @@ HTML_TEMPLATE = """
                 <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4">
                     <div class="text-sm font-semibold text-slate-200">What the risk layer blocked</div>
                     <div class="text-xs text-slate-300 mt-2">
-                        {{ j.skips.n_24h }} full signals in the last {{ j.skips.hours }} h of the skip log:
+                        {{ j.skips.n_24h }} engine signals in the last {{ j.skips.hours }} h of the skip log:
                     </div>
                     <ul class="text-xs text-slate-300 mt-2 space-y-1">
                         {% for reason, count in j.skips.reasons_24h.items() %}
@@ -1037,7 +1037,7 @@ HTML_TEMPLATE = """
                     <div class="text-sm font-semibold text-slate-200">🎯 Candidate indicators — measured on the bot's own entries</div>
                     <div class="text-[11px] text-slate-500 md:ml-auto">{{ bd.n_entries }} closed · {{ bd.n_decisive }} decisive · {{ bd.permutations }} permutations</div>
                 </div>
-                <div class="rounded-lg px-3 py-2 mt-2 text-xs {{ 'bg-emerald-950/30 text-emerald-200 border border-emerald-800' if bd.verdict.startswith('1 ') or bd.verdict.startswith('2 ') else 'bg-slate-900/60 text-slate-300 border border-slate-700' }}">
+                <div class="rounded-lg px-3 py-2 mt-2 text-xs {{ 'bg-emerald-950/30 text-emerald-200 border border-emerald-800' if bd.passing else 'bg-slate-900/60 text-slate-300 border border-slate-700' }}">
                     {{ bd.verdict }}
                 </div>
                 <div class="overflow-x-auto mt-3">
@@ -2191,16 +2191,18 @@ def chart_context(group=None, boxes_status=None):
         return {"ok": False, "reason": f"chart read failed: {exc}"}
 
 
-_journal_cache = {"trades_key": None, "at": 0.0, "report": None}
+_journal_cache = {"key": None, "at": 0.0, "report": None}
 
 
 def journal_context(status=None, log_tail=None):
     """The self-journal read for the 📓 tab (display-only, cached ~2 min).
 
-    The expensive part (join 695 ledger rows to 50k bars, compute 17 candidate
+    The expensive part (join 695 ledger rows to 50k bars, compute 18 candidate
     series, run the permutation guard) is rebuilt only when a trade closes or
-    the cache ages out. The open trade and the skip counts are refreshed on
-    every request because they are cheap and move minute to minute.
+    the cache ages out. Only the trimmed dashboard view is cached — never the
+    50k-bar series or the 695 full entry records. The open trade and the skip
+    counts are re-priced on every request from the tail, because they are cheap
+    and move minute to minute.
     """
     if JN is None:
         return {"ok": False, "reason": f"journal.py unavailable: {_JN_IMPORT_ERROR}"}
@@ -2208,20 +2210,25 @@ def journal_context(status=None, log_tail=None):
         return {"ok": False, "reason": "journal needs pressure.py for the shared parsers"}
     import time as _time
     now = _time.time()
-    key = _file_key(TRADES_FILE_PATH)
+    # a close moves trades.csv; an open (or the engine resync) moves status.json
+    # — rebuild on either, so the open page can never belong to the last trade
+    key = (_file_key(TRADES_FILE_PATH), _file_key(STATUS_FILE_PATH))
     cached = _journal_cache["report"]
-    fresh = (cached is not None and key == _journal_cache["trades_key"]
+    fresh = (cached is not None and key == _journal_cache["key"]
              and (now - _journal_cache["at"]) < JOURNAL_CACHE_SECONDS)
     if not fresh:
         try:
             report = JN.build(PR.read_rows(LOG_FILE_PATH), PR.read_rows(TRADES_FILE_PATH),
-                              None,
+                              status or {},
                               PR.read_rows(SKIP_FILE_PATH) if os.path.isfile(SKIP_FILE_PATH) else [],
                               cost=JN.COST_USD, permutations=0)
             scored = [e for e in report["entries"] if e["era"] == "struct-stop"]
             report["board"] = JN.indicator_board(scored, permutations=JOURNAL_PERMUTATIONS)
-            _journal_cache.update({"trades_key": key, "at": now, "report": report})
-            cached = report
+            # cache the trimmed view only: the full series/entries would pin
+            # tens of MB of floats in a long-lived dashboard process
+            view = JN.dashboard_view(report)
+            _journal_cache.update({"key": key, "at": now, "report": view})
+            cached = view
         except Exception as exc:
             return {"ok": False, "reason": f"journal build failed: {exc}"}
     report = dict(cached)
@@ -2229,13 +2236,16 @@ def journal_context(status=None, log_tail=None):
         report["skips"] = JN.skips(PR.read_rows(SKIP_FILE_PATH) if os.path.isfile(SKIP_FILE_PATH) else [])
     except Exception:
         pass
-    price = None
+    price = now_ts = None
     for row in (log_tail or []):          # newest first from the page's tail read
         price = PR.parse_float(row.get("Close"))
+        now_ts = PR.parse_ts(row.get("Timestamp"))
         if price:
             break
+    if now_ts is not None:
+        report["as_of"] = now_ts
     try:
-        report["open"] = JN.open_entry(report.get("series"), status or {}, JN.COST_USD, price=price)
+        report["open"] = JN.refresh_open(report.get("open"), price=price, now_ts=now_ts)
     except Exception:
         report["open"] = None
     return JN.dashboard_view(report)

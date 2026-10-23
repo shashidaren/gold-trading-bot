@@ -137,6 +137,15 @@ class Build(unittest.TestCase):
         self.assertIsNotNone(o["r_now"])
         self.assertAlmostEqual(o["risk"], 10.0)
 
+    def test_refresh_open_reprices_without_rebuilding(self):
+        o = self.report["open"]
+        moved = J.refresh_open(o, price=o["entry"] + 5.0, now_ts=o["entry_time"] + timedelta(minutes=90))
+        self.assertAlmostEqual(moved["r_now"], 5.0 / o["risk"])
+        self.assertAlmostEqual(moved["hold_min"], 90.0)
+        self.assertEqual(moved["entry"], o["entry"])
+        self.assertEqual(o["r_now"], self.report["open"]["r_now"])   # original untouched
+        self.assertIsNone(J.refresh_open(None, price=1.0))
+
     def test_report_lines_and_csv(self):
         self.report["board"] = J.indicator_board(self.report["entries"], permutations=0)
         text = "\n".join(J.report_lines(self.report))
@@ -184,9 +193,9 @@ class Scoreboard(unittest.TestCase):
         self.assertEqual(board["n_decisive"], 40)
         self.assertIsNotNone(board["p_global_wr"])
         self.assertLess(board["p_global_wr"], 0.05)
+        self.assertEqual(board["passing"], 1, board["verdict"])
         verdict = board["verdict"]
-        self.assertTrue(verdict.startswith("1 ") or verdict.startswith("2 ")
-                        or verdict.startswith("3 "), verdict)
+        self.assertTrue(verdict.startswith("1 "), verdict)
         adx = [r for r in board["rows"] if r["key"] == "adx"][0]
         self.assertTrue(adx["verdict"].startswith("candidate"), adx["verdict"])
         self.assertAlmostEqual(adx["lift"], 100.0)
@@ -199,6 +208,7 @@ class Scoreboard(unittest.TestCase):
             entries.append(fake_entry(i, "TP" if win else "SL",
                                       30.0 if i % 2 == 0 else 10.0))
         board = J.indicator_board(entries, permutations=200, seed=7)
+        self.assertEqual(board["passing"], 0, board["verdict"])
         self.assertFalse(board["verdict"].startswith("1 "), board["verdict"])
 
     def test_a_categorical_feature_with_one_empty_bucket_is_reported_not_crashed(self):

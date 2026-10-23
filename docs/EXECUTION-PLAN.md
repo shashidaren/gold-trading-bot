@@ -87,7 +87,7 @@ Live-readiness estimate is recorded separately in
 Added `journal.py` (per-trade context, outcome, R, MFE/MAE, honest success accounting),
 `indicators.py` (18 causal candidate fields the engine does **not** use), the dashboard
 **📓 Journal** tab, and two read-only CLIs (`tools/journal_report.py`, `tools/indicator_lab.py`),
-with 33 new hermetic tests and smoke Scenario X. The measured answer to "can more indicators help?"
+with 34 new hermetic tests and smoke Scenario X. The measured answer to "can more indicators help?"
 is **no on the current sample**: the best bucket lift is inside the random-label noise floor and no
 directional rule beats a coin flip forward. Nothing was added to the engine, no gate or parameter
 moved, the open struct-stop window and the fired gap trigger are untouched, and no deployment was

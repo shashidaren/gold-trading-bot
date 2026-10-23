@@ -270,6 +270,26 @@ def open_entry(series, status, cost=COST_USD, price=None):
     }
 
 
+def refresh_open(row, price=None, now_ts=None):
+    """Re-price a cached open page without rebuilding the whole journal.
+
+    The dashboard keeps the expensive join cached and only calls this with the
+    newest logged close/time, so a 120 s cache cannot show a stale P/L while the
+    rest of the page is current.
+    """
+    if not row:
+        return None
+    out = dict(row)
+    direction = 1.0 if row.get("side") == "BUY" else -1.0
+    risk = row.get("risk")
+    if price is not None and risk:
+        out["price_now"] = price
+        out["r_now"] = (price - row["entry"]) * direction / risk
+    if now_ts is not None and row.get("entry_time"):
+        out["hold_min"] = (now_ts - row["entry_time"]).total_seconds() / 60.0
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. success accounting
 # ─────────────────────────────────────────────────────────────────────────────
@@ -376,13 +396,13 @@ def summarise(entries, cost=COST_USD, label="book"):
     return out
 
 
-def _group(entries, key):
+def _group(entries, key, cost=COST_USD):
     buckets = {}
     for e in entries:
         if e.get("open"):
             continue
         buckets.setdefault(key(e), []).append(e)
-    return {name: summarise(rows, label=name) for name, rows in sorted(buckets.items())}
+    return {name: summarise(rows, cost, name) for name, rows in sorted(buckets.items())}
 
 
 def givebacks(entries):
@@ -429,7 +449,7 @@ def skips(skip_rows, now=None, hours=24):
             "last": (recent[-1] if recent else None), "hours": hours}
 
 
-def daily(entries, last=14):
+def daily(entries, last=14, cost=COST_USD):
     """Per-entry-date rows (the repo's era convention groups by Entry_Time)."""
     buckets = {}
     for e in entries:
@@ -439,7 +459,7 @@ def daily(entries, last=14):
     rows = []
     cum = 0.0
     for day in sorted(buckets):
-        rows.append(summarise(buckets[day], label=str(day)))
+        rows.append(summarise(buckets[day], cost, str(day)))
     for row in rows:
         cum += row["net"] or 0.0
         row["cum_net"] = cum
@@ -675,7 +695,7 @@ def indicator_board(entries, permutations=200, seed=7, min_decisive=INDICATOR_MI
         "p_global_wr": p_global_wr, "observed_max_r_lift": observed_r,
         "null_max_r_lift_95": null_r_95, "p_global_r": p_global_r,
         "alpha": NOISE_ALPHA, "min_decisive": min_decisive,
-        "verdict": verdict,
+        "passing": len(passing), "verdict": verdict,
         "note": ("Exploratory. Splits are declared in indicators.SPLITS; the permutation "
                  "shuffles outcomes, so a null 95th percentile is the best lift random labels "
                  "produce across this many looks. A candidate still needs a dated "
@@ -722,11 +742,11 @@ def build(log_rows=None, trades=None, status=None, skip_rows=None, cost=COST_USD
         "pre_era": summarise([e for e in entries if e["era"] != "struct-stop"], cost, "pre-struct-stop"),
         "today": summarise(todays, cost, "today (entry date)"),
         "last7": summarise(last7, cost, "last 7 days (entry date)"),
-        "sides": _group(entries, lambda e: e["side"]),
-        "era_sides": _group(era, lambda e: e["side"]),
-        "sessions": _group(entries, lambda e: e["session"]),
-        "era_sessions": _group(era, lambda e: e["session"]),
-        "daily": daily(entries, last=14),
+        "sides": _group(entries, lambda e: e["side"], cost),
+        "era_sides": _group(era, lambda e: e["side"], cost),
+        "sessions": _group(entries, lambda e: e["session"], cost),
+        "era_sessions": _group(era, lambda e: e["session"], cost),
+        "daily": daily(entries, last=14, cost=cost),
         "recent": list(reversed(entries[-RECENT_N:])),
         "givebacks": givebacks(entries),
         "era_givebacks": givebacks(era),
@@ -837,8 +857,8 @@ def report_lines(report):
     out.append(f"     · {g['scratched_runners']} scratched on the ratchet (BE)")
     out.append(f"     · {g['stopped_after_profit']} gave the gain back and hit the stop")
     out.append(f"     · {g['winners_with_heat']} winners first ran ≥0.5R against")
-    out.append(f"     · peak unrealised (median) {_num(g['left_on_table_r_median'])}R; "
-               f"sum of peaks {_num(g['left_on_table_r_sum'])}R")
+    out.append(f"     · median give-back (peak − final) {_num(g['left_on_table_r_median'])}R; "
+               f"sum of give-backs {_num(g['left_on_table_r_sum'])}R")
     if g["worst"]:
         worst = ", ".join(f"#{e['num']} {e['side']} {e['reason']} +{e['mfe_r']:.2f}R→{_num(e['r'])}R"
                           for e in g["worst"])

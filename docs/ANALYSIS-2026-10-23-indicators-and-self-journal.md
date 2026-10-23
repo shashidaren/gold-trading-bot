@@ -38,12 +38,12 @@ Delivered in this session:
 
 | file | what it does |
 |---|---|
-| `indicators.py` | 15 candidate indicator families (ADX/DMI, MACD, Bollinger %B/bandwidth, Stochastic, Keltner, Donchian, efficiency ratio, ATR percentile, RVOL, RSI slope, body, close-location, gap) — deterministic, stdlib-only, **causal**; plus descriptions, pre-declared splits and the direction rules. |
+| `indicators.py` | 18 causal candidate fields in 13 families (ADX/DMI, MACD, Bollinger %B/bandwidth, Stochastic, Keltner, Donchian, efficiency ratio, ATR percentile, RVOL, RSI slope, body, close-location, gap) — deterministic, stdlib-only, **causal**; plus descriptions, pre-declared splits and the direction rules. |
 | `journal.py` | the self-journal read layer: one record per closed trade with the pre-entry context, outcome, R, MFE/MAE and a one-line thesis; success accounting (decisive WR with Wilson CI, all-in rate, R/trade, payoff, profit factor, drawdown, streaks); per-side / per-session / per-day splits; give-back review; open trade; the candidate scoreboard with a permutation guard. |
 | `tools/journal_report.py` | prints the journal; `--csv` exports the flat per-trade record; `--json` for machines. |
 | `tools/indicator_lab.py` | measures the candidates three ways: on the bot's own entries, on the whole tape (forward drift), and as regime/“when does the tape move” splits. |
-| `dashboard.py` | a fourth… fifth tab, **📓 Journal** (`?tab=journal`): the same read layer rendered — success cards, newest pages, side/session tables, the last 14 entry days, what the journal noticed, what the risk layer blocked, and the measured indicator scoreboard. Display-only. |
-| `tools/test_indicators.py`, `tools/test_journal.py` | 17 + 16 hermetic tests. `smoke_test.py` **Scenario X** adds the accounting + noise-floor checks to the deploy gate. |
+| `dashboard.py` | a fifth tab, **📓 Journal** (`?tab=journal`): the same read layer rendered — success cards, newest pages, side/session tables, the last 14 entry days, what the journal noticed, what the risk layer blocked, and the measured indicator scoreboard. Display-only. |
+| `tools/test_indicators.py`, `tools/test_journal.py` | 17 + 17 hermetic tests. `smoke_test.py` **Scenario X** adds the accounting + noise-floor checks to the deploy gate. |
 
 ---
 
@@ -103,17 +103,31 @@ the two buckets, and check:
 
 Measured on the 198-entry era (144 decisive):
 
-| candidate | split | high bucket | low bucket | lift | verdict |
+| candidate | split | high bucket WR (dec) | low bucket WR (dec) | lift | verdict |
 |---|---|---|---|---|---|
-| RVOL | ≥1 / <1 | 47.7% (65) | 30.4% (79) | **+17.3 pp** | inside noise |
-| ATR percentile | ≥50 / <50 | 32.1% (78) | 45.5% (66) | −13.4 pp | inside noise |
-| Bollinger bandwidth | median | 31.9% (69) | 44.0% (75) | −12.1 pp | inside noise |
-| Bollinger %B | ≥0.5 / <0.5 | 32.4% (71) | 45.2% (73) | −12.8 pp | inside noise |
-| 20-bar range position | ≥0.5 / <0.5 | 32.4% (74) | 44.3% (70) | −11.9 pp | inside noise |
-| Stochastic %K | ≥50 / <50 | 32.8% (67) | 44.2% (77) | −11.4 pp | inside noise |
-| gap from prior close | ≥0 / <0 | 42.9% (77) | 33.3% (67) | +9.6 pp | inside noise |
-| MACD histogram | ≥0 / <0 | 33.8% (68) | 42.1% (76) | −8.3 pp | inside noise |
-| … the rest (candle body, close-location, Keltner, Stochastic %D, ER, RSI slope, ±DI, ADX) | | | | −6.3 to +1.2 pp | inside noise |
+| RVOL (20) | ≥1 / <1 | 47.7% (31/65) | 30.4% (24/79) | **+17.3 pp** | inside noise |
+| ATR percentile (200) | ≥50 / <50 | 32.1% (25/78) | 45.5% (30/66) | −13.4 pp | inside noise |
+| Bollinger bandwidth | ≥0.162 / <0.162 | 31.9% (22/69) | 44.0% (33/75) | −12.1 pp | inside noise |
+| 20-bar range position | ≥0.5 / <0.5 | 32.4% (24/74) | 44.3% (31/70) | −11.9 pp | inside noise |
+| Bollinger %B | ≥0.5 / <0.5 | 32.4% (23/71) | 43.8% (32/73) | −11.4 pp | inside noise |
+| +DI vs −DI | agrees with side / against | 40.2% (47/117) | 29.6% (8/27) | +10.5 pp | inside noise |
+| Stochastic %K | ≥50 / <50 | 32.8% (22/67) | 42.9% (33/77) | −10.0 pp | inside noise |
+| Gap from prior close | ≥0 / <0 | 42.9% (33/77) | 32.8% (22/67) | +10.0 pp | inside noise |
+| MACD histogram | ≥0 / <0 | 33.8% (23/68) | 42.1% (32/76) | −8.3 pp | inside noise |
+| Candle body | ≥0 / <0 | 41.9% (31/74) | 34.3% (24/70) | +7.6 pp | inside noise |
+| Close location in bar | ≥0.5 / <0.5 | 41.7% (30/72) | 34.7% (25/72) | +6.9 pp | inside noise |
+| Efficiency ratio (30) | ≥0.3 / <0.3 | 43.3% (13/30) | 36.8% (42/114) | +6.5 pp | inside noise |
+| Keltner position | ≥0 / <0 | 35.1% (26/74) | 41.4% (29/70) | −6.3 pp | inside noise |
+| Stochastic %D | ≥50 / <50 | 35.7% (25/70) | 40.5% (30/74) | −4.8 pp | inside noise |
+| +DI (14) | ≥21.9 / <21.9 | 38.8% (31/80) | 37.5% (24/64) | +1.2 pp | inside noise |
+| RSI slope (5) | ≥0 / <0 | 38.8% (26/67) | 37.7% (29/77) | +1.1 pp | inside noise |
+| −DI (14) | ≥22.4 / <22.4 | 38.6% (27/70) | 37.8% (28/74) | +0.7 pp | inside noise |
+| ADX (14) | ≥20 / <20 | 38.1% (40/105) | 38.5% (15/39) | −0.4 pp | inside noise |
+
+`n dec` = decisive trades in that bucket. All 18 rows are inside the family-wise
+noise floor; the split values are pre-declared (`indicators.SPLITS`), except the
+median splits, which are fitted to this sample (one number per feature, named in
+the table and covered by the §5 limits).
 
 **The best-looking bucket is RVOL at +17.3 pp — and random labels produce a best
 lift of +25.0 pp on this design 95% of the time (global p = 0.525).** The R/trade
@@ -126,10 +140,12 @@ answer on this sample is **no measured addition**.
 
 Two other findings worth recording:
 
-* **The DI-vs-side feature is not testable here.** The trend gate makes direction
-  and side nearly collinear (the same trap as the pressure composite, HANDOFF §8);
-  a split that leaves one bucket nearly empty is reported as not testable rather
-  than sliced further.
+* **The DI-vs-side row is near-tautological, and still does not help.** The engine
+  only trades with the trend, so ±DI usually agrees with the side (117 decisive
+  trades agree, 27 disagree). Those 27 are the interesting cells — and they win
+  29.6% (8/27, a CI wide enough to contain everything), so the "agrees" bucket's
+  40.2% is mostly restating the trend gate rather than adding information. The
+  board reports it because it is a real split, not because it is a candidate.
 * **The engine's own filters leave little room.** RSI is already confined to
   30–70, ATR to 1.10–4.50, and entries sit near the EMA. A candidate that helps on
   the whole tape has less opportunity inside the slice the bot already selected.
@@ -228,7 +244,7 @@ For every closed trade:
 
 * the **context** is the last log bar strictly before the entry minute: the
   engine's logged RSI/ATR/wick/EMAs, the 20-bar floor/ceiling distance in ATR,
-  range position, session, and the 15 candidate fields;
+  range position, session, and the 18 candidate fields;
 * the **thesis** is a one-line deterministic summary, e.g.
   `SELL · 20-bar ceiling +3.23 ATR · upper wick 60% · RSI 48.6 · EMA −0.90 ATR · ADX 19 weak · ER 0.17`;
 * the **outcome** is the ledger's own exit reason, R from the reward leg
@@ -258,6 +274,12 @@ the same conclusion as the 2026-10-19 judgement: **SCREEN MET, no demonstrated
 edge, PASS not met**. The journal does not re-judge the experiment; it just puts
 the arithmetic in one place.
 
+**Two R/trade conventions, deliberately both visible.** The journal averages each
+trade's own R (`Profit ÷ that trade's risk`) and calls it **mean R/trade** — the
+era reads **−0.03R**. `pressure_report.py` and HANDOFF §1 divide the era's gross $
+per trade by the *mean* 1R — **−0.046R**. They differ only because risk size varies
+across trades; neither is wrong, and the journal never silently mixes them.
+
 By side (all eras): BUY 27.4% decisive / −0.22R −$424.88; SELL 36.0% / −0.06R
 −$224.36. By session: Asia/rollover 37.5% / −0.04R; London/NY 27.4% / −0.20R —
 the same descriptive gap the 2026-10-05 review downgraded to a **proxy for stop
@@ -267,22 +289,47 @@ geometry**, not a gate.
 
 * **140 of 695 trades (20.1%) were at least +0.75R ahead at some point and did not
   finish there.** Of those, 133 scratched on the ratchet and 6 gave the gain back
-  and hit the stop; 46 winners first ran ≥0.5R against. Median peak unrealised:
-  +1.06R; the sum of those peaks is 154.5R.
+  and hit the stop; 46 winners first ran ≥0.5R against. **Median give-back
+  (peak minus final) +1.06R; the sum of those give-backs is 154.5R** — it is a
+  record of what the exit rule chose, not an unused profit forecast.
 * This is the trade-off the 0.75R ratchet was *chosen* for: the 2026-09-15 review
   showed the 0.30R version converted ~$222 of runs into $0. The journal records the
   cost of that choice; it does not argue for removing it (and removal was already
   measured and rejected on 2026-10-05).
 * The largest pages are listed in the tab (`#187 BUY BE +1.50R→0.00R`,
   `#596 BUY BE +1.48R→0.00R`, `#526 BUY TIME +1.45R→+0.05R`).
-* The risk layer blocked 35 full signals in the last 24 h of the skip log — 24 SL
-  cooldowns and 11 blackouts. `skipped_trades.csv` logs no side, so these are
+* The risk layer blocked 35 engine signals in the last 24 h of the skip log — 24
+  SL cooldowns and 11 blackouts. `skipped_trades.csv` logs no side, so these are
   counts, not a success rate; the blocked-signal research stays in
-  `tools/phantom_trades.py`.
+  `tools/phantom_trades.py`. The journal anchors its 24-hour window to the
+  **newest skip row**, not the wall clock, so re-running it later prints the same
+  number; `pressure_report.py` uses the wall clock (29 in the same run), which is
+  why the two panels can differ by a few rows.
 * The open trade #697 BUY (entry $4027.91, stop $4019.21, target $4040.96) is
   shown as an **unfinished page** and is excluded from every rate.
 
-### 6.4 What “success rate” means here
+### 6.4 The 📓 Journal tab
+
+The tab (`?tab=journal`) renders the same read layer, server-side, in the
+dashboard's existing card language:
+
+* four headline cards — decisive WR for the current rule (with its CI), the
+  record, net at the assumed cost, and expectancy/payoff/breakeven;
+* today and the last 7 entry days;
+* the open page, clearly marked as **not counted** and re-priced from the newest
+  logged close on every request;
+* the newest 12 pages (side, exit, R, MFE, MAE, hold, and the one-line thesis);
+* per-side and per-session tables, the last 14 entry days, the give-back review
+  and the blocked-signal counts;
+* the candidate scoreboard with its family-wise verdict and noise floor.
+
+It is cached for 120 s and keyed on **both** `trades.csv` and `status.json`, so a
+new open/close rebuilds it instead of showing the previous trade. Only the
+trimmed view is cached — never the 50k-bar series or the 695 entry records — so
+the dashboard process does not pin tens of megabytes. The panel has no form, no
+button that acts, and imports no engine module.
+
+### 6.5 What “success rate” means here
 
 | term | definition | why it is not the only number |
 |---|---|---|
@@ -325,7 +372,7 @@ no order, no write, and it never imports the engine.
 | check | result |
 |---|---|
 | `python3 tools/test_indicators.py` | **17 pass** |
-| `python3 tools/test_journal.py` | **16 pass** |
+| `python3 tools/test_journal.py` | **17 pass** |
 | `python3 tools/smoke_test.py` | **SMOKE TEST PASSED** (Scenario X added: journal accounting, open-trade exclusion, reward-leg risk, give-backs, CSV header, real separation flagged, noise not rescued) |
 | `python3 tools/test_dashboard_context.py` (Flask in a temp venv) | **15 pass** (Journal tab render added) |
 | `python3 tools/test_manual_chart.py` / `test_box_alert.py` / `test_box_report.py` / `test_box_watch.py` / `test_signal_outlook.py` | 32 / 34 / 14 / 6 / 9 pass |
@@ -352,7 +399,7 @@ never `goldbot`).
   (`?tab=journal`); no trading path touched
 * `tools/smoke_test.py` — Scenario X
 * `tools/test_dashboard_context.py` — TABS assertion + Journal tab render test
-* `docs/HANDOFF.md` — snapshot/data refresh + §1/§4?/§5/§6/§9/§10/§11 and the era
+* `docs/HANDOFF.md` — snapshot/data refresh + §1/§4/§5/§6/§9/§10/§11 and the era
   timeline; §1 replaced block archived to `docs/HANDOFF-HISTORY.md`
 * this document; `docs/EXECUTION-PLAN.md` and `README.md` tool index;
   `archive/PROJECT_LOG.md` entry

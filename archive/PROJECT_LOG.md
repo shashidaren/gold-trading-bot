@@ -373,7 +373,7 @@ show the success rate?" Answered by building the missing **measurement** layer f
 own rule is that an indicator which has not been measured is decoration.
 
 **What was added.**
-1. **`indicators.py`** — 18 causal candidate fields in 15 families the engine does **not** use: ADX/DMI
+1. **`indicators.py`** — 18 causal candidate fields in 13 families the engine does **not** use: ADX/DMI
    (+DI, −DI, ADX), MACD histogram (exported MACD/signal), Bollinger %B and bandwidth, Stochastic %K,
    Keltner position, Donchian position, Kaufman efficiency ratio, ATR percentile, rolling RVOL, RSI slope
    and candle anatomy (body, close-location, gap in ATR). Stdlib only, no I/O, each row sees only bars
@@ -393,7 +393,7 @@ own rule is that an indicator which has not been measured is decoration.
 4. **`tools/journal_report.py`** and **`tools/indicator_lab.py`** — the owner-facing read-only CLIs
    (`--csv` export, `--json`, `--board-era`, `--era`, `--tape-era`, `--horizon`, `--stride`,
    `--permutations`).
-5. **Tests:** `tools/test_indicators.py` **17**, `tools/test_journal.py` **16**, and the dashboard-context
+5. **Tests:** `tools/test_indicators.py` **17**, `tools/test_journal.py` **17**, and the dashboard-context
    suite grew to **15** (five-tab assertion + a Journal-tab test); smoke **Scenario X** (9 checks).
    `tools/test_dashboard_context.py` hard-codes the tab list, so every new tab must update it in the same
    commit — that is why the tab and its assertion shipped together.
