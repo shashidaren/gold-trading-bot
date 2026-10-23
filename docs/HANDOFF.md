@@ -545,7 +545,12 @@ change, so without it neither the plan nor the instant notice is sent (the diges
 `box alerts: Telegram pair found · notifier not running`). Prove it first with
 `python3 tools/box_alert.py --plan --dry-run` and `--test`. Revert is `.env`-only:
 unset the knob, `GOLD_DIGEST_EVERY_HOURS=0`, `--no-plan`. Full record + measured volume table:
-`docs/PROPOSAL-2026-10-23-telegram-routing.md`. This changes nothing in the struct-stop window,
+`docs/PROPOSAL-2026-10-23-telegram-routing.md`. **If the unit is never installed**, the plan can
+still be driven from cron (`*/5 7,13 * * * cd /opt/gold && GOLD_DATA_DIR=/opt/gold python3
+tools/box_alert.py --plan`), because it needs no daemon — only a run inside the 15-minute anchor
+window, and its dedupe makes extra runs harmless; the instant break notice is the part that needs
+`--loop`. The digest's `🔔` line now ends with `last plan … · next … UTC`, so a plan that never
+fires is visible without checking the box. This changes nothing in the struct-stop window,
 the fired §7 closure-gap trigger, or the still-blocked gap guard.
 
 **Chart & Placement tab (2026-10-23): review the tab, then deploy dashboard-only after sign-off**
@@ -759,6 +764,8 @@ python3 tools/check_structural_stop.py            # stop-vs-level invariant (pos
 python3 tools/check_gap_rides.py                   # §7 closure-gap trigger: rides over a closure + the damage facts
 python3 tools/handoff_check.py                    # this file vs the data (FRESH); --update after a refresh
 python3 tools/xm_quote_report.py --quiet          # "not collecting yet" until mt5quotes-gold is installed; never errors
+GOLD_DATA_DIR=. python3 tools/box_alert.py --plan --dry-run  # the 07:00/13:00 watch-plan message, sent to nobody
+python3 tools/box_alert.py --quiet                # the digest's 🔔 line, now ending with the plan state
 python3 tools/pressure_report.py                 # dashboard read layer end to end (tape/gates/§7 era/calibration)
                                                   #   smoke Scenario U pins its mirrors to engine/trade_filter
 python3 tools/strategy_lab.py --bars forward_test_log.csv > /dev/null   # history mode still runs end to end on real bars

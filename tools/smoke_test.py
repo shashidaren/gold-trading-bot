@@ -3322,11 +3322,29 @@ try:
           and not os.path.exists(_dry.state))
     check("X: a weekend anchor sends nothing at all (market quiet)",
           BA.plan_decision(_args_x, now=datetime(2026, 10, 24, 7, 2, 0))[1]["action"] == "no plan")
+
 finally:
     BA.send_telegram = _orig_send
     if _orig_alert_env is not None:
         os.environ["GOLD_BOX_ALERTS"] = _orig_alert_env
     shutil.rmtree(os.path.dirname(_plan_state), ignore_errors=True)
+
+# X7: the digest line reports the plan, so "the plan is alive" is verifiable from the one
+# message the owner reads (a silent notifier must never look healthy — 2026-09-29 lesson).
+_status_x = BA.plan_status({"plan": {"2026-10-23 London open": "2026-10-23 07:01:02"}},
+                           now=datetime(2026, 10, 23, 9, 0, 0))
+check("X: the digest phrase names the last plan and the next anchor",
+      "last plan 10-23 07:01 UTC (London open)" in _status_x
+      and "next NY open 13:00 UTC" in _status_x, _status_x)
+check("X: with no plan yet it says so and still names the next anchor",
+      "no session plan sent yet" in BA.plan_status({}, now=datetime(2026, 10, 23, 6, 0, 0))
+      and "next London open 07:00 UTC" in BA.plan_status({}, now=datetime(2026, 10, 23, 6, 0, 0)))
+_running_x = BA.digest_line({"loop": {"heartbeat": "2026-10-23 09:00:00", "interval_s": 60},
+                             "plan": {"2026-10-23 London open": "2026-10-23 07:01:02"}},
+                            None, now=datetime(2026, 10, 23, 9, 1, 0),
+                            env={"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "c"})
+check("X: the running digest line carries the plan phrase",
+      _running_x.startswith("box alerts: running") and "last plan" in _running_x, _running_x)
 
 
 print()

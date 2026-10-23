@@ -350,6 +350,40 @@ def alerts_enabled(env=None):
 
 
 # ───────────────────────────────────────────────────────────────────────────── CLI
+def plan_status(state, now=None):
+    """One short phrase: when the last session plan went out, and when the next is due.
+
+    Pure. The digest uses this so "the plan is alive" is verifiable from the same message
+    that reports the notifier state — a plan that silently never fires would otherwise be
+    invisible, which is exactly the 2026-09-29 lesson (a healthy-looking box that had
+    stopped publishing).
+    """
+    now = now or utcnow()
+    plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
+    last = None
+    for key, ts in plan.items():
+        parsed = P.parse_ts(ts)
+        if parsed and (last is None or parsed > last[0]):
+            last = (parsed, key)
+    due_label, _due_anchor = P.box_plan_next(now)
+    upcoming = None
+    for day in (0, 1):                      # today's anchors first, then tomorrow's
+        base = now + timedelta(days=day)
+        for label, hh, mm in P.BOX_PLAN_SESSIONS:
+            anchor = base.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            if anchor > now and (upcoming is None or anchor < upcoming[0]):
+                upcoming = (anchor, label)
+    if due_label:
+        ahead = "a plan is due now"
+    elif upcoming:
+        ahead = f"next {upcoming[1]} {upcoming[0]:%H:%M} UTC"
+    else:
+        ahead = "next anchor unknown"
+    if last is None:
+        return f"no session plan sent yet · {ahead}"
+    return f"last plan {last[0]:%m-%d %H:%M} UTC ({last[1].split(' ', 1)[-1]}) · {ahead}"
+
+
 def digest_line(state, decision=None, now=None, env=None, env_file=None):
     """One line for the autosync digest: no secrets, no traceback.
 
@@ -380,7 +414,7 @@ def digest_line(state, decision=None, now=None, env=None, env_file=None):
         return f"box alerts: notifier STOPPED (last heartbeat {beat:%m-%d %H:%M} UTC) · {sent}"
     if decision and decision.get("fire"):
         sent += " · a candidate is live now"
-    return f"box alerts: running · {sent}"
+    return f"box alerts: running · {sent} · {plan_status(state, now)}"
 
 
 def decide_once(args, now=None, sender=send_telegram, state_path=None):

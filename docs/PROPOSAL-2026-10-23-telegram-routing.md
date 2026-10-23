@@ -156,6 +156,18 @@ inside within 15 min. This is a heads-up, not a signal.
    exactly as it does today.
 4. Proof before installing anything: `python3 tools/box_alert.py --once --dry-run`,
    `python3 tools/box_alert.py --plan --dry-run`, `python3 tools/box_alert.py --test`.
+5. **If you never install the unit, the plan still works from cron** — it needs no daemon,
+   only a run that lands inside a 15-minute anchor window, and the dedupe makes extra runs
+   harmless:
+
+   ```cron
+   */5 7,13 * * * cd /opt/gold && GOLD_DATA_DIR=/opt/gold python3 tools/box_alert.py --plan >> /var/log/gold_boxplan.log 2>&1
+   ```
+
+   The instant break notice is the part that genuinely needs `--loop` (it is evaluated on
+   every closed bar). The autosync digest's `🔔` line now ends with the plan state
+   (`last plan 10-23 07:01 UTC (London open) · next NY open 13:00 UTC`), so a plan that never
+   fires is visible from the one message you already read.
 
 **Revert:** unset `GOLD_TELEGRAM_KINDS` (engine back to every message) and set
 `GOLD_DIGEST_EVERY_HOURS=0` (digest every run). No code rollback required; `--no-plan` drops the

@@ -528,7 +528,11 @@ class DigestLivenessTests(unittest.TestCase):
 
     def test_a_fresh_heartbeat_reads_running_and_an_old_one_stopped(self):
         line = BA.digest_line(self.state(NOW - timedelta(seconds=30)), now=NOW, env=self.PAIR)
-        self.assertEqual(line, "box alerts: running · 0 sent today · none sent yet")
+        # 2026-10-23: the running line now also carries the session-plan status, so a
+        # notifier that never sends a plan cannot look healthy.
+        self.assertTrue(line.startswith("box alerts: running · 0 sent today · none sent yet · "), line)
+        self.assertIn("session plan", line)
+        self.assertIn("next London open 07:00 UTC", line)
         old = BA.digest_line(self.state(NOW - timedelta(minutes=10)), now=NOW, env=self.PAIR)
         self.assertEqual(old, "box alerts: notifier STOPPED (last heartbeat 10-07 15:50 UTC)"
                               " · 0 sent today · none sent yet")
