@@ -109,6 +109,10 @@ REVERT_SL_MULTIPLE = 2.2          # avg SL loss vs PRE_CHANGE_AVG_SL_USD
 REVERT_DD_USD = 250.0
 REVIEW_DUE = datetime(2026, 10, 19, 21, 0)   # scheduled judgement (or n=150)
 
+# ── journal defaults (display-only; cost is ASSUMED, not measured) ──
+JOURNAL_COST_USD = 0.40        # round trip, same as HANDOFF §1 / OUTLOOK_COST_USD
+JOURNAL_RECENT_N = 30
+
 # ── display-only volatility guard (human advice, never a trade gate) ──
 # Thresholds are deliberately conservative and match the dashboard's language.
 # They DO NOT change engine.py / trade_filter.py behaviour. Scenario U does NOT
@@ -871,6 +875,200 @@ def era_stats(trades, cutover=STRUCT_STOP_CUTOVER, label="struct-stop era"):
                           default=None),
     }
 
+
+
+# ── JOURNAL — self-journaling BUY/SELL success (display-only) ────────────────
+# Mirrors tools/journal.py bucket_stats / enrich logic but as a pure library
+# function so the dashboard Journal tab never shells out. No writes, no engine
+# import, stdlib only.
+
+def _journal_bucket(trades, cost=0.0):
+    if not trades:
+        return {"n": 0, "w": 0, "l": 0, "be": 0, "tm": 0, "dec": 0, "wr": 0.0, "lb": 0.0, "ub": 0.0, "pnl": 0.0, "per": 0.0, "avg_r": None}
+    w = sum(1 for t in trades if (t.get("Exit_Reason") or "").strip().upper() == "TP")
+    l = sum(1 for t in trades if (t.get("Exit_Reason") or "").strip().upper() == "SL")
+    be = sum(1 for t in trades if (t.get("Exit_Reason") or "").strip().upper() == "BE")
+    tm = sum(1 for t in trades if (t.get("Exit_Reason") or "").strip().upper() == "TIME")
+    n = len(trades); dec = w + l
+    wr = 100.0 * w / dec if dec else 0.0
+    lb, ub = wilson_interval(w, dec)
+    pnl = sum((parse_float(t.get("Profit")) or 0.0) for t in trades) - cost * n
+    per = pnl / n if n else 0.0
+    rs = []
+    for t in trades:
+        if (t.get("Exit_Reason") or "").strip().upper() not in ("TP", "SL"):
+            continue
+        risk = trade_risk(t)
+        pnl1 = parse_float(t.get("Profit"))
+        if risk and pnl1 is not None:
+            rs.append(pnl1 / risk)
+    avg_r = sum(rs) / len(rs) if rs else None
+    return {"n": n, "w": w, "l": l, "be": be, "tm": tm, "dec": dec, "wr": wr, "lb": lb, "ub": ub, "pnl": pnl, "per": per, "avg_r": avg_r}
+
+
+def journal_read(trades, log_rows=None, cutover=STRUCT_STOP_CUTOVER, cost=JOURNAL_COST_USD, recent_n=JOURNAL_RECENT_N):
+    """Journal summary for the dashboard — BUY/SELL split + when + streak + recent.
+
+    Cost is the assumed round-trip $/trade (HANDOFF §1, JOURNAL_COST_USD=0.40);
+    pass 0 for gross. Returns a dict with baseline, buy, sell, by_session,
+    by_hour (only n>=8 shown for readability), streak, recent_30/10, and the
+    costed net. All counts are decisive-WR with Wilson CI; BE/TIME neutral.
+    """
+    try:
+        era = [t for t in (trades or []) if (parse_ts(t.get("Entry_Time")) or datetime.min) >= cutover]
+        if not era:
+            return {"ok": False, "reason": f"no trades in the era (cutover {cutover:%Y-%m-%d %H:%M})", "cutover": cutover, "cost": cost}
+        all_st = _journal_bucket(era, cost=cost)
+        buy_st = _journal_bucket([t for t in era if (t.get("Trade_Type") or "").strip().upper() == "BUY"], cost=cost)
+        sell_st = _journal_bucket([t for t in era if (t.get("Trade_Type") or "").strip().upper() == "SELL"], cost=cost)
+        # hour slice (n>=8 surfaced)
+        hour_counts = {h: [] for h in range(24)}
+        for t in era:
+            et = parse_ts(t.get("Entry_Time"))
+            if et:
+                hour_counts[et.hour].append(t)
+        by_hour = {}
+        for h, ts in hour_counts.items():
+            if len(ts) >= 8:
+                by_hour[h] = _journal_bucket(ts, cost=cost)
+        # sessions (UTC)
+        def _session_of(hour):
+            if 7 <= hour < 12:
+                return "London"
+            if 12 <= hour < 16:
+                return "NY open"
+            if 16 <= hour < 22:
+                return "NY/Late"
+            if hour >= 22 or hour < 2:
+                return "Rollover"
+            return "Asia"
+        sess_map = {"Asia": [], "London": [], "NY open": [], "NY/Late": [], "Rollover": []}
+        for t in era:
+            et = parse_ts(t.get("Entry_Time"))
+            if et:
+                sess_map[_session_of(et.hour)].append(t)
+        by_session = {}
+        for k, ts in sess_map.items():
+            if ts:
+                by_session[k] = _journal_bucket(ts, cost=cost)
+        by_dow = {}
+        dow_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        dow_map = {i: [] for i in range(7)}
+        for t in era:
+            et = parse_ts(t.get("Entry_Time"))
+            if et:
+                dow_map[et.weekday()].append(t)
+        for i, ts in dow_map.items():
+            if ts:
+                by_dow[dow_names[i]] = _journal_bucket(ts, cost=cost)
+        recent_30 = _journal_bucket(era[-30:], cost=cost) if len(era) >= 10 else None
+        recent_10 = _journal_bucket(era[-10:], cost=cost) if len(era) >= 10 else None
+        streak = 0
+        for t in reversed(era):
+            reason = (t.get("Exit_Reason") or "").strip().upper()
+            if reason == "SL":
+                streak += 1
+            elif reason == "TP":
+                break
+        by_atr = {}
+        for lo, hi, label in [(1.0, 1.2, "1.0-1.2"), (1.2, 1.4, "1.2-1.4"), (1.4, 1.7, "1.4-1.7"), (1.7, 2.0, "1.7-2.0"), (2.0, 99, "2.0+")]:
+            ts = [t for t in era if (parse_float(t.get("ATR_At_Entry")) or 0) >= lo and (parse_float(t.get("ATR_At_Entry")) or 0) < hi]
+            if ts:
+                by_atr[label] = _journal_bucket(ts, cost=cost)
+        return {
+            "ok": True, "cutover": cutover, "cost": cost, "n": len(era),
+            "baseline": all_st, "buy": buy_st, "sell": sell_st,
+            "by_hour": by_hour, "by_session": by_session, "by_dow": by_dow, "by_atr": by_atr,
+            "recent_30": recent_30, "recent_10": recent_10,
+            "streak_before_next": streak,
+            "last_outcome": (era[-1].get("Exit_Reason") or "").strip().upper() if era else None,
+            "as_of": (parse_ts(era[-1].get("Exit_Time")).strftime("%Y-%m-%d %H:%M") if era and parse_ts(era[-1].get("Exit_Time")) else None),
+        }
+    except Exception as exc:
+        return {"ok": False, "reason": str(exc), "cutover": cutover, "cost": cost}
+
+
+def _extra_indicators_series(log_rows):
+    """Lightweight extra-indicator series at each bar close (for last-bar display)."""
+    if not log_rows or len(log_rows) < 30:
+        return {}
+    bars = []
+    for r in log_rows:
+        ts = parse_ts(r.get("Timestamp"))
+        c = parse_float(r.get("Close")); h = parse_float(r.get("High")); ll = parse_float(r.get("Low")); atr = parse_float(r.get("ATR"))
+        if ts and c is not None and h is not None and ll is not None:
+            bars.append({"ts": ts, "c": c, "h": h, "ll": ll, "atr": atr, "ema50": parse_float(r.get("EMA_50")), "ema200": parse_float(r.get("EMA_200"))})
+    if len(bars) < 30:
+        return {}
+    n = len(bars)
+    closes = [b["c"] for b in bars]; highs = [b["h"] for b in bars]; lows = [b["ll"] for b in bars]
+    bb_pctb = None; bb_width_atr = None
+    if n >= 20:
+        win = closes[-20:]; sma = sum(win) / 20; var = sum((x - sma) ** 2 for x in win) / 20; sd = math.sqrt(var) if var > 0 else 0
+        if sd > 1e-9:
+            upper = sma + 2 * sd; lower = sma - 2 * sd; width = upper - lower
+            bb_pctb = (closes[-1] - lower) / width if width > 1e-9 else 0.5
+            atr = bars[-1]["atr"]
+            bb_width_atr = width / atr if atr else None
+    stoch_k = None
+    if n >= 14:
+        hh = max(highs[-14:]); ll = min(lows[-14:])
+        rng = hh - ll
+        stoch_k = 100 * (closes[-1] - ll) / rng if rng > 1e-9 else 50.0
+    atr_pctile = None
+    last_atr = bars[-1]["atr"]
+    if last_atr is not None:
+        win_atr = [b["atr"] for b in bars[-101:-1] if b["atr"] is not None]
+        if len(win_atr) >= 20:
+            cnt = sum(1 for x in win_atr if x <= last_atr)
+            atr_pctile = 100 * cnt / len(win_atr)
+    ema_slope_atr = None; trend_strength_atr = None
+    e50 = bars[-1]["ema50"]; e200 = bars[-1]["ema200"]; atr = bars[-1]["atr"]
+    if e50 and e200 and atr:
+        trend_strength_atr = (e50 - e200) / atr
+    if n >= 31:
+        prev_e50 = bars[-31]["ema50"]
+        if e50 and prev_e50 and atr:
+            ema_slope_atr = (e50 - prev_e50) / atr
+    macd_sign = None; macd_hist = None
+    try:
+        def _ema_ser(series, p):
+            res = [None] * len(series)
+            if len(series) < p:
+                return res
+            sma = sum(series[:p]) / p; res[p - 1] = sma
+            k = 2 / (p + 1)
+            for i in range(p, len(series)):
+                res[i] = series[i] * k + res[i - 1] * (1 - k)
+            return res
+        e12 = _ema_ser(closes, 12); e26 = _ema_ser(closes, 26)
+        macd_line = [(a - b) if (a is not None and b is not None) else None for a, b in zip(e12, e26)]
+        sig = [None] * n; buf = []
+        for i, v in enumerate(macd_line):
+            if v is None:
+                continue
+            buf.append(v)
+            if len(buf) >= 9:
+                if sig[i - 1] is None and len(buf) == 9:
+                    sig[i] = sum(buf[-9:]) / 9
+                elif sig[i - 1] is not None:
+                    k = 2 / (9 + 1); sig[i] = v * k + sig[i - 1] * (1 - k)
+        if macd_line[-1] is not None and sig[-1] is not None:
+            macd_hist = macd_line[-1] - sig[-1]
+            macd_sign = "bull" if macd_hist > 0 else ("bear" if macd_hist < 0 else "flat")
+    except Exception:
+        pass
+    donchian_pos = None
+    if n >= 21:
+        hh = max(highs[-21:-1]); ll = min(lows[-21:-1])
+        rng = hh - ll
+        donchian_pos = (closes[-1] - ll) / rng if rng > 1e-9 else 0.5
+    return {
+        "bb_pctb": bb_pctb, "bb_width_atr": bb_width_atr, "stoch_k": stoch_k,
+        "atr_pctile": atr_pctile, "ema_slope_atr": ema_slope_atr,
+        "trend_strength_atr": trend_strength_atr, "macd_hist": macd_hist,
+        "macd_sign": macd_sign, "donchian_pos": donchian_pos,
+    }
 
 def _median(values):
     vals = sorted(v for v in values if v is not None)
