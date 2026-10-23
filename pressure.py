@@ -1690,6 +1690,18 @@ BOX_ALERT_COOLDOWN_MINUTES = 90    # min between two messages on the SAME box ed
 BOX_ALERT_GLOBAL_COOLDOWN_MINUTES = 30   # min between ANY two messages
 BOX_ALERT_DAILY_CAP = 6            # max messages per UTC day
 
+# ── session watch plan (2026-10-23) ────────────────────────────────────────────
+# The owner's actual complaint was the WAIT, not just the volume: watching a screen
+# until the indicator notice says go. So twice a day (London open, NY open) one message
+# says where price is in the boxes and at which two prices the notice WOULD fire.
+# Display only, like everything else in this layer: it places no order, gates nothing,
+# and it is NOT a forecast. ATR percentile and tick-volume ratio are shown as context
+# because those are the two hints the 2026-10-23 audit found (p=0.014 / p=0.031) and
+# NEITHER cleared the adoption bar — the message says so in its own footer.
+BOX_PLAN_SESSIONS = (("London open", 7, 0), ("NY open", 13, 0))
+BOX_PLAN_WINDOW_MIN = 15       # a session message is "due" this long after its anchor
+BOX_PLAN_MAX_AGE_MIN = 45      # ...and is stale after this, so a delayed run sends nothing
+
 # The measured verdict, copied from the 2026-10-20 analysis — printed wherever
 # the panel could otherwise be mistaken for a signal. Scenario U pins these.
 BOX_MEASURED = {
@@ -2562,6 +2574,111 @@ def box_status(geom, portfolio=None, feed=None, now=None, spread=BOX_SPREAD_USD,
            "regime_measured": {"chop": BOX_CHOP_MEASURED, "retest": BOX_RETEST_MEASURED}}
     out["alert"] = box_alert(out)
     return out
+
+
+def box_context(rows, status=None):
+    """The two measured *context* hints for the session watch plan (never gates).
+
+    * ATR percentile of the last bar against the previous 100 (the audit's strongest
+      hint: quiet <25th 55.6% decisive vs volatile >75th 31.5%, p=0.014)
+    * tick-volume ratio, last bar vs Vol_MA (spike >1.3x 46.2% vs thin 20.5%)
+    Neither cleared the repo's adoption bar (n>=25, >=5 pp, holds within BUY and within
+    SELL, holds in an up-tape subperiod, P/L/trade not worse than -$0.10), so both are
+    printed as context and labelled as such. Tick volume is not traded volume.
+    """
+    out = {"atr_pctile": None, "volume_ratio": None, "chop": (status or {}).get("chop") or {}}
+    try:
+        out["atr_pctile"] = (_extra_indicators_series(rows) or {}).get("atr_pctile")
+    except Exception:
+        pass
+    try:
+        for r in reversed(rows or []):
+            v, ma = parse_float(r.get("Volume")), parse_float(r.get("Vol_MA"))
+            if v is not None and ma:
+                out["volume_ratio"] = v / ma
+                break
+    except Exception:
+        pass
+    return out
+
+
+def box_plan_next(now=None, sessions=BOX_PLAN_SESSIONS):
+    """The session anchor this run should report: (label, anchor_dt) or (None, None).
+
+    Pure: `now` in, anchor out. A session is "due" from its anchor until
+    BOX_PLAN_WINDOW_MIN later, and is skipped once older than BOX_PLAN_MAX_AGE_MIN, so a
+    cron that wakes up late sends nothing rather than a plan that is already stale.
+    """
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    best = (None, None)
+    for label, hh, mm in sessions:
+        anchor = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        age = (now - anchor).total_seconds() / 60.0
+        if 0 <= age <= BOX_PLAN_WINDOW_MIN and age <= BOX_PLAN_MAX_AGE_MIN:
+            if best[1] is None or anchor > best[1]:
+                best = (label, anchor)
+    return best
+
+
+def _ordinal(value):
+    """'92nd', '55th' - display only, so the message reads like a sentence."""
+    n = int(round(value))
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def box_plan_text(read, label, context=None):
+    """The session watch-plan message: where price is, and the two alert prices.
+
+    `read` is a box_status() dict (or box_read()). The message states the levels the
+    instant notice is measured against, the costed payoff if the break confirms, the
+    blocked/session/risk state, and the measured base rate. It never says "buy" and it
+    never claims the alert leads anywhere: measured, 0 of 8 box geometries cleared the
+    driftless reference. Returns "" when there is no box read to report.
+    """
+    geom = (read or {}).get("geometry") or {}
+    if not geom.get("ok"):
+        return ""
+    nearest, trig, atr = geom["nearest"], geom["trigger"], geom["atr"]
+    close = geom["close"]
+    ctx = context or {}
+    lines = [f"🗺 gold watch plan — {label} ({geom['as_of']:%H:%M} UTC bar)",
+             f"Price ${close:.2f} · ATR ${atr:.2f} · nearest edge: {nearest['box']} "
+             f"{'high' if nearest['side'] == 'BUY' else 'low'} ${nearest['edge']:.2f} "
+             f"({abs(nearest['distance_atr']):.2f} ATR away)"]
+    cards = {c["side"]: c for c in (read.get("watch_cards") or [])}
+    for side in ("BUY", "SELL"):
+        c = cards.get(side)
+        if not c:
+            continue
+        verb = "close above" if side == "BUY" else "close below"
+        lines.append(f"{side}: notice fires on a {verb} ${c['threshold']:.2f} "
+                     f"→ entry ${c['entry']:.2f} / stop ${c['stop']:.2f} / "
+                     f"target ${c['target']:.2f} ({c['net_rr']:.2f}:1 after "
+                     f"${BOX_SPREAD_USD:.2f} spread)")
+    checks = {c["key"]: c for c in (read.get("checks") or [])}
+    blocking = [f"{checks[k]['label'].lower()}: {checks[k]['detail']}"
+                for k in ("session", "risk_state", "volatility", "feed")
+                if k in checks and checks[k]["state"] != "pass"]
+    if blocking:
+        lines.append("Blocked right now — " + "; ".join(blocking))
+    else:
+        lines.append("Health: session, risk state, volatility and feed all clear")
+    bits = []
+    if ctx.get("atr_pctile") is not None:
+        bits.append(f"ATR {_ordinal(ctx['atr_pctile'])} percentile of the last 100 bars")
+    if ctx.get("volume_ratio") is not None:
+        bits.append(f"tick volume {ctx['volume_ratio']:.2f}× its 20-bar average")
+    chop = ctx.get("chop") or {}
+    if chop.get("detail"):
+        bits.append(chop["detail"])
+    if bits:
+        lines.append("Context (measured, not a gate): " + "; ".join(bits))
+    lines.append(f"Trigger now: {trig.get('detail')}")
+    lines.append(f"No edge measured: {BOX_MEASURED['cleared']} of {BOX_MEASURED['cells']} box "
+                 f"geometries cleared the driftless reference; {BOX_MEASURED['false_break_pct_20']:.0f}% "
+                 f"of breaks close back inside within 15 min. This is a heads-up, not a signal.")
+    return "\n".join(lines)
 
 
 def box_read(rows, now=None, portfolio=None, feed=None, spread=BOX_SPREAD_USD):

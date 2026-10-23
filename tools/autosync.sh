@@ -34,6 +34,13 @@ ENGINE_SERVICE="${ENGINE_SERVICE:-}" # empty = auto-detect the unit running engi
 DASHBOARD_SERVICE="${DASHBOARD_SERVICE:-}" # empty = auto-detect the unit running dashboard.py
 BOXALERT_SERVICE="${BOXALERT_SERVICE:-}" # empty = auto-detect the optional box_alert.py unit
 NOTIFY="${NOTIFY:-always}"            # always | quiet (quiet = only on events)
+# 2026-10-23 owner ask: the digest is now a twice-daily trade report, not an 8x/day
+# heartbeat. GOLD_DIGEST_EVERY_HOURS=12 sends at most one scheduled digest per 12 h;
+# 0 restores a digest on every run (the old behaviour). An INCIDENT ($EXTRA - feed
+# starvation, a failed integrity check, a rollback, a failed push) always sends at once
+# and is never silenced, so slowing the routine digest cannot hide a real problem.
+DIGEST_EVERY_HOURS="${GOLD_DIGEST_EVERY_HOURS:-12}"
+DIGEST_STATE="${GOLD_DIGEST_STATE:-/var/lib/gold/autosync_digest.state}"
 # xm_data/ = the read-only quote + contract-spec logger (docs/XM-LOGGER.md); `git add` of a directory that
 # does not exist yet fails quietly (|| true below), so this is safe before the logger is installed.
 DATA_FILES=(trades.csv forward_test_log.csv skipped_trades.csv status.json xm_data)
@@ -47,11 +54,17 @@ if [ -z "$TG_TOKEN" ] && [ -f "$GOLD_DIR/.env" ]; then
     TG_CHAT=$(sed -n 's/^TELEGRAM_CHAT_ID=//p' "$GOLD_DIR/.env" | head -n1 | tr -d "\"'")
 fi
 
+# tg <text> [silent]  - silent=1 sends with disable_notification (routine digests buzz
+# nobody; incidents always buzz). Telegram is never allowed to fail this script.
 tg() {
+    local text="$1" silent="${2:-0}"
     if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then return 0; fi
+    local quiet_arg=()
+    if [ "$silent" = "1" ]; then quiet_arg=(--data-urlencode "disable_notification=true"); fi
     curl -s -m 10 -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
         --data-urlencode "chat_id=${TG_CHAT}" \
-        --data-urlencode "text=${1}" >/dev/null 2>&1 || true
+        --data-urlencode "text=${text}" \
+        ${quiet_arg[@]+"${quiet_arg[@]}"} >/dev/null 2>&1 || true
 }
 
 detect_service() {
@@ -380,13 +393,95 @@ fi
 
 log "done. data=[$DATA_MSG] deploy=[$DEPLOY_MSG] check=[$CHECK_MSG] handoff=[$HANDOFF_MSG] xm=[$XM_MSG] boxalert=[$BOXALERT_MSG]"
 
+# --- phase 4f: trade summary since the last digest (2026-10-23) --------------------
+# The engine no longer sends per-trade messages (GOLD_TELEGRAM_KINDS; see engine.py and
+# docs/PROPOSAL-2026-10-23-telegram-routing.md), so trade news lands HERE: what closed
+# since the previous digest, straight from trades.csv. Read-only - the ledger is never
+# written by this script. $ figures are gross of costs, matching the engine ledger.
+LAST_DIGEST=$(tr -dc '0-9' < "$DIGEST_STATE" 2>/dev/null | head -c 20)
+if [ -z "$LAST_DIGEST" ]; then
+    _hours="$DIGEST_EVERY_HOURS"
+    case "$_hours" in ''|*[!0-9]*) _hours=12 ;; esac
+    [ "$_hours" -gt 0 ] || _hours=3
+    LAST_DIGEST=$(( $(date -u +%s) - _hours * 3600 ))
+fi
+TNG_MSG=$(TNG_SINCE="$LAST_DIGEST" python3 - <<'PYEOF' 2>/dev/null
+import csv, os
+from datetime import datetime, timezone
+
+try:
+    since = datetime.fromtimestamp(int(os.environ["TNG_SINCE"]), tz=timezone.utc).replace(tzinfo=None)
+except (KeyError, ValueError):
+    since = None
+rows = []
+with open("trades.csv", newline="") as f:
+    for r in csv.DictReader(f):
+        try:
+            t = datetime.strptime(r["Exit_Time"], "%Y-%m-%d %H:%M:%S")
+        except (KeyError, TypeError, ValueError):
+            continue
+        if since is None or t > since:
+            rows.append(r)
+if not rows:
+    print("no trades closed since the last digest")
+else:
+    def n(reason):
+        return sum(1 for r in rows if (r.get("Exit_Reason") or "").upper() == reason)
+    try:
+        net = sum(float(r.get("Profit") or 0) for r in rows)
+    except (TypeError, ValueError):
+        net = 0.0
+    parts = [f"{n('TP')}W", f"{n('SL')}L"]
+    if n("BE"):
+        parts.append(f"{n('BE')}BE")
+    if n("TIME"):
+        parts.append(f"{n('TIME')}TIME")
+    print(f"{len(rows)} closed ({'/'.join(parts)}) | net ${net:+.2f} gross")
+PYEOF
+)
+[ -z "$TNG_MSG" ] && TNG_MSG="trades.csv unreadable"
+log "trades: $TNG_MSG"
+
+# --- phase 5: the digest (twice a day by default; incidents always) -----------------
+# Owner ask 2026-10-23: "limit the telegram messages for the indicators only". Engine
+# chatter is filtered at source; the ops digest drops from 8/day to 2/day and becomes
+# the trade report. An incident is never delayed or silenced:
+#   * anything in $EXTRA (feed starvation, integrity failure, rollback, failed push)
+#   * a deploy that failed, rolled back, or was skipped for server hand-edits
+#   * a push that did not go through
+# A quiet chat now means a healthy box, and a message that does arrive matters.
+INCIDENT=0
+[ -n "$EXTRA" ] && INCIDENT=1
+case "$DEPLOY_MSG" in
+    *"ROLLED BACK"*|*FAILED*|*"local code edits"*) INCIDENT=1 ;;
+esac
+[ "$PUSH_MSG" = "ok" ] || INCIDENT=1
+
+NOW_EPOCH=$(date -u +%s)
+DUE=1
+case "$DIGEST_EVERY_HOURS" in
+    ''|*[!0-9]*) DIGEST_EVERY_HOURS=12 ;;
+esac
+if [ "$DIGEST_EVERY_HOURS" -gt 0 ] && [ "$INCIDENT" = "0" ] \
+   && [ $(( NOW_EPOCH - LAST_DIGEST )) -lt $(( DIGEST_EVERY_HOURS * 3600 )) ]; then
+    DUE=0
+fi
+
 QUIET_SKIP=0
 if [ "$NOTIFY" = "quiet" ] && [ "$DATA_MSG" = "no new data" ] && [ "$DEPLOY_MSG" = "none" ] \
    && [ "$PUSH_MSG" = "ok" ] && [ -z "$EXTRA" ]; then
     QUIET_SKIP=1
 fi
-if [ "$QUIET_SKIP" = "0" ]; then
+
+if [ "$QUIET_SKIP" = "1" ]; then
+    log "digest: skipped (NOTIFY=quiet, nothing changed)"
+elif [ "$DUE" = "0" ] && [ "$INCIDENT" = "0" ]; then
+    log "digest: not due (routine digest is every ${DIGEST_EVERY_HOURS}h; incidents send at once)"
+else
+    # routine digests are silent (no phone buzz), incidents are not
+    if [ "$INCIDENT" = "1" ]; then _silent=0; else _silent=1; fi
     tg "🤖 gold autosync — $(date -u '+%m-%d %H:%M') UTC
+🧾 trades: $TNG_MSG
 📦 data: $DATA_MSG (push: $PUSH_MSG)
 🚀 deploy: $DEPLOY_MSG
 🩺 integrity: $CHECK_MSG
@@ -394,5 +489,9 @@ if [ "$QUIET_SKIP" = "0" ]; then
 📝 handoff: $HANDOFF_MSG
 📡 $XM_MSG
 ${BOXALERT_MSG:+🔔 $BOXALERT_MSG
-}💰 $STATS$EXTRA"
+}💰 $STATS$EXTRA" "$_silent"
+    mkdir -p "$(dirname "$DIGEST_STATE")" 2>/dev/null || true
+    printf '%s\n' "$NOW_EPOCH" > "$DIGEST_STATE" 2>/dev/null \
+        || log "WARN: could not record the digest time in $DIGEST_STATE"
+    log "digest: sent (incident=$INCIDENT, silent=$_silent)"
 fi

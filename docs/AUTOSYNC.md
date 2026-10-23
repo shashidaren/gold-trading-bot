@@ -90,6 +90,7 @@ a trading day's log (which `handoff_check.py` reports as "snapshot AHEAD of the 
 
 ```
 🤖 gold autosync — 10-13 14:19 UTC
+🧾 trades: 7 closed (2W/3L/2BE) | net $+4.28 gross
 📦 data: committed 0 new trade rows -> 'data collection 227' (push: ok)
 🚀 deploy: none
 🩺 integrity: 0 fail, 8 warn ==
@@ -102,6 +103,9 @@ a trading day's log (which `handoff_check.py` reports as "snapshot AHEAD of the 
 (`committed 0 new trade rows` = only the bar log / status / `xm_data/` changed, no trade closed in this window. Since
 the quote logger exists, `xm_data/` is part of every data commit.)
 
+- **🧾 trades** — what closed since the previous digest, read from `trades.csv` (gross of
+  costs, like the ledger). Added 2026-10-23, when the engine stopped sending per-trade
+  messages: this line *is* the trade log now (`docs/PROPOSAL-2026-10-23-telegram-routing.md`).
 - **📦 data** — `no new data` is the normal weekend / daily-break case; during market hours the 1-minute
   log changes every run, so a data line is expected.
 - **🚀 deploy** — `none` means `origin/main` did not move; otherwise one of the states below.
@@ -109,6 +113,13 @@ the quote logger exists, `xm_data/` is part of every data commit.)
 - **📈 candles** — open-market minutes since the last logged candle (weekend / daily break excluded,
   mirroring `engine.is_market_quiet`). `STALE N open min` (> 90) also raises a 🛑 line: the
   engine/feed is starving (2026-09-29 outage; `docs/REVIEW-2026-09-29-feed-outage.md`).
+- **Cadence:** since 2026-10-23 a *routine* digest is rate-limited to one per
+  `GOLD_DIGEST_EVERY_HOURS` (default **12 h**), so most 3-hourly runs log
+  `digest: not due` and send nothing. **An incident bypasses the clock entirely and is never
+  silenced:** anything in the 🚨/⚠️/🛑 block (feed starvation, `check_data` failure, rollback,
+  failed push), a deploy that rolled back / failed / was skipped for server hand-edits, and a
+  push that did not go through. Routine digests are delivered with `disable_notification=true`
+  (silent); incidents buzz. Revert: `GOLD_DIGEST_EVERY_HOURS=0`.
 - **📝 handoff** — `tools/handoff_check.py --quiet`: does the machine-checked snapshot block in
   `docs/HANDOFF.md` still describe the data on the box?
 
@@ -145,9 +156,9 @@ the quote logger exists, `xm_data/` is part of every data commit.)
 
   | Text | Meaning | Action |
   |---|---|---|
-  | `Telegram pair found · notifier not running (optional: install deploy/boxalert.service)` | the pair is there but no `--loop` has ever run against this state file, i.e. the unit is not installed. **The default**: installing it is the owner's choice | none, or install it (`deploy/boxalert.service` header: `--once --dry-run`, `--test`, then `systemctl enable --now boxalert-gold`) |
+  | `Telegram pair found · notifier not running (optional: install deploy/boxalert.service; the session plan also runs from cron) · last plan … / no session plan sent yet · next … UTC` | the pair is there but no `--loop` has ever run against this state file, i.e. the unit is not installed. **The default**: installing it is the owner's choice. Since 2026-10-23 the line always ends with the **session-plan status**, so this state is honest: the instant break notice is off, while the twice-daily plan may still be running from cron | none, or install it (`deploy/boxalert.service` header: `--once --dry-run`, `--test`, then `systemctl enable --now boxalert-gold`), or drive the plan from cron (`docs/PROPOSAL-2026-10-23-telegram-routing.md` §5) |
   | `running · N sent today · last MM-DD HH:MM UTC BUY` (`· a candidate is live now`) | the loop's heartbeat is fresh (≤ max(5 min, 3 ticks)); counts come from its state file | none |
-  | `notifier STOPPED (last heartbeat MM-DD HH:MM UTC) · …` | it **was** running and its heartbeat went stale: the unit died or was stopped | `systemctl status boxalert-gold`, `journalctl -u boxalert-gold -n 50`; trading is unaffected |
+  | `notifier STOPPED (last heartbeat MM-DD HH:MM UTC) · … · last plan … · next … UTC` | it **was** running and its heartbeat went stale: the unit died or was stopped | `systemctl status boxalert-gold`, `journalctl -u boxalert-gold -n 50`; trading is unaffected |
   | `disabled (GOLD_BOX_ALERTS=0)` | switched off on purpose (environment or `.env`) | none |
   | `not configured (no TELEGRAM_BOT_TOKEN/CHAT_ID in the environment or /opt/gold/.env)` | no pair anywhere. The digest itself needs the same pair, so you will usually see this only in `/var/log/gold_autosync.log` | add the pair to `/opt/gold/.env` |
   | `report failed to run (<last line>)` | `box_alert.py` crashed (an import error, say) | run it by hand; advisory, the sync is unaffected |
@@ -217,10 +228,18 @@ consequences for anyone adding a scenario:
 | `REMOTE` / `BRANCH` | `origin` / `main` | what to sync against |
 | `AUTO_DEPLOY` | `1` | `0` = commit/push data only, never pull or restart |
 | `SMOKE_GATE` | `1` | `0` = deploy without the smoke test (**not recommended**) |
-| `NOTIFY` | `always` | `always` = a digest every run (8 a day at the 3-hour cadence); `quiet` = skip a run only when nothing changed (`no new data`, no deploy, push ok, no 🚨/⚠️/🛑) — which on gold is mostly weekends, because the minute log changes every run during market hours |
+| `NOTIFY` | `always` | `always` = a digest subject to `GOLD_DIGEST_EVERY_HOURS` below; `quiet` = skip a run only when nothing changed (`no new data`, no deploy, push ok, no 🚨/⚠️/🛑) — which on gold is mostly weekends, because the minute log changes every run during market hours |
+| `GOLD_DIGEST_EVERY_HOURS` | `12` | minimum hours between *routine* digests (0 = a digest every run, the pre-2026-10-23 behaviour). Incidents always send at once |
+| `GOLD_DIGEST_STATE` | `/var/lib/gold/autosync_digest.state` | last-digest epoch; delete it to make the next run send and reset the trade-summary window |
 | `ENGINE_SERVICE` / `DASHBOARD_SERVICE` | auto-detect | pin the systemd unit names if detection fails |
 | `BOXALERT_SERVICE` | auto-detect | pin the optional box-alert unit, restarted when `tools/box_alert.py` or `pressure.py` changes; absent = nothing to restart |
 | `LOCK_FILE` | `/var/lock/gold_autosync.lock` | `flock` guard; overlapping runs exit 0 |
+
+**History:** until 2026-10-23 this was `always` at eight messages a day. The owner's 2026-10-23
+ask ("limit the telegram messages for the indicators only") replaced that with a twice-daily
+digest that doubles as the trade report; the engine's own chatter is filtered at source in
+`engine.py` (`GOLD_TELEGRAM_KINDS`, see `docs/PROPOSAL-2026-10-23-telegram-routing.md`), and the
+optional box notifier also sends a twice-daily session watch plan.
 
 At eight messages a day the digest is chatty but not the flood BTC had (its 15-minute cron sent ~96 a
 day, which is why BTC's autosync grew `NOTIFY=alerts`: deploys and *changes* of incident state

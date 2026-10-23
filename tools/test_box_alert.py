@@ -522,16 +522,36 @@ class DigestLivenessTests(unittest.TestCase):
 
     def test_a_pair_without_a_loop_is_not_a_working_notifier(self):
         line = BA.digest_line(self.state(), now=NOW, env=self.PAIR)
+        # 2026-10-23: the phrase now also says the session plan needs no daemon, and the
+        # line always ends with the plan status - "not running" must not hide a plan that
+        # is being driven from cron (or one that is silently dead).
         self.assertEqual(line, "box alerts: Telegram pair found · notifier not running "
-                               "(optional: install deploy/boxalert.service)")
+                               "(optional: install deploy/boxalert.service; the session plan "
+                               "also runs from cron) · no session plan sent yet · "
+                               "next London open 07:00 UTC")
         self.assertNotIn("SECRET", line)
+
+    def test_a_cron_driven_plan_is_visible_without_any_loop(self):
+        """The unit is optional, so the plan can run from cron. The digest must show it."""
+        state = self.state()
+        state["plan"] = {"2026-10-07 London open": "2026-10-07 07:01:02"}
+        line = BA.digest_line(state, now=NOW, env=self.PAIR)
+        self.assertIn("notifier not running", line)                  # the instant notice is off
+        self.assertIn("last plan 10-07 07:01 UTC (London open)", line)  # the plan is not
+        # NOW is 15:50 UTC here, so the next anchor is tomorrow's London open
+        self.assertIn("next London open 07:00 UTC", line)
 
     def test_a_fresh_heartbeat_reads_running_and_an_old_one_stopped(self):
         line = BA.digest_line(self.state(NOW - timedelta(seconds=30)), now=NOW, env=self.PAIR)
-        self.assertEqual(line, "box alerts: running · 0 sent today · none sent yet")
+        # 2026-10-23: the running line now also carries the session-plan status, so a
+        # notifier that never sends a plan cannot look healthy.
+        self.assertTrue(line.startswith("box alerts: running · 0 sent today · none sent yet · "), line)
+        self.assertIn("session plan", line)
+        self.assertIn("next London open 07:00 UTC", line)
         old = BA.digest_line(self.state(NOW - timedelta(minutes=10)), now=NOW, env=self.PAIR)
-        self.assertEqual(old, "box alerts: notifier STOPPED (last heartbeat 10-07 15:50 UTC)"
-                              " · 0 sent today · none sent yet")
+        self.assertTrue(old.startswith("box alerts: notifier STOPPED (last heartbeat 10-07 15:50 UTC)"
+                                       " · 0 sent today · none sent yet · "), old)
+        self.assertIn("session plan", old)
         # a slower loop gets proportionally longer grace (3 ticks)
         slow = self.state(NOW - timedelta(minutes=10), interval=300)
         self.assertTrue(BA.digest_line(slow, now=NOW, env=self.PAIR)
