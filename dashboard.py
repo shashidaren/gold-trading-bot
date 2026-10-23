@@ -90,6 +90,7 @@ HTML_TEMPLATE = """
         <!-- Simple / Details tabs -->
         <div class="flex items-center gap-2 mb-6 border-b border-slate-800 pb-2">
             <button id="tab-simple" onclick="showTab('simple')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-amber-500 text-slate-900">✨ Simple Summary</button>
+            <button id="tab-journal" onclick="showTab('journal')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📒 Journal</button>
             <button id="tab-boxes" onclick="showTab('boxes')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📦 Boxes &amp; Timing</button>
             <button id="tab-chart" onclick="showTab('chart')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">🧭 Chart &amp; Placement</button>
             <button id="tab-details" onclick="showTab('details')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📊 Full Dashboard</button>
@@ -243,7 +244,125 @@ HTML_TEMPLATE = """
         </div>
         <!-- ================= END SIMPLE TAB ================= -->
 
+
+        <!-- ================= JOURNAL TAB — self-journaling BUY/SELL ================= -->
+        <div id="panel-journal" class="hidden">
+            {% if ctx.journal and ctx.journal.ok %}
+            {% set j = ctx.journal %}
+            {% set g = j.gross %}{# gross = same as net but cost=0 #}
+            {% set n = j.net %}
+            <div class="rounded-2xl border border-slate-700 bg-slate-800 p-5 mb-5">
+                <div class="flex flex-col md:flex-row md:items-start gap-4">
+                    <div class="text-4xl">📒</div>
+                    <div class="flex-1">
+                        <h2 class="text-xl font-semibold text-slate-100">Self-journal — every BUY/SELL the bot took</h2>
+                        <p class="text-sm text-slate-400 mt-1">Success = TP / (TP+SL) decisive · BE/TIME neutral · R = P/L ÷ risk where risk = |TP−Entry|÷1.5 (HANDOFF §8). <span class="text-slate-500">Grows with the ledger; no CSV is written.</span></p>
+                        <p class="text-xs text-slate-500 mt-2">Era live rule ≥ 2026-10-06 03:00 UTC · n={{ n.n }} · as of {{ j.net.as_of or "—" }} · last outcome {{ j.net.last_outcome or "—" }} · streak before next {{ j.net.streak_before_next }} · <span class="text-amber-300">net at ${{ "%.2f"|format(j.cost) }} round trip</span> · gross in ( )</p>
+                    </div>
+                    <div class="text-right text-xs text-slate-400">
+                        <div>CLI: <span class="font-mono text-slate-300">python3 tools/journal.py --cost 0.40</span></div>
+                        <div>doc: <span class="font-mono text-slate-300">docs/INDICATOR-AUDIT-2026-10-23.md</span></div>
+                    </div>
+                </div>
+
+                <!-- Baseline buy vs sell -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-5">
+                    {% for label, st in [("All (decisive)", n.baseline), ("BUY", n.buy), ("SELL", n.sell)] %}
+                    <div class="rounded-xl border p-4 {% if label=='BUY' %}border-emerald-800 bg-emerald-950/20{% elif label=='SELL' %}border-rose-800 bg-rose-950/20{% else %}border-slate-600 bg-slate-900/60{% endif %}">
+                        <div class="text-xs text-slate-400">{{ label }}</div>
+                        <div class="text-lg font-bold mt-1 {% if label=='BUY' %}text-emerald-300{% elif label=='SELL' %}text-rose-300{% else %}text-amber-300{% endif %}">{{ "%.1f"|format(st.wr) }}% <span class="text-xs font-normal text-slate-400">[{{ "%.0f"|format(st.lb) }}–{{ "%.0f"|format(st.ub) }}]</span></div>
+                        <div class="text-xs text-slate-400 mt-1 font-mono">{{ st.w }}W / {{ st.l }}L / {{ st.be }}BE{% if st.tm %}/{{ st.tm }}T{% endif %} · dec {{ st.dec }}</div>
+                        <div class="text-xs mt-1"><span class="text-slate-500">net</span> <span class="font-mono {% if st.pnl>=0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.2f"|format(st.pnl) }}</span> <span class="text-slate-500">({{ "%+.2f"|format(g.buy.pnl if label=="BUY" else g.sell.pnl if label=="SELL" else g.baseline.pnl) }} gross)</span> · <span class="font-mono">{{ "%+.3f"|format(st.per) }}/trade</span></div>
+                        {% if st.avg_r is not none %}<div class="text-[11px] text-slate-500 font-mono">avgR {{ "%+.3f"|format(st.avg_r) }}</div>{% endif %}
+                        <div class="w-full bg-slate-700 rounded-full h-1.5 mt-2"><div class="bg-amber-500 h-1.5 rounded-full" style="width: {{ "%.0f"|format(st.wr) }}%"></div></div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <!-- Recent + session -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-5">
+                    <div class="rounded-xl border border-slate-700 bg-slate-900/40 p-4">
+                        <h3 class="text-sm font-semibold text-slate-200">Recent form</h3>
+                        {% if n.recent_30 %}
+                        <div class="grid grid-cols-2 gap-3 mt-3 text-xs">
+                            <div class="rounded-lg border border-slate-700 bg-slate-800 p-3"><div class="text-slate-400">Last 30 in era</div><div class="font-mono text-sm text-slate-200 mt-1">{{ n.recent_30.w }}W/{{ n.recent_30.l }}L/{{ n.recent_30.be }}BE · {{ "%.1f"|format(n.recent_30.wr) }}% [{{ "%.0f"|format(n.recent_30.lb) }}–{{ "%.0f"|format(n.recent_30.ub) }}] · net {{ "%+.2f"|format(n.recent_30.pnl) }}</div></div>
+                            <div class="rounded-lg border border-slate-700 bg-slate-800 p-3"><div class="text-slate-400">Last 10 in era</div><div class="font-mono text-sm text-slate-200 mt-1">{{ n.recent_10.w }}W/{{ n.recent_10.l }}L/{{ n.recent_10.be }}BE · {{ "%.1f"|format(n.recent_10.wr) }}% [{{ "%.0f"|format(n.recent_10.lb) }}–{{ "%.0f"|format(n.recent_10.ub) }}] · net {{ "%+.2f"|format(n.recent_10.pnl) }}</div></div>
+                        </div>
+                        {% else %}<p class="text-xs text-slate-500 mt-2">Not enough era trades for a 30-trade window yet.</p>{% endif %}
+                        <p class="text-[11px] text-slate-500 mt-3">Streak before next: <span class="font-mono text-slate-300">{{ j.net.streak_before_next }}</span> consecutive SLs (BE is transparent; 2+ → 60 min cooldown).</p>
+                    </div>
+                    <div class="rounded-xl border border-slate-700 bg-slate-900/40 p-4">
+                        <h3 class="text-sm font-semibold text-slate-200">When it trades</h3>
+                        <table class="w-full text-xs mt-2">
+                            <tr class="text-slate-500"><th class="text-left font-normal">Session</th><th class="text-right font-normal">n</th><th class="text-right font-normal">WR</th><th class="text-right font-normal">net</th></tr>
+                            {% for sess in ["Asia","London","NY open","NY/Late","Rollover"] %}
+                            {% if n.by_session[sess] %}{% set s=n.by_session[sess] %}
+                            <tr class="border-t border-slate-700/50"><td class="py-1">{{ sess }}</td><td class="text-right font-mono">{{ s.n }}</td><td class="text-right font-mono {% if s.wr>=40 %}text-emerald-300{% elif s.wr<30 %}text-rose-300{% else %}text-slate-300{% endif %}">{{ "%.0f"|format(s.wr) }}% <span class="text-slate-500">[{{ "%.0f"|format(s.lb) }}–{{ "%.0f"|format(s.ub) }}]</span></td><td class="text-right font-mono {% if s.pnl>=0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.0f"|format(s.pnl) }}</td></tr>
+                            {% endif %}{% endfor %}
+                        </table>
+                        <p class="text-[11px] text-slate-500 mt-2">Display-only — London/NY band bleed is a named candidate, not adopted.</p>
+                    </div>
+                </div>
+
+                <!-- ATR buckets -->
+                <div class="rounded-xl border border-slate-700 bg-slate-900/40 p-4 mt-4">
+                    <h3 class="text-sm font-semibold text-slate-200">ATR at entry — the sweet spot</h3>
+                    <div class="grid grid-cols-2 md:grid-cols-5 gap-2 mt-3">
+                        {% for label in ["1.0-1.2","1.2-1.4","1.4-1.7","1.7-2.0","2.0+"] %}
+                        {% if n.by_atr[label] %}{% set a=n.by_atr[label] %}
+                        <div class="rounded-lg border border-slate-700 bg-slate-800 p-2 text-xs"><div class="text-slate-400">ATR {{ label }}</div><div class="font-mono font-semibold {% if a.wr>=45 %}text-emerald-300{% elif a.wr<25 %}text-rose-300{% else %}text-slate-200{% endif %}">{{ "%.0f"|format(a.wr) }}% [{{ "%.0f"|format(a.lb) }}–{{ "%.0f"|format(a.ub) }}]</div><div class="font-mono text-slate-400">n={{ a.n }} · {{ "%+.1f"|format(a.pnl) }}</div></div>
+                        {% endif %}{% endfor %}
+                    </div>
+                    <p class="text-[11px] text-slate-500 mt-2">Sweet spot 1.2–1.4 ATR in this era (57.6% [40.8–72.8], n=46) vs 14.3% at &lt;1.2 and 23.7% at &gt;2.0. Not a gate — sample still thin.</p>
+                </div>
+
+                <!-- Hour heatmap-ish -->
+                {% if n.by_hour %}
+                <div class="rounded-xl border border-slate-700 bg-slate-900/40 p-4 mt-4">
+                    <h3 class="text-sm font-semibold text-slate-200">Hour (UTC) — only n≥8 shown</h3>
+                    <div class="grid grid-cols-3 md:grid-cols-6 gap-2 mt-3">
+                        {% for h in range(24) %}{% if n.by_hour[h] %}{% set s=n.by_hour[h] %}
+                        <div class="rounded border text-center py-1.5 px-1 {% if s.wr>=45 %}bg-emerald-950/40 border-emerald-700/50{% elif s.wr<30 %}bg-rose-950/40 border-rose-700/50{% else %}bg-slate-800 border-slate-700{% endif %}">
+                            <div class="text-[11px] font-mono text-slate-400">{{ "%02d:00"|format(h) }}</div><div class="text-xs font-mono font-semibold {% if s.wr>=45 %}text-emerald-300{% elif s.wr<30 %}text-rose-400{% else %}text-slate-200{% endif %}">{{ "%.0f"|format(s.wr) }}%<span class="font-normal"> n={{ s.n }}</span></div>
+                        </div>
+                        {% endif %}{% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Extra indicators at last bar -->
+                {% if ctx.extra_indicators %}
+                {% set ex=ctx.extra_indicators %}
+                <div class="rounded-xl border border-slate-700 bg-slate-900/40 p-4 mt-4">
+                    <h3 class="text-sm font-semibold text-slate-200">Extra indicators at the last bar — context, not entry rules</h3>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 text-xs">
+                        <div><div class="text-slate-500">BB %B (20,2)</div><div class="font-mono text-slate-200">{{ "%.2f"|format(ex.bb_pctb) if ex.bb_pctb is not none else "—" }} <span class="text-slate-500">{% if ex.bb_pctb is not none %}{{ "low" if ex.bb_pctb<0.2 else "high" if ex.bb_pctb>0.8 else "mid" }}{% endif %}</span></div></div>
+                        <div><div class="text-slate-500">Stoch %K (14)</div><div class="font-mono text-slate-200">{{ "%.0f"|format(ex.stoch_k) if ex.stoch_k is not none else "—" }} <span class="text-slate-500">{% if ex.stoch_k is not none %}{{ "oversold" if ex.stoch_k<20 else "overbought" if ex.stoch_k>80 else "" }}{% endif %}</span></div></div>
+                        <div><div class="text-slate-500">ATR percentile (100-bar)</div><div class="font-mono text-slate-200">{{ "%.0f"|format(ex.atr_pctile) if ex.atr_pctile is not none else "—" }}<span class="text-slate-500">th</span> <span class="text-slate-500">{% if ex.atr_pctile is not none %}{{ "quiet" if ex.atr_pctile<25 else "volatile" if ex.atr_pctile>75 else "" }}{% endif %}</span></div></div>
+                        <div><div class="text-slate-500">Donchian 20 pos</div><div class="font-mono text-slate-200">{{ "%.2f"|format(ex.donchian_pos) if ex.donchian_pos is not none else "—" }}</div></div>
+                        <div><div class="text-slate-500">MACD hist</div><div class="font-mono {% if ex.macd_sign=='bull' %}text-emerald-300{% elif ex.macd_sign=='bear' %}text-rose-300{% else %}text-slate-200{% endif %}">{{ "%.3f"|format(ex.macd_hist) if ex.macd_hist is not none else "—" }} <span class="text-slate-500">{{ ex.macd_sign or "" }}</span></div></div>
+                        <div><div class="text-slate-500">EMA slope (30-bar, ATR)</div><div class="font-mono text-slate-200">{{ "%.2f"|format(ex.ema_slope_atr) if ex.ema_slope_atr is not none else "—" }}</div></div>
+                        <div><div class="text-slate-500">Trend strength (ATR)</div><div class="font-mono text-slate-200">{{ "%.2f"|format(ex.trend_strength_atr) if ex.trend_strength_atr is not none else "—" }} <span class="text-slate-500">{% if ex.trend_strength_atr is not none %}{{ "bull" if ex.trend_strength_atr>1 else "bear" if ex.trend_strength_atr<-1 else "weak" }}{% endif %}</span></div></div>
+                        <div><div class="text-slate-500">BB width (ATR)</div><div class="font-mono text-slate-200">{{ "%.1f"|format(ex.bb_width_atr) if ex.bb_width_atr is not none else "—" }} <span class="text-slate-500">{% if ex.bb_width_atr is not none %}{{ "squeeze" if ex.bb_width_atr<3 else "wide" if ex.bb_width_atr>5 else "" }}{% endif %}</span></div></div>
+                    </div>
+                    <p class="text-[11px] text-slate-500 mt-3">From <span class="font-mono">docs/INDICATOR-AUDIT-2026-10-23.md</span> lab: quiet ATR (&lt;25th) 55.6% vs volatile &gt;75th 31.5% (Δ33.7 pp, p=0.014) is the strongest hint; volume spike 45% vs thin 20.5% (p=0.031) next. No extra indicator has cleared the 5 pp + side-split + up-tape bar — all remain <strong class="text-slate-300">display-only</strong>.</p>
+                </div>
+                {% endif %}
+
+                <p class="text-[11px] text-slate-500 mt-4">Full drill: <span class="font-mono">python3 tools/journal.py --era structstop --cost 0.40</span> · audit: <span class="font-mono">docs/INDICATOR-AUDIT-2026-10-23.md</span> · indicator lab buckets with Fisher p: above doc §2. Nothing here is an entry/sizing/hold gate without a dated pre-reg + isolation (HANDOFF §11).</p>
+            </div>
+            {% else %}
+            <div class="rounded-2xl border border-slate-700 bg-slate-800 p-5">
+                <div class="text-lg font-semibold text-slate-200">📒 Journal unavailable</div>
+                <div class="text-sm text-slate-400 mt-1">{{ ctx.journal.reason if ctx.journal else "the read layer did not load" }}</div>
+                <div class="text-xs text-slate-500 mt-2">Run <span class="font-mono">python3 tools/journal.py</span> from the repo root to reproduce the CLI report.</div>
+            </div>
+            {% endif %}
+        </div>
+        <!-- ================= END JOURNAL TAB ================= -->
+
         <!-- ================= BOXES TAB ================= -->
+
         <div id="panel-boxes" class="hidden">
             {% if ctx.boxes and ctx.boxes.ok %}
             {% set bx = ctx.boxes %}
@@ -1540,7 +1659,7 @@ HTML_TEMPLATE = """
 
     </div>
     <script>
-    var TABS = ['simple', 'chart', 'boxes', 'details'];
+    var TABS = ['simple', 'journal', 'chart', 'boxes', 'details'];
     function showTab(name) {
         TABS.forEach(function(t) {
             var panel = document.getElementById('panel-' + t);
@@ -1852,6 +1971,32 @@ def chart_context(group=None, boxes_status=None):
         return {"ok": False, "reason": f"chart read failed: {exc}"}
 
 
+_journal_cache = {"key": None, "value": None, "at": 0.0}
+
+def journal_context(cost=0.40):
+    """Self-journaling BUY/SELL success for the Journal tab (display-only, 10-min cache)."""
+    if PR is None:
+        return {"ok": False, "reason": f"pressure.py unavailable: {_PR_IMPORT_ERROR}"}
+    import time as _time
+    key = (_file_key(TRADES_FILE_PATH), _file_key(LOG_FILE_PATH))
+    now = _time.time()
+    if _journal_cache["value"] and (key == _journal_cache["key"] or (now - _journal_cache["at"]) < CALIBRATION_CACHE_SECONDS):
+        return _journal_cache["value"]
+    try:
+        trades = PR.read_rows(TRADES_FILE_PATH)
+        # gross first, costed is shown alongside
+        gross = PR.journal_read(trades, cutover=PR.STRUCT_STOP_CUTOVER, cost=0.0)
+        net = PR.journal_read(trades, cutover=PR.STRUCT_STOP_CUTOVER, cost=cost)
+        # extra indicators at last bar
+        rows = PR.tail_rows(LOG_FILE_PATH, 400, window_bytes=512*1024)
+        extra = PR._extra_indicators_series(rows) if rows else {}
+        value = {"ok": True, "gross": gross, "net": net, "extra": extra, "cost": cost}
+        _journal_cache.update({"key": key, "value": value, "at": now})
+        return value
+    except Exception as exc:
+        return {"ok": False, "reason": f"journal failed: {exc}"}
+
+
 def open_trade_read(status, log_tail):
     """Unrealized progress of the open trade in $ and R (last logged close as price)."""
     if PR is None or not status.get("trade_active"):
@@ -1970,6 +2115,8 @@ def index():
     if PR and not ctx.get("error"):
         ctx["boxes"] = box_context(ctx.get("portfolio"), ctx.get("feed"))
         ctx["chart"] = chart_context(chart_tf, ctx.get("boxes"))
+        ctx["journal"] = journal_context(cost=0.40)
+        ctx["extra_indicators"] = PR._extra_indicators_series(PR.tail_rows(LOG_FILE_PATH, 400, window_bytes=512*1024)) if PR else {}
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         quotes = PR.tail_rows(os.path.join(DATA_DIR, "xm_data", "quotes-" + now.strftime("%Y-%m-%d") + ".csv"), 240)
         ctx["risk_now"] = PR.risk_read(status, quotes, now)
