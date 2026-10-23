@@ -165,10 +165,11 @@ class BoxReadTests(unittest.TestCase):
         self.assertTrue("box frozen at the break" in html or "no break to retest yet" in html)
         # the alert panel is a preview, never a sender, and one of the two states shows
         self.assertTrue("Would send now" in html or "Held" in html)
-        # a new page must not break the existing tab switch (journal is also a tab;
-        # Manual Scalping deliberately lives at /scalp, outside this switcher).
+        # a new page must not break the existing tab switch (journal is also a tab).
+        # The Manual Scalping page was removed in the 2026-10-23 redesign: it is not
+        # reachable and must not come back as a dead link.
         self.assertIn("var TABS = ['simple', 'journal', 'chart', 'boxes', 'details']", html)
-        self.assertIn('href="/scalp"', html)
+        self.assertNotIn('href="/scalp"', html)
         # Tab persistence must update the URL as well as localStorage: the
         # meta-refresh otherwise replays an old ?tab=chart deep link.
         self.assertIn("url.searchParams.set('tab', name)", html)

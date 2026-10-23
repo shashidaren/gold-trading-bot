@@ -80,9 +80,9 @@ snapshot block, still said FRESH.
   retain the registered $0.40 round trip until the full sample target and process health are verified.
   The large-N history dump/convert/replay is still a first-run-on-the-box task:
   `docs/ACCELERATE-TESTING.md` §2. The dashboard's pressure/setup/location/feed panels are
-  **display-only** (`docs/ANALYSIS-2026-10-16-dashboard-pressure.md`); `/scalp` writes only its separate
-  manual journal (`docs/MANUAL-SCALPING.md`). Dashboard/helper changes restart only the dashboard,
-  never the engine (`docs/AUTOSYNC.md`).
+  **display-only** (`docs/ANALYSIS-2026-10-16-dashboard-pressure.md`); since 2026-10-23 no dashboard
+  page writes anything at all. Dashboard/helper changes restart only the dashboard, never the engine
+  (`docs/AUTOSYNC.md`).
 
 3. **10-05 re-review is DONE:** `docs/REVIEW-2026-10-05.md`. Max-hold isolation
    closed (n=209, 1 TIME exit, cap never bound in-session); fallback step-2
@@ -117,7 +117,7 @@ snapshot block, still said FRESH.
 | **Market context (tape / gates / §7 era / calibration)** | `python3 tools/pressure_report.py` (`--root DIR`, `--era structstop|maxhold|075|all`, `--json`) — the same read-only layer the dashboard renders |
 | **Where did strong (8/8) signals head? (rough estimate)** | `python3 tools/signal_outlook.py --root .` (`--era structstop|075|all`, `--json`) — forward-walk cone + base rates per side/era; display-only, `docs/ANALYSIS-2026-10-19-signal-outlook.md` |
 | Chart & Placement tab read layer | `python3 tools/test_manual_chart.py` (32 hermetic tests; the tab itself is `?tab=chart`, `?tf=1\|5\|15`) |
-| Manual Scalping workspace | Page: `/scalp?tf=5` (M1/M15 optional). Pure calculator/journal: `python3 tools/test_manual_scalp.py`; Flask routes + ledger isolation: `.venv/bin/python tools/test_scalp_dashboard.py`. Guide/schema: `docs/MANUAL-SCALPING.md`. Journal writes only `manual_scalp_journal.json`; no orders |
+| v2 harness (goldbot/) | `python3 -m unittest discover -s goldbot/tests -t .` (64 hermetic tests) then `python3 -m goldbot --compare`. Read-only; no orders. `docs/REDESIGN-2026-10-23-v2-harness.md` |
 | Loser features | `python3 tools/analyze_losers.py` |
 | Engine regression | `python3 tools/smoke_test.py` |
 | Force autosync now | `sudo /opt/gold/tools/autosync.sh` |
@@ -163,8 +163,7 @@ snapshot block, still said FRESH.
   **unset = every message, unchanged**) — see `docs/PROPOSAL-2026-10-23-telegram-routing.md`
 - `GOLD_BOX_ALERTS` / `GOLD_BOX_ALERT_DAILY_CAP` / `GOLD_BOX_ALERT_*_COOLDOWN_MIN` (optional
   box notifier; `0` disables it)
-- `GOLD_MANUAL_JOURNAL_FILE` (optional; default `$GOLD_DATA_DIR/manual_scalp_journal.json`) — host-local
-  `/scalp` self-reported journal only; never the bot ledger and never a broker credential/order setting
+- *(removed 2026-10-23)* `GOLD_MANUAL_JOURNAL_FILE` went with the `/scalp` page; nothing reads it now
 
 ### Era timeline (UTC)
 
@@ -228,6 +227,15 @@ every other panel it is display-only: no gate, no order, no write, no `engine.py
 The shipped defaults are M5 and 140 bars. Nothing here changes the open struct-stop window, the
 fired §7 gap trigger, or any threshold in §4.
 
+**Manual Scalping workspace — REMOVED 2026-10-23 (owner: "probably don't need the scalper tab any
+more").** manual_scalp.py, scalp_template.py, docs/MANUAL-SCALPING.md, both test files, the four
+`/scalp*` routes and the nav link are deleted; `GOLD_MANUAL_JOURNAL_FILE` is read by nothing. Any
+host-local `manual_scalp_journal.json` is orphaned, not migrated — it was self-reported, never
+broker-verified, and was explicitly not evidence. The measured reason the page is not a loss: its own
+chart layer carries the finding that tight manual gold scalps lose on cost alone (`chart.py`), and the
+v1 ledger puts the round trip at 14.0% of the median risk (19.5% on 20-bar box entries). Original
+build note follows for archaeology only.
+
 **Manual Scalping workspace (2026-10-23, dashboard + manual-journal write only; no engine change):**
 the owner approved a separate manual page rather than crowding the bot tabs. **`/scalp`** now combines
 the existing M5/M1/M15 chart and box levels, compact feed/session/risk/volatility/chop context, an
@@ -243,8 +251,8 @@ Rows are `SKIPPED` / `OPEN` / `CLOSED` in host-local, git-ignored **`manual_scal
 corruption is shown as an error, never reset to empty. This is the one dashboard page that writes, and it
 writes only that file; the existing bot panels remain read-only. Self-reported rows are not broker-verified
 or evidence of edge; the ≥100-closed-trade, positive-after-cost review bar still applies. Full schema,
-formulas and operating rules: `docs/MANUAL-SCALPING.md`. Tests: `tools/test_manual_scalp.py` and
-`tools/test_scalp_dashboard.py` (the route test hashes `trades.csv` before/after skip→taken→close).
+formulas and operating rules: docs/MANUAL-SCALPING.md (deleted). Tests: tools/test_manual_scalp.py
+and tools/test_scalp_dashboard.py (both deleted; the route test hashed `trades.csv` before/after).
 Autosync `DASH_CHANGED` now includes the dashboard helpers (`pressure.py`, `chart.py`, `manual_scalp.py`,
 `scalp_template.py`) as well as `dashboard.py`; `CORE_CHANGED` and the engine remain untouched.
 
@@ -422,9 +430,9 @@ entry guard / flat-before-close policy is a named candidate (§5a/REVIEW-10-05
 ## 5. Evidence base (don't re-derive)
 
 Key documents:
-- `docs/MANUAL-SCALPING.md` (**workflow/tooling, not strategy evidence**): `/scalp` calculator formulas,
-  contract/cost caveats, self-reported journal schema and atomic-file behavior. It adds no outcome sample
-  and changes no measured verdict. The bot-ledger isolation test is a safety check, not an edge result.
+- `docs/REDESIGN-2026-10-23-v2-harness.md`: the v2 post-mortem and redesign — what the v1 ledger says
+  is actually wrong (cost/risk, not volatility), what was deleted, what `goldbot/` is, and the
+  pre-registration bar a v2 hypothesis has to clear before it means anything.
 - **Structural-stop time-gate judgement (recorded 2026-10-19 21:19 UTC; checked-in data through 18:10 UTC on that day, n=139):** `tools/pressure_report.py --root . --era structstop` at the judgement reported all five §7 SCREEN checks inside their bars (B1 5.91 SL/day, B2 46.76% SL share, B3 24.46% scratch share, C1 −0.071R gross, C2 37.50% decisive [28.8–47.1]); **SCREEN MET, PASS NOT MET** (n<150; Wilson LB 28.8% is not >32.1%). Gross era P&L there was −$56.01; at the assumed $0.40 round trip, net −$111.61 (−0.142R/trade); at the quote logger's $0.55 first-look median, −$132.46 (−0.168R/trade). The §7 gap count was **2/2 and the REVERT trigger FIRED**, despite no gap-through or realized gap damage. The pre-registered response requires the gap guard first, but its cutoff/open-position policy is undefined; no code change, deploy, or 0.25 ATR test was made. Full judgement and blocker: `docs/REVIEW-2026-10-19-struct-stop-judgement.md`. **Post-gate refresh (2026-10-20 08:59 UTC, docs only):** era n=147 (43W/66L/37BE/1TIME), guard still PASS (0 inside level, 81.6% level-bound, +0.50 ATR median clearance, 3.29 ATR median risk), gap count still **2/2**, logger 6/14 complete days. Those are observations on a grown sample: the n=150 arm **lapsed with the 10-19 gate** and is not re-opened by crossing it later — see `docs/REVIEW-2026-10-20-post-gate-refresh.md` §3.
 - `docs/ANALYSIS-2026-10-16-dashboard-pressure.md` (**latest, display-only**): documents the dashboard's
   market-context layer (`pressure.py`, `tools/pressure_report.py`) and composite weights. Its dated
@@ -585,14 +593,13 @@ window, and its dedupe makes extra runs harmless; the instant break notice is th
 fires is visible without checking the box. This changes nothing in the struct-stop window,
 the fired §7 closure-gap trigger, or the still-blocked gap guard.
 
-**Chart & Placement + Manual Scalping (2026-10-23): review, then deploy dashboard-only after sign-off.**
-The manual-logging follow-up is now **built** at `/scalp` (`docs/MANUAL-SCALPING.md`), no longer an open
-schema decision. It records side, timeframe, entry/stop/target, the full cost/contract/size snapshot,
-setup/notes, and — for externally closed rows — exit price/reason, net P&L and R in its own host-local
-JSON file, never `trades.csv`. Owner checks before use: open `/scalp`, verify the editable balance/risk,
-actual spread and broker contract/volume step, and confirm the two record buttons do not place orders.
-`DASH_CHANGED` restarts the dashboard for `dashboard.py` or its listed helpers; `goldbot` does not restart.
-Local render: `GOLD_DATA_DIR=. GOLD_MANUAL_JOURNAL_FILE=/tmp/manual_scalp_journal.json python3 dashboard.py`.
+**Redesign + scalper removal (2026-10-23): dashboard-only deploy; the engine is untouched.**
+The Manual Scalping page was **removed** at the owner's request, superseding the build note above: the
+routes, modules, guide and tests are deleted and `GOLD_MANUAL_JOURNAL_FILE` is read by nothing. In the
+same session the v1 post-mortem was written up and the v2 harness (`goldbot/`) was added — a separate,
+pure-stdlib package with no engine import and no order path, so it cannot affect the forward test.
+`DASH_CHANGED` restarts the dashboard for `dashboard.py`, `pressure.py`, `chart.py` or `goldbot/`; the
+engine unit does not restart. Local render: `GOLD_DATA_DIR=. python3 dashboard.py`.
 Refresh follow-up (2026-10-23): main-dashboard tab switches now update `?tab=` with
 `history.replaceState` as well as localStorage, so the 15-second meta-refresh cannot replay an old
 `?tab=chart` deep link and pull the operator away from Journal, Boxes, Simple, or Full. Explicit
@@ -895,19 +902,15 @@ data drop, not just after code changes.
 ```
 engine.py          signals + structural stop + BE ratchet + max-hold TIME + state machine
 trade_filter.py    portfolio gates (cooldown, daily breaker, blackouts, ATR)
-dashboard.py       Flask status page: existing bot panels are read-only; separate /scalp page has
-                   journal-only POST routes (no order API, no engine/ledger/state writes)
+dashboard.py       Flask status page; every panel read-only (the /scalp write routes are gone)
 pressure.py        read-only market-context layer for the dashboard (tape pressure, engine-gate read,
                    location/risk, portfolio state, §7 era card, feed health, box geometry/chop/retest
                    and the pure box-alert decision + rate limiter) — stdlib only, no writes
-chart.py           read-only chart + placement layer for the Chart & Placement tab and /scalp:
+chart.py           read-only chart + placement layer for the Chart & Placement tab:
                    M1->M5/M15 aggregation, pixel-space chart primitives (candles/levels/session bands),
                    cost ruler, entry/stop/target cards — stdlib only, no writes, no engine import
-manual_scalp.py    costed manual ticket arithmetic + atomic self-reported journal store; stdlib only,
-                   no engine/broker import; writes only GOLD_MANUAL_JOURNAL_FILE
-scalp_template.py  separate non-auto-refreshing /scalp HTML/JS preview; no I/O or order controls
-manual_scalp_journal.json  host-local, git-ignored manual decisions (SKIPPED/OPEN/CLOSED), not evidence
-                   or bot state; default /opt/gold/, override with GOLD_MANUAL_JOURNAL_FILE
+goldbot/           the v2 harness (config/data/indicators/signal/risk/portfolio/replay + CLI). Pure
+                   stdlib, no engine import, no order path. Not a service; run by hand.
 tools/strategy_lab.py   canonical costed/stateful/era-matched replay (exit+gate decisions)
 tools/check_structural_stop.py  ledger-side invariant guard for the 2026-10-05 change (+ deploy-boundary evidence)
 tools/handoff_check.py  machine-checks the snapshot block at the top of THIS file (autosync digest: 📝 handoff)
@@ -955,14 +958,13 @@ tools/             other analysis / integrity / report scripts (not on the hot p
   2026-10-23 the unit has **two jobs**: the rate-limited break notice and the twice-daily session
   watch plan (07:00 / 13:00 UTC; `--no-plan` drops the second). Volume measured at **5.1 messages/day**
   (`tools/box_report.py --alert-scan`); `GOLD_BOX_ALERT_DAILY_CAP` is the knob that binds.
-- A `dashboard.py` / `pressure.py` / `chart.py` / `manual_scalp.py` / `scalp_template.py` change is a
-  **dashboard-only** deploy (`DASH_CHANGED`): the dashboard service restarts, `goldbot` does not. Main
-  tabs are `Simple`, `Journal`, `Chart & Placement`, `Boxes & Timing` and `Full`; `/scalp` is a separate
-  non-auto-refreshing manual workspace, not a tab in that switcher. Main-tab preference uses
-  `localStorage` + `?tab=`; `?tf=1|5|15` picks chart timeframe here and on `/scalp`. For a local render:
-  `GOLD_DATA_DIR=. python3 dashboard.py` (also `GOLD_LOG_FILE`, `GOLD_TRADES_FILE`, `GOLD_SKIP_FILE`,
-  `GOLD_STATUS_FILE`, `GOLD_MANUAL_JOURNAL_FILE`); defaults stay `/opt/gold/*`. The manual JSON journal
-  is git-ignored/host-local and is not an autosync merge or deploy artifact. See `docs/MANUAL-SCALPING.md`.
+- A `dashboard.py` / `pressure.py` / `chart.py` / `goldbot/` change is a **dashboard-only** deploy
+  (`DASH_CHANGED`): the dashboard service restarts, the `goldbot` engine unit does not. Main tabs are
+  `Simple`, `Journal`, `Chart & Placement`, `Boxes & Timing` and `Full`; there is no separate manual
+  workspace any more. Tab preference uses `localStorage` + `?tab=`; `?tf=1|5|15` picks the chart
+  timeframe. For a local render: `GOLD_DATA_DIR=. python3 dashboard.py` (also `GOLD_LOG_FILE`,
+  `GOLD_TRADES_FILE`, `GOLD_SKIP_FILE`, `GOLD_STATUS_FILE`); defaults stay `/opt/gold/*`.
+  `goldbot/` is never deployed as a service — it has no daemon and no order path.
 - Logs: `journalctl -u goldbot -f`; autosync log `/var/log/gold_autosync.log`.
 
 ## 11. How to keep this file honest
