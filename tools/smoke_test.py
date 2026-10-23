@@ -3179,6 +3179,98 @@ check("W: --strict exits 1 once the trigger is reached (a pipeline can gate on i
 shutil.rmtree(tmp_w, ignore_errors=True)
 
 
+# --- Scenario X ------------------------------------------------------------
+print("\nScenario X: self-journal + candidate-indicator scoreboard (journal.py, 2026-10-23) "\
+      "-- accounting must match the ledger, the open trade must not count, and the "\
+      "permutation guard must not turn noise into a candidate")
+import journal as JN_SMOKE  # noqa: E402
+import indicators as IND_SMOKE  # noqa: E402
+from datetime import datetime as _dt_x, timedelta as _td_x
+
+X0 = _dt_x(2026, 10, 23, 6, 0)
+
+
+def x_tape(n=520, start=4000.0, step=0.5, band=1.0):
+    rows = []
+    for k in range(n):
+        ts = X0 + _td_x(minutes=k)
+        c = start + step * k
+        o = c - step / 2
+        rows.append({"Timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                     "Open": f"{o:.2f}", "High": f"{c + band:.2f}", "Low": f"{o - band:.2f}",
+                     "Close": f"{c:.2f}", "Volume": str(20 + k % 5),
+                     "RSI": "55.0", "ATR": "2.0", "EMA_50": f"{c - 1:.2f}",
+                     "EMA_200": f"{c - 3:.2f}", "Wick_Ratio": "0.0%"})
+    return rows
+
+
+def x_trade(num, side, em, xm, entry, sl, tp, xp, reason, profit):
+    return {"Trade_Num": str(num), "Trade_Type": side,
+            "Entry_Time": (X0 + _td_x(minutes=em)).strftime("%Y-%m-%d %H:%M:%S"),
+            "Exit_Time": (X0 + _td_x(minutes=xm)).strftime("%Y-%m-%d %H:%M:%S"),
+            "Entry_Price": f"{entry}", "Stop_Loss": f"{sl}", "Take_Profit": f"{tp}",
+            "Exit_Price": f"{xp}", "Exit_Reason": reason, "Profit": f"{profit}",
+            "Balance_After": "500", "RSI_At_Entry": "50", "ATR_At_Entry": "2",
+            "Wick_Ratio_At_Entry": "50.0%", "EMA50_At_Entry": f"{entry - 1}",
+            "EMA200_At_Entry": f"{entry - 3}"}
+
+
+x_book = [
+    x_trade(1, "BUY", 30, 40, 4015.0, 4005.0, 4030.0, 4030.0, "TP", 15.0),
+    x_trade(2, "SELL", 70, 80, 4030.0, 4040.0, 4015.0, 4040.0, "SL", -10.0),
+    x_trade(3, "BUY", 90, 110, 4045.0, 4045.0, 4060.0, 4045.0, "BE", 0.0),
+    x_trade(4, "SELL", 120, 130, 4060.0, 4070.0, 4045.0, 4065.0, "TIME", -2.0),
+]
+x_status = {"trade_active": True, "trade_type": "BUY", "current_trade_num": 5,
+            "entry_time": (X0 + _td_x(minutes=140)).strftime("%Y-%m-%d %H:%M:%S"),
+            "entry_price": 4080.0, "stop_loss": 4070.0, "take_profit": 4095.0,
+            "entry_rsi": 58.0, "entry_atr": 2.1, "entry_wick_ratio": 0.55,
+            "entry_ema_fast": 4078.0, "entry_ema_slow": 4074.0}
+x_rep = JN_SMOKE.build(x_tape(), x_book, x_status, [], cost=0.40, permutations=0)
+x_bk = x_rep["book"]
+check("X: four closed trades join and the open trade is not counted",
+      x_bk["n"] == 4 and x_rep["open"] is not None and x_rep["open"]["reason"] == "OPEN",
+      f"n={x_bk['n']}")
+check("X: decisive WR excludes BE/TIME; all-in does not",
+      abs(x_bk["decisive_wr"] - 50.0) < 1e-9 and abs(x_bk["all_in_pct"] - 25.0) < 1e-9)
+check("X: the cost is charged on every closed trade (scratches included)",
+      abs(x_bk["net"] - (3.0 - 4 * 0.40)) < 1e-9, f"net={x_bk['net']}")
+check("X: a ratcheted BE row keeps the reward-leg risk (10.0, not 0)",
+      any(abs(e["risk"] - 10.0) < 1e-9 and e["reason"] == "BE" for e in x_rep["entries"]))
+check("X: entry context never uses the entry bar or a later one",
+      all(e["context"]["ts"] < e["entry_time"] for e in x_rep["entries"]))
+check("X: a scratch that was +0.75R ahead is listed as a give-back",
+      x_rep["givebacks"]["scratched_runners"] == 1, str(x_rep["givebacks"]["scratched_runners"]))
+check("X: the CSV export starts with the documented header",
+      JN_SMOKE.entries_csv(x_rep["entries"]).splitlines()[0].startswith("Trade_Num"),
+      "header")
+
+
+def x_feature(i, reason, adx):
+    ctx = {key: ((i * 37 + len(key) * 13) % 100) / 100.0 for key in IND_SMOKE.CONTEXT_FIELDS}
+    ctx.update({"adx": adx, "rsi": 50.0, "atr": 2.0, "ema_spread_atr": 0.0,
+                "plus_di": 20.0, "minus_di": 20.0, "macd_hist": 0.0, "di_side": None})
+    return {"num": str(i + 1), "side": "BUY" if (i // 2) % 2 == 0 else "SELL",
+            "reason": reason, "r": 1.5 if reason == "TP" else -1.0,
+            "net": (1.5 if reason == "TP" else -1.0) - 0.4,
+            "entry_time": X0 + _td_x(minutes=i), "context": ctx, "open": False}
+
+
+x_entries = [x_feature(i, "TP" if i % 2 == 0 else "SL", 30.0 if i % 2 == 0 else 10.0)
+             for i in range(40)]
+x_board = JN_SMOKE.indicator_board(x_entries, permutations=80, seed=7)
+x_adx = [r for r in x_board["rows"] if r["key"] == "adx"][0]
+check("X: a real separation is flagged as a candidate, not silently adopted",
+      x_board["p_global_wr"] is not None and x_board["p_global_wr"] < 0.05
+      and x_adx["verdict"].startswith("candidate") and abs(x_adx["lift"] - 100.0) < 1e-9,
+      f"p={x_board['p_global_wr']} verdict={x_adx['verdict']}")
+
+x_noise = [x_feature(i, "TP" if (i * 17) % 60 < 30 else "SL", 30.0 if i % 2 == 0 else 10.0)
+           for i in range(60)]
+x_noise_board = JN_SMOKE.indicator_board(x_noise, permutations=80, seed=7)
+check("X: an unrelated feature is not rescued by its best-looking bucket",
+      not x_noise_board["verdict"].startswith("1 "), x_noise_board["verdict"][:60])
+
 print()
 if FAILURES:
     print(f"SMOKE TEST FAILED: {FAILURES}")
