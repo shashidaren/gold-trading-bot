@@ -165,8 +165,25 @@ class BoxReadTests(unittest.TestCase):
         self.assertTrue("box frozen at the break" in html or "no break to retest yet" in html)
         # the alert panel is a preview, never a sender, and one of the two states shows
         self.assertTrue("Would send now" in html or "Held" in html)
-        # a third tab must not break the switch itself
-        self.assertIn("var TABS = ['simple', 'boxes', 'details']", html)
+        # a new tab must not break the switch itself (2026-10-23: chart added)
+        self.assertIn("var TABS = ['simple', 'chart', 'boxes', 'details']", html)
+
+    def test_the_dashboard_renders_the_chart_tab(self):
+        os.environ["GOLD_DATA_DIR"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        import dashboard
+        html = dashboard.app.test_client().get("/?tab=chart").get_data(as_text=True)
+        for needle in ("Chart &amp; Placement", 'id="panel-chart"',
+                       "Where the trade would go", "The cost ruler",
+                       "New to charts? Read this first", "<svg", "stand aside",
+                       "0 cleared the no-edge reference"):
+            self.assertIn(needle, html)
+        # the chart is display-only: no form, no button that could send anything
+        self.assertNotIn("<form", html)
+        # an unmeasured tool must never be drawn as if it were tested
+        self.assertNotIn("Fibonacci retracement of", html)
+        # every timeframe link keeps the tab
+        for tf in ("1", "5", "15"):
+            self.assertIn(f"?tab=chart&tf={tf}", html)
 
 
 if __name__ == '__main__':
