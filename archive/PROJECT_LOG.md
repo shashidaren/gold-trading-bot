@@ -403,3 +403,68 @@ dedupe/re-send/failed-send-retry/dry-run/weekend, plan text content); `test_box_
 48 h / 500 h windows. **Not run:** a real Telegram send, the production host, or the box notifier
 (not installed). Deploy: `engine.py` changed → `goldbot` restarts; the plan needs
 `deploy/boxalert.service`. Revert is `.env`-only.
+
+## 2026-10-23 (later) — v1 post-mortem, scalper removal, and the `goldbot/` v2 harness
+
+**Trigger:** owner asked whether the bot can work at all "given gold's volatility", then
+gave a free hand to redesign and to drop the scalper tab.
+**Full write-up:** `docs/REDESIGN-2026-10-23-v2-harness.md`. **No runtime change** —
+`engine.py`, `trade_filter.py`, `pressure.py` and `tools/strategy_lab.py` are byte-identical.
+
+### The post-mortem (recomputed this session, collection 326)
+
+The owner's doubt is right but the diagnosis is wrong, and the difference decides what to fix:
+
+- **Volatility is not the cause.** Bucketed by ATR at entry, the *quietest* bucket is the
+  worst on the board (<1.2 ATR: 14.3% decisive, n=18) and the most volatile is tied with it
+  (≥2.0: 23.7%). Fisher: quiet p=0.080, volatile p=0.051; the one significant bucket
+  (1.2–1.4, p=0.013) fails the side split (BUY p=0.294, SELL p=0.373). BUY vs SELL p=0.492.
+  With 199 trades there is no establishable volatility↔win-rate relationship either way.
+- **Volatility is a geometry problem.** Median risk $3.94 on a $4,000 instrument; the $0.55
+  round trip is 14.0% of it, lifting the break-even decisive WR at 1:1.5 from 40.0% to
+  **43.2%**. The escape hatch is timeframe: 19.5% of R on a 20-bar M1 box vs 2.1% on a 4h box.
+- **Direction is what is fatal.** 49% [41–57] at 30 min after an 8/8 signal, and no exit
+  geometry rescues it — the best cell in `tools/pathwalk_sims.py` is +$2.93 over 696 trades
+  *gross*. Era arithmetic: gross −61.13, cost −109.45, net −170.58; **cost is 1.8× the gross
+  loss**, and the BE bucket booked $0.00 gross while paying $29.15.
+- Corrected in-session: an MFE walk put the ratchet's cost at $237.70, which is unsafe
+  (MFE cannot say whether the target printed before the stop returned). The sequence-aware
+  figure is **$230.80**.
+
+### Removed (owner request + the measured reason)
+
+`manual_scalp.py`, `scalp_template.py`, `docs/MANUAL-SCALPING.md`, `tools/test_manual_scalp.py`,
+`tools/test_scalp_dashboard.py`, the four `/scalp*` routes, the nav link, and
+`GOLD_MANUAL_JOURNAL_FILE`. `dashboard.py` 2,298 → 2,178 lines and now has **no write route
+at all**. `tools/autosync.sh` `DASH_CHANGED` updated to `dashboard.py pressure.py chart.py
+goldbot/` (the old pathspec named files that no longer exist).
+
+### Built: `goldbot/` (1,942 lines incl. 548 of tests)
+
+Modular, **pure stdlib** (this sandbox has no requests/dotenv/flask/pandas, so v1 cannot even
+be imported here), no engine import, no order path. Four decisions carry the analysis:
+timeframe is the primary knob (default H4); an explicit **cost floor that refuses and counts**
+setups whose risk is under 20× the round trip (v1 had no such rule); the structural stop kept,
+with each trade recording whether the *level* or the *ATR floor* bound; and the entry is a
+**named hypothesis** (`trend_pullback`), not a claim of edge.
+
+Two bugs the tests caught that would have shipped: `warmup_bars()` ignored the ATR period, so
+ATR was `None`, every entry was refused with "no ATR", and the replay reported **zero trades
+with a straight face**; and the costed break-even formula returned 0.4558 where the ledger
+says 43.2% — the correct form is `p = (risk + c)/(risk·(1+rr) + c)`, and the shortcuts move
+the bar by 2.4pp. Both pinned.
+
+### First result — the wall, not the verdict
+
+`python3 -m goldbot --compare` on the 52-day log: **4 trades** (3 at M15, 0 at H1, 1 at H4).
+The cost thesis holds mechanically (3.9% → 0.5% of R vs v1's 14.0–19.5%), but the binding
+constraint on v2 is **sample size**, so the large-N path (`mt5_history_dump.py` →
+`history_to_log.py` → `--bars`) is the next real step, not a nice-to-have. §6 of the doc
+pre-registers the bar (n≥100 decisive, Wilson lower bound over the *costed* break-even,
+cost ≤5% of R, same direction within each side, chronological holdout, net R>0) before any
+further tuning.
+
+**Verified:** 64 `goldbot` tests OK; `tools/smoke_test.py` PASSED; `check_data.py` 0 fail;
+`test_manual_chart.py` 32 OK; `test_box_report.py` 14 OK; `test_signal_outlook.py` 9 OK;
+`handoff_check.py` FRESH. **Not verified here:** the Flask dashboard routes (no Flask in this
+sandbox) — the excision was checked by `py_compile` and a zero-hit grep for `/scalp`.
