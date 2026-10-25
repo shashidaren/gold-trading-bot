@@ -505,6 +505,8 @@ VARIANTS = {
                       {"stop_beyond_level": 0.25, "tp_mult": None, "rr": RR_TARGET}),
     "structstop1.0": ("same but 1.0 ATR of clearance",
                       {"stop_beyond_level": 1.0, "tp_mult": None, "rr": RR_TARGET}),
+    "structstop1.5": ("same but 1.5 ATR of clearance (stop-hunt grid, ANALYSIS-2026-10-25)",
+                      {"stop_beyond_level": 1.5, "tp_mult": None, "rr": RR_TARGET}),
     "structstop+tol0.25": ("shipped stop + 0.25 ATR level test (next isolation slot)",
                       {"stop_beyond_level": SL_CLEAR_ATR, "tp_mult": None, "rr": RR_TARGET,
                        "level_tol_atr": 0.25}),

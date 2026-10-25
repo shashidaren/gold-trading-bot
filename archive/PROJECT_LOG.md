@@ -468,3 +468,69 @@ further tuning.
 `test_manual_chart.py` 32 OK; `test_box_report.py` 14 OK; `test_signal_outlook.py` 9 OK;
 `handoff_check.py` FRESH. **Not verified here:** the Flask dashboard routes (no Flask in this
 sandbox) — the excision was checked by `py_compile` and a zero-hit grep for `/scalp`.
+
+## 2026-10-25 — "execute the plan": session refresh + duplicate trade #697 found (docs only, no runtime change)
+
+Ran the plan's session-start checks on the collection-334 snapshot (data through 2026-10-23 20:57
+UTC): `check_data.py` 0 fail / 8 warn; `handoff_check.py` FRESH after `--update`;
+`check_structural_stop.py` **PASS at n=200** (0 inside level, 83.5% level-bound, +0.50 ATR
+clearance, median risk 3.33 ATR); `check_gap_rides.py` still **3/2** (#595/#610/#687 — no
+gap-through, no worse exit); `pressure_report.py` SCREEN MET on all five checks (SL/day 6.00, SL
+share 45.00%, scratch 26.50%, gross −0.052R, decisive 37.93% [30.4–46.0]); `xm_quote_report.py`
+**10/14** complete days, 1/2 weekends, median $0.55 (newest synced row 10-24 14:59:30, Saturday
+frozen tick; 10-21 tick stall up to ~1 h noted for the host health check). The DST discriminating
+window opened 01:00 UTC; no post-transition offset observed yet — next sync decides the rule.
+
+**New finding — duplicate `Trade_Num` #697.** The synced ledger has two rows numbered 697: the
+10-23 11:17 BUY (SL −$8.70) and the 10-23 15:15 SELL (TIME −$0.36, should be #698). Root cause is a
+latent engine bug: `trades.csv` rows are written only at close, while `restore_open_trade_from_status()`
+restores `current_trade_num` but **not** `next_trade_num` — after any restart with an open trade, the
+next trade reuses the open trade's number. Same pattern as the long-standing #1/#2/#3 (09-04) and
+#171 (09-15) duplicates. No current metric or judgement is affected (every tool is row-based; the
+balance chain 137.02 → 136.66 and `status.json` agree), but the key is non-unique and the bug is
+live on the host at the next restart-with-open-trade. Proposed: two-line engine fix (restore
+`next_trade_num` from status.json, max with the CSV-derived value), a hermetic smoke scenario, and an
+optional renumber of the SELL row — **none applied**; owner review pending. Record:
+`docs/REVIEW-2026-10-25-duplicate-trade-number.md`.
+
+Handoff snapshot + §1/§4/§5/§6 refreshed, replaced §1 archived to `docs/HANDOFF-HISTORY.md`,
+`docs/EXECUTION-PLAN.md` re-based. Gap-guard blocker, $0.40 cost assumption and all §4 thresholds
+unchanged. No engine, filter, parameter, gate or deployment change; no ledger modification; no PR
+merge (owner is finalising the session).
+
+## 2026-10-25 (follow-up) — stop-hunt mark-outs + stop-clearance grid replay (evidence only, no runtime change)
+
+Owner hypothesis (delegated the decision: "no vast experience with chart or gold instrument —
+help me make the decisions u see best"): price hovers at the stop level, tags it, and bounces
+back; some traders place their stop slightly past the level the instrument suggests, to avoid
+exactly that.
+
+**Built.** `tools/stop_hunt_markout.py` — reproducible bounded 24 h mark-outs (observed bars
+only, gaps never bridged; ratchet-risk reconstruction for rows where `Stop_Loss == Entry`).
+`structstop1.5` clearance variant added to `tools/strategy_lab.py` (one VARIANTS entry;
+`--calib-only` recall 99.8% unchanged; `smoke_test.py` PASSED).
+
+**Mark-outs (era n=200).** 84% of SLs hovered ≤0.25R of the stop before printing (TP wins 13%,
+BE 17%); 27% of SLs back at entry ≤15 m, 31% by 1 h, 12% never within 24 h; median hunt before
+a ≤15 m bounce ≈0.17R (≈1.1 ATR past the tested level; p75 ≈2.1 ATR); 21/90 (23%) carry the full
+SL→entry→TP signature (88% of the fast bounces). Counterweight: **29% of TP wins survived ≥0.5R
+adverse movement** — the same adversity threatens winners, so the pattern alone cannot justify a
+stop change (base rate vs cost decides).
+
+**Grid (costed stateful replay, post-cutover era).** Net R/t by cost: at every cost 1.5 > 1.0 >
+live 0.5 > 0.25 > old geometry (reconfirms 10-06 was the right direction). **structstop1.5 =
+−0.000R/trade at registered $0.20/side, −0.023R at measured $0.275** (live: −0.102/−0.132) —
+breakeven at registered cost, first positive-slope point in project history; decWR 43.1% vs
+38.7%. Pre-declared bar (≥+0.05R at both costs, WR no drop, DD within 25%, n within 15%): 1.5
+passes 3 of 4 — n 163 vs 207 (−21.3%) misses, mechanism disclosed (longer holds, 5 TIME vs 2);
+still 10.2 trades/day. 1.0 ATR fails bar 1 (+0.026R) — measured-and-insufficient.
+
+**Verdict.** NO live change. `structstop1.5` = **pre-registration candidate, not registered**
+(one variable: `SL_CLEAR_ATR` 0.5→1.5; TP stays 1.5× actual risk; 10-05-style SCREEN/PASS/REVERT
+bars drafted in the analysis). Sequencing: the fired §7 gap trigger keeps the owner's gap-guard
+decision first in the queue; this is the next single variable after it, not a stack. Owner is
+asked to decide (1) gap-guard a/b/c, (2) register the 1.5 ATR arm or not, (3) the 2-line
+duplicate-#697 engine fix — in one sitting if preferred. No engine, filter, gate or runtime
+change; no ledger modification; nothing merged.
+
+Record: `docs/ANALYSIS-2026-10-25-stop-hunt-markouts-and-clearance-grid.md`.
