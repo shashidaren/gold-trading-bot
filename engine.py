@@ -89,6 +89,9 @@ GUARD_LOOKBACK_DAYS = 30     # price-log window used to derive the break signatu
 GUARD_MIN_BREAK_MIN = 30.0   # a daily break is 30-180 min (check_gap_rides uses the same)
 GUARD_MAX_BREAK_MIN = 180.0
 GUARD_MIN_SAMPLES = 3        # fewer observed breaks than this -> no signature -> fail-open
+GUARD_RECENT_SAMPLES = 5     # modal window over recent breaks so schedule changes converge fast
+GUARD_WEEKEND_MIN = 24 * 60.0  # weekly close (>= 24 h); Sunday reopen shares daily reopen tod
+GUARD_DST_TOL_MIN = 2        # minute jitter allowed around an exact +-60 min DST shift
 
 # Breakeven stop ratchet (adopted 2026-09-10, docs/ANALYSIS-2026-09-10-losing-trades.md):
 # once a trade is +BE_TRIGGER_R in profit, SL moves to entry. Sequence-aware replay of all
@@ -320,16 +323,52 @@ def _modal_minute_of_day(samples):
     return (mid // 60, mid % 60)
 
 
+def _signed_tod_diff_min(tod_a, tod_b) -> int:
+    """Signed circular difference `tod_a - tod_b` in minutes, in [-720, +720)."""
+    a = tod_a[0] * 60 + tod_a[1]
+    b = tod_b[0] * 60 + tod_b[1]
+    return (a - b + 720) % 1440 - 720
+
+
+def _dst_shift_min(observed_tod, base_tod, tol_min: int = GUARD_DST_TOL_MIN):
+    """Return +60 or -60 when `observed_tod` sits 1 h (+/- tol_min) from `base_tod`, else None."""
+    diff = _signed_tod_diff_min(observed_tod, base_tod)
+    if abs(diff - 60) <= tol_min:
+        return 60
+    if abs(diff + 60) <= tol_min:
+        return -60
+    return None
+
+
+def _shift_tod(tod, delta_min: int):
+    """Shift an `(hour, minute)` tuple by `delta_min` minutes modulo 24 h."""
+    total = (tod[0] * 60 + tod[1] + delta_min) % 1440
+    return (total // 60, total % 60)
+
+
 def derive_daily_closure(log_path: str = None, lookback_days: int = GUARD_LOOKBACK_DAYS):
     """Derive the broker's daily-break signature from the observed price log.
 
     Returns `(close_tod, reopen_tod)` as (hour, minute) UTC tuples, or None when the
     signature cannot be established. Read-only: the log is never modified.
 
-    A "daily break" is a hole in the bar series of 30-180 minutes (the weekly close is
-    >= 24 h and ignored, because the Sunday reopen is the same clock time anyway). The
-    signature is the modal start and modal end minute-of-day. Fewer than
-    GUARD_MIN_SAMPLES observed breaks -> None (caller fails open).
+    A "daily break" is a hole in the bar series of 30-180 minutes; fewer than
+    GUARD_MIN_SAMPLES observed breaks in `lookback_days` -> None (caller fails open).
+
+    DST responsiveness (2026-10-25 refinement):
+      * Baseline mode is taken over the most recent GUARD_RECENT_SAMPLES (5) daily
+        breaks rather than the whole 30-day window, so any schedule shift converges
+        within 3 trading days while staying immune to isolated mid-day feed outages.
+      * Across a Sunday +-1 h DST transition (EU last Sunday of Mar/Oct, US 2nd
+        Sunday of Mar / 1st Sunday of Nov), the Sunday weekly reopen shares the exact
+        minute-of-day of the daily reopen. Before 5 post-weekend breaks accumulate:
+        - if post-weekend daily break(s) shifted by a consistent +-60 min (+/-2 min)
+          on both close and reopen vs the pre-weekend mode (and none stayed at the
+          old hour), return the modal signature of those shifted breaks;
+        - else if no post-weekend break matched either hour yet (Sunday night /
+          Monday Day 1 before the close, or only a mid-day outage so far) and the
+          weekend reopen shifted by +-60 min (+/-2 min), shift the pre-weekend
+          signature by that exact +-60 min. Arbitrary outage hours never match +-60 m.
     """
     path = log_path or LOG_FILE_PATH
     try:
@@ -351,21 +390,70 @@ def derive_daily_closure(log_path: str = None, lookback_days: int = GUARD_LOOKBA
         return None
 
     cutoff = stamps[-1] - timedelta(days=lookback_days)
-    starts, ends = [], []
+    daily_breaks = []
+    weekends = []
     for a, b in zip(stamps, stamps[1:]):
         if a < cutoff:
             continue
         mins = (b - a).total_seconds() / 60.0
         if GUARD_MIN_BREAK_MIN <= mins <= GUARD_MAX_BREAK_MIN:
-            starts.append((a.hour, a.minute))
-            ends.append((b.hour, b.minute))
-    if len(starts) < GUARD_MIN_SAMPLES:
+            daily_breaks.append((a, (a.hour, a.minute), (b.hour, b.minute)))
+        elif mins >= GUARD_WEEKEND_MIN:
+            weekends.append((a, (a.hour, a.minute), (b.hour, b.minute)))
+    if len(daily_breaks) < GUARD_MIN_SAMPLES:
         return None
-    close_tod = _modal_minute_of_day(starts)
-    reopen_tod = _modal_minute_of_day(ends)
-    if close_tod is None or reopen_tod is None:
+
+    recent = daily_breaks[-GUARD_RECENT_SAMPLES:]
+    base_close = _modal_minute_of_day([c for _, c, _ in recent])
+    base_reopen = _modal_minute_of_day([r for _, _, r in recent])
+    if base_close is None or base_reopen is None:
         return None
-    return close_tod, reopen_tod
+
+    if weekends:
+        wk_ts, _, wk_reopen = weekends[-1]
+        pre_wk = [b for b in daily_breaks if b[0] < wk_ts]
+        post_wk = [b for b in daily_breaks if b[0] > wk_ts]
+        if len(post_wk) < GUARD_RECENT_SAMPLES and len(pre_wk) >= GUARD_MIN_SAMPLES:
+            pre_recent = pre_wk[-GUARD_RECENT_SAMPLES:]
+            pre_close = _modal_minute_of_day([c for _, c, _ in pre_recent])
+            pre_reopen = _modal_minute_of_day([r for _, _, r in pre_recent])
+            unshifted = [
+                b for b in post_wk
+                if abs(_signed_tod_diff_min(b[1], pre_close)) <= GUARD_DST_TOL_MIN
+                and abs(_signed_tod_diff_min(b[2], pre_reopen)) <= GUARD_DST_TOL_MIN
+            ]
+            shifted = []
+            for _, c_tod, r_tod in post_wk:
+                sc = _dst_shift_min(c_tod, pre_close)
+                sr = _dst_shift_min(r_tod, pre_reopen)
+                if sc is not None and sc == sr:
+                    shifted.append((c_tod, r_tod))
+            if shifted and not unshifted:
+                return (
+                    _modal_minute_of_day([c for c, _ in shifted]),
+                    _modal_minute_of_day([r for _, r in shifted]),
+                )
+            if not unshifted and not shifted:
+                wk_shift = _dst_shift_min(wk_reopen, pre_reopen)
+                if wk_shift is not None:
+                    return (_shift_tod(pre_close, wk_shift), _shift_tod(pre_reopen, wk_shift))
+                return pre_close, pre_reopen
+    else:
+        tail_shifted = []
+        for _, c_tod, r_tod in reversed(recent):
+            sc = _dst_shift_min(c_tod, base_close)
+            sr = _dst_shift_min(r_tod, base_reopen)
+            if sc is not None and sc == sr:
+                tail_shifted.append((c_tod, r_tod))
+            else:
+                break
+        if tail_shifted:
+            return (
+                _modal_minute_of_day([c for c, _ in tail_shifted]),
+                _modal_minute_of_day([r for _, r in tail_shifted]),
+            )
+
+    return base_close, base_reopen
 
 
 def guard_blocks_entry(now_utc: datetime, closure, cutoff_min: int = GUARD_CUTOFF_MIN) -> bool:
@@ -434,6 +522,7 @@ class GoldEngine:
         # derived from the price log at most once per UTC day, never hard-coded.
         self._guard_closure = None
         self._guard_closure_date = None
+        self._guard_closure_path = None
 
         self.prev_close = None
         self.rsi = None
@@ -1551,9 +1640,10 @@ class GoldEngine:
         if now_utc is None:
             now_utc = datetime.now(timezone.utc)
         today = now_utc.date()
-        if self._guard_closure_date != today:
+        if self._guard_closure_date != today or self._guard_closure_path != LOG_FILE_PATH:
             self._guard_closure = derive_daily_closure(LOG_FILE_PATH)
             self._guard_closure_date = today
+            self._guard_closure_path = LOG_FILE_PATH
             if self._guard_closure:
                 ct, rt = self._guard_closure
                 print(f"Gap guard: daily break {ct[0]:02d}:{ct[1]:02d} -> "

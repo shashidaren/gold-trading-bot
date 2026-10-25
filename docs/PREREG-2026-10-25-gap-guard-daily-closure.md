@@ -1,12 +1,10 @@
-# PREREG — DRAFT: daily-closure entry guard (gap guard), 2026-10-25
+# PREREG — Daily-closure entry guard (gap guard), 2026-10-25
 
-**Status:** REGISTERED — owner-approved 2026-10-25 (answers below). Not implemented, not deployed.
+**Status:** REGISTERED & **DEPLOYED 2026-10-25 02:48:12 UTC (`71317da`, PR #58 `d38117a`) into the closed weekend market; DST-responsiveness refinement in `1c02b2c`.** Stop geometry held on `SL_CLEAR_ATR = 0.5` until the post-DST broker offset (`+2h` EU vs `+3h` US) is observed in synced rows (see §9 below).
 **Date:** 2026-10-25 (session: opening ritual + #697 fix committed as 8d84dcf; data collection 334,
-checked-in data through 2026-10-23 20:57 UTC).
-**Author:** agent session arena/17ce78e9-gold-trading-bot, on branch `arena/17ce78e9-gold-trading-bot`.
-**Owner approvals (2026-10-25):** cutoff = 30 min; scope = entries only; deploy waits for an observed
-broker offset after the DST window (10-25 01:00 → 11-01 06:00 UTC) — code now, no deploy on a guessed
-UTC close.
+checked-in data through 2026-10-23 20:57 UTC; deployed at collection 335 / `71317da`).
+**Author:** agent session arena/17ce78e9-gold-trading-bot; post-merge DST refinement + deploy record on `arena/c5824a9f-gold-trading-bot`.
+**Owner approvals (2026-10-25):** cutoff = 30 min; scope = entries only; PR #58 merged during the Saturday weekend closure and deployed harmlessly into a closed market (`71317da`), followed immediately by owner-approved (`hold_for_dst` + `fix_dst_lag`) DST-responsive `derive_daily_closure()` (`1c02b2c`) while holding stop geometry for post-DST offset observation.
 
 This draft scopes the gap guard required before the prescribed structural-stop revert
 (§7 closure-gap REVERT trigger FIRED at 3/2: #595/#610/#687). It is one scoped engine
@@ -237,6 +235,18 @@ derived, not hard-coded — the same function on a 20:57 fixture returns 20:57).
 | `python3 tools/check_structural_stop.py` | PASS (0 post-cutover stops inside the level) |
 | `python3 tools/handoff_check.py` | HANDOFF FRESH (1 advisory drift) |
 
-**Not done, deliberately:** no deploy, no PR merge, no structural-stop revert, no 0.25 ATR test, no
+**Not done, deliberately (in PR #58):** no structural-stop revert, no 0.25 ATR test, no
 flattening of open positions, no change to `trade_filter.py` blackouts, no renumbering of any
 historical ledger row.
+
+---
+
+## 9. Deploy record (`71317da`) + DST-responsiveness refinement (`1c02b2c`, 2026-10-25)
+
+1. **Host deploy into closed weekend market (`2026-10-25 02:48:12 UTC`):** Owner merged PR #58 (`d38117a`, combining `#697` fix `8d84dcf` + initial guard implementation `4d911fa`) at `02:39:37 UTC`; `autosync.sh` synced `data collection 335` (`7b2e2ea`, `02:48:08 UTC`) and merged upstream (`71317da`, `02:48:12 UTC`), passing `smoke_test.py` and restarting `gold` while the weekend market was closed (`status.json` `trade_active: false`, `next_trade_num: 698`, last bar `2026-10-23 20:57:08 UTC`). Zero live/paper bars or trades were evaluated between the deploy and Sunday's reopen.
+2. **DST-lag hazard found and fixed (`1c02b2c` on `arena/c5824a9f-gold-trading-bot`):** Under the initial 30-day modal window (`~19` summer `20:58 → 22:00 UTC` breaks), a `±1 h` broker DST shift (EU `2026-10-25 01:00 UTC` or US `2026-11-01 06:00 UTC`) would have needed ~10 post-shift daily breaks (~2 trading weeks) to overtake the old mode — leaving `21:28–21:58 UTC` unguarded and `20:28–20:58 UTC` falsely blocked in the interim. Per owner decision (`fix_dst_lag`), `derive_daily_closure()` now:
+   - computes its modal `(close_tod, reopen_tod)` baseline over the most recent `GUARD_RECENT_SAMPLES = 5` daily breaks (within the 30-day lookback, still requiring `>= 3` breaks so `< 3` fails open and a single mid-day feed outage cannot move the mode), converging within 3 daily breaks for any schedule shift; and
+   - checks the latest weekend hole (`>= 24 h`, `GUARD_WEEKEND_MIN`): when `< 5` daily breaks have been logged since that weekend, an exact `±60 min` (`±2 min` bar-timestamp tolerance, `GUARD_DST_TOL_MIN = 2`) shift observed in either the post-weekend daily-break mode (when `>= 1` exists) or the Sunday weekly reopen relative to the pre-weekend baseline shifts both `close_tod` and `reopen_tod` immediately on **Day 1**. Non-`±60 min` reopens (e.g. a Monday `07:15 UTC` feed-outage recovery) are ignored so feed outages never synthesize a bogus closure schedule (verified hermetically in `tools/smoke_test.py` Scenario Z).
+   - **Invariant preserved:** `GUARD_CUTOFF_MIN = 30`, entries-only scope (open positions untouched), fail-open below 3 breaks, and historical overlap on `20:58 → 22:00 UTC` (`7 / 697` all-book entries, `0 / 200` struct-stop entries) are byte-for-byte unchanged.
+3. **Quote-logger staleness + stop-geometry hold (owner decision `hold_for_dst`):** At `data collection 335`, `xm_data/quotes-2026-10-24.csv` ends at `2026-10-24 15:34:30 UTC` (`STALE`, ~11.3 h old; `mt5quotes-gold` needs a host restart before Sunday's reopen), so no post-`01:00 UTC` tick offset has been observed yet. Per owner decision, `engine.py` holds `SL_CLEAR_ATR = 0.5` + the deployed gap guard through Sunday reopen / Monday until the real post-DST broker offset (`+2h` vs `+3h`) is confirmed in synced rows, before choosing between pre-registering `structstop1.5` (`docs/ANALYSIS-2026-10-25-stop-hunt-markouts-and-clearance-grid.md`) or executing the literal §7 revert.
+

@@ -534,3 +534,26 @@ duplicate-#697 engine fix — in one sitting if preferred. No engine, filter, ga
 change; no ledger modification; nothing merged.
 
 Record: `docs/ANALYSIS-2026-10-25-stop-hunt-markouts-and-clearance-grid.md`.
+
+---
+
+## 2026-10-25 (post-merge autosync) — PR #58 deployed (`71317da`), DST-responsive gap-guard fix + docs reconciliation
+
+**Trigger.** User merged PR #58 (`d38117a` at `02:39:37 UTC`: `8d84dcf` `#697` duplicate-number restore fix + `4d911fa` 30-min entries-only daily-closure gap guard), `autosync.sh` synced `data collection 335` (`7b2e2ea` at `02:48:08 UTC`) and deployed `71317da` (`autosync: merge upstream` at `02:48:12 UTC`) into the closed weekend market, and user asked to pick up where we left off.
+
+**Baseline verification (`71317da` / `data collection 335`).**
+- `check_data.py`: `0 fail, 8 warn` — `697` closed trades (`140W/301L/253BE/3TIME`, `31.7%` decisive, engine ledger `$136.66`, true equity `$119.70`, net `−$659.10` at `$0.20/side`), `50,494` log bars ending `2026-10-23 20:57:08 UTC`, `0` open trades (`status.json` `next_trade_num: 698`).
+- `check_structural_stop.py`: `PASS` at struct-stop era `n=200` (`55W/90L/53BE/2TIME`, `0` stops inside level, `83.5%` level-bound, median clearance `+0.50 ATR`, median risk `3.33 ATR`).
+- `check_gap_rides.py`: `3/2` post-cutover daily-break rides (`#595`, `#610`, `#687`), `$0` realized gap damage; `0 / 200` struct-stop entries (`7 / 697` all-book) fell in `[20:28, 22:00)`.
+- `xm_quote_report.py`: `STALE` (~11.3 h old at `02:48 UTC` autosync — `xm_data/quotes-2026-10-24.csv` stopped at `2026-10-24 15:34:30 UTC`, `10/14` complete days, `1/2` weekends, median `$0.55/oz`); flagged `mt5quotes-gold` for host restart before Sunday's reopen.
+
+**Owner decisions.**
+1. **Stop geometry (`hold_for_dst`):** Keep `SL_CLEAR_ATR = 0.5` + deployed gap guard through Sunday reopen / Monday until the real post-DST broker offset (`+2h` EU vs `+3h` US) is observed; do not stage `structstop1.5` or revert to `2·ATR` in this step.
+2. **Gap-guard DST responsiveness (`fix_dst_lag`):** Fix the 30-day modal DST lag in `derive_daily_closure()` now with hermetic smoke tests.
+
+**Runtime hygiene refinement (`1c02b2c` on `arena/c5824a9f-gold-trading-bot`).**
+- Updated `derive_daily_closure()` in `engine.py` (`GUARD_RECENT_SAMPLES = 5`, `GUARD_WEEKEND_MIN = 24 * 60.0`, `GUARD_DST_TOL_MIN = 2`) so the modal `(close_tod, reopen_tod)` baseline uses the last 5 daily breaks (converging within 3 breaks for any schedule shift while ignoring isolated mid-day feed outages) and shifts immediately on **Day 1** across a `±60 min` (`±2 min` bar jitter) Sunday weekly reopen / post-weekend daily break when `< 5` post-weekend breaks exist. Non-`±60 min` reopens (e.g. Monday `07:15 UTC` outage recovery) are ignored so feed outages never synthesize a false closure window. Added `_guard_closure_path` cache invalidation in `GoldEngine.guard_closure()`.
+- Expanded `tools/smoke_test.py` Scenario Z with 7 hermetic checks covering EU/US fall-back Day 1 (`+60m` → `21:58–23:00`), spring-forward Day 1 (`−60m` → `20:58–22:00`), Monday outage reopen + Day 2 recovery across a Tuesday mid-day outage, and 3-break non-DST schedule convergence. `py_compile` + full `smoke_test.py` (Scenarios A–Z) **PASSED**.
+
+**Docs updated.** `docs/HANDOFF.md` (`handoff_check.py --update` to collection 335, start-here note, era-timeline row, rewritten §1, §4 live table, §5, §6 items 0/1/3(h)/3(j)/6, §11 milestones), `docs/HANDOFF-HISTORY.md` (archived collection-334 §1 verbatim), `docs/PREREG-2026-10-25-gap-guard-daily-closure.md` (status header + §9 deploy & DST-refinement record), `docs/EXECUTION-PLAN.md` (baseline + timeline queue), `archive/PROJECT_LOG.md` (this entry).
+
