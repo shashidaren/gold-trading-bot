@@ -3491,6 +3491,107 @@ _with = os.path.getmtime(engine.LOG_FILE_PATH)
 engine.derive_daily_closure(engine.LOG_FILE_PATH)
 check("Z: deriving the signature does not modify the price log",
       os.path.getmtime(engine.LOG_FILE_PATH) == _with)
+
+# DST responsiveness (2026-10-25 refinement):
+# (1) Fall-back Day 1: 19 summer breaks (20:58 -> 22:00) + Friday->Sunday weekend
+#     reopen at 23:00 (+60m) must shift to (21:58, 23:00) BEFORE Monday's close,
+#     so 20:35 is not blocked an hour early while 21:28 IS blocked.
+from datetime import timedelta as _z_td  # noqa: E402
+_dst_fb_log = os.path.join(tmp_z, "dst_fallback.csv")
+_t0 = datetime(2026, 9, 28, 20, 58, tzinfo=timezone.utc)
+with open(_dst_fb_log, "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["Timestamp", "Open", "High", "Low", "Close"])
+    for d in range(25):  # Mon-Thu daily breaks 20:58->22:00, Fri->Sun weekends ->22:00
+        cur = _t0 + _z_td(days=d)
+        if cur.weekday() <= 3:
+            w.writerow([cur.strftime("%Y-%m-%d 20:58:00"), 4000, 4001, 3999, 4000])
+            w.writerow([cur.strftime("%Y-%m-%d 22:00:00"), 4000, 4001, 3999, 4000])
+            w.writerow([cur.strftime("%Y-%m-%d 22:01:00"), 4000, 4001, 3999, 4000])
+        elif cur.weekday() == 4:
+            w.writerow([cur.strftime("%Y-%m-%d 20:57:00"), 4000, 4001, 3999, 4000])
+            sun = cur + _z_td(days=2)
+            w.writerow([sun.strftime("%Y-%m-%d 22:00:00"), 4000, 4001, 3999, 4000])
+            w.writerow([sun.strftime("%Y-%m-%d 22:01:00"), 4000, 4001, 3999, 4000])
+    # DST transition weekend: Fri 2026-10-23 20:57 -> Sun 2026-10-25 23:00 (+60m)
+    w.writerow(["2026-10-23 20:57:00", 4000, 4001, 3999, 4000])
+    w.writerow(["2026-10-25 23:00:05", 4000, 4001, 3999, 4000])
+    w.writerow(["2026-10-25 23:01:05", 4000, 4001, 3999, 4000])
+_fb_closure = engine.derive_daily_closure(_dst_fb_log)
+check("Z: fall-back Sunday reopen (+60m) shifts closure to (21:58, 23:00) on Day 1",
+      _fb_closure == ((21, 58), (23, 0)), f"derived={_fb_closure}")
+check("Z: post-fall-back Day 1 allows 20:35 (not blocked 1h early) and blocks 21:28",
+      engine.guard_blocks_entry(_z_utc(26, 20, 35), _fb_closure) is False
+      and engine.guard_blocks_entry(_z_utc(26, 21, 28), _fb_closure) is True
+      and engine.guard_blocks_entry(_z_utc(26, 23, 0), _fb_closure) is False)
+
+# (2) Spring-forward Day 1: winter breaks (21:58 -> 23:00) + weekend reopen at 22:00
+#     (-60m) must shift to (20:58, 22:00) on Day 1 so 20:28-20:58 is NOT missed.
+_dst_sf_log = os.path.join(tmp_z, "dst_spring.csv")
+_ts0 = datetime(2026, 3, 16, 21, 58, tzinfo=timezone.utc)
+with open(_dst_sf_log, "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["Timestamp", "Open", "High", "Low", "Close"])
+    for d in range(11):
+        cur = _ts0 + _z_td(days=d)
+        if cur.weekday() <= 3:
+            w.writerow([cur.strftime("%Y-%m-%d 21:58:00"), 4000, 4001, 3999, 4000])
+            w.writerow([cur.strftime("%Y-%m-%d 23:00:00"), 4000, 4001, 3999, 4000])
+            w.writerow([cur.strftime("%Y-%m-%d 23:01:00"), 4000, 4001, 3999, 4000])
+        elif cur.weekday() == 4:
+            w.writerow([cur.strftime("%Y-%m-%d 21:57:00"), 4000, 4001, 3999, 4000])
+            sun = cur + _z_td(days=2)
+            w.writerow([sun.strftime("%Y-%m-%d 23:00:00"), 4000, 4001, 3999, 4000])
+    # Spring-forward weekend: Fri 03-27 21:57 -> Sun 03-29 22:00 (-60m)
+    w.writerow(["2026-03-27 21:57:00", 4000, 4001, 3999, 4000])
+    w.writerow(["2026-03-29 22:00:04", 4000, 4001, 3999, 4000])
+    w.writerow(["2026-03-29 22:01:04", 4000, 4001, 3999, 4000])
+_sf_closure = engine.derive_daily_closure(_dst_sf_log)
+check("Z: spring-forward Sunday reopen (-60m) shifts closure to (20:58, 22:00) on Day 1",
+      _sf_closure == ((20, 58), (22, 0)), f"derived={_sf_closure}")
+check("Z: spring-forward Day 1 protects 20:35 before the earlier 20:58 close",
+      engine.guard_blocks_entry(datetime(2026, 3, 30, 20, 35, tzinfo=timezone.utc),
+                                _sf_closure) is True)
+
+# (3) Sunday feed outage (Monday 07:15 reopen) must NOT invent a bogus morning close;
+#     once Monday's real 21:58->23:00 break logs, Day 2 shifts even with a mid-day outage.
+_dst_out_log = os.path.join(tmp_z, "dst_outage.csv")
+with open(_dst_out_log, "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["Timestamp", "Open", "High", "Low", "Close"])
+    for day in (19, 20, 21, 22):
+        w.writerow([f"2026-10-{day:02d} 20:58:00", 4000, 4001, 3999, 4000])
+        w.writerow([f"2026-10-{day:02d} 22:00:00", 4000, 4001, 3999, 4000])
+        w.writerow([f"2026-10-{day:02d} 22:01:00", 4000, 4001, 3999, 4000])
+    w.writerow(["2026-10-23 20:57:00", 4000, 4001, 3999, 4000])
+    w.writerow(["2026-10-26 07:15:00", 4000, 4001, 3999, 4000])  # outage reopen!
+    w.writerow(["2026-10-26 07:16:00", 4000, 4001, 3999, 4000])
+check("Z: a Monday-morning outage reopen does not invent a bogus closure schedule",
+      engine.derive_daily_closure(_dst_out_log) == ((20, 58), (22, 0)))
+with open(_dst_out_log, "a", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["2026-10-26 21:58:00", 4000, 4001, 3999, 4000])
+    w.writerow(["2026-10-26 23:00:00", 4000, 4001, 3999, 4000])
+    w.writerow(["2026-10-27 14:50:00", 4000, 4001, 3999, 4000])  # mid-day 53m outage
+    w.writerow(["2026-10-27 15:43:00", 4000, 4001, 3999, 4000])
+check("Z: Day 2 adapts from Monday's post-DST break even across a mid-day outage",
+      engine.derive_daily_closure(_dst_out_log) == ((21, 58), (23, 0)))
+
+# (4) Non-DST schedule change converges in 3 breaks via GUARD_RECENT_SAMPLES (not 15+ days).
+_sched_log = os.path.join(tmp_z, "sched_change.csv")
+with open(_sched_log, "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["Timestamp", "Open", "High", "Low", "Close"])
+    for d in range(1, 20):  # 19 old breaks at 20:58 -> 22:00
+        w.writerow([f"2026-10-{d:02d} 20:58:00", 4000, 4001, 3999, 4000])
+        w.writerow([f"2026-10-{d:02d} 22:00:00", 4000, 4001, 3999, 4000])
+        w.writerow([f"2026-10-{d:02d} 22:01:00", 4000, 4001, 3999, 4000])
+    for d in (20, 21, 22):  # 3 breaks at a new non-DST schedule 20:00 -> 21:15
+        w.writerow([f"2026-10-{d:02d} 20:00:00", 4000, 4001, 3999, 4000])
+        w.writerow([f"2026-10-{d:02d} 21:15:00", 4000, 4001, 3999, 4000])
+        w.writerow([f"2026-10-{d:02d} 21:16:00", 4000, 4001, 3999, 4000])
+check("Z: non-DST schedule change converges within 3 breaks (no 30-day modal lag)",
+      engine.derive_daily_closure(_sched_log) == ((20, 0), (21, 15)))
 shutil.rmtree(tmp_z, ignore_errors=True)
 
 
