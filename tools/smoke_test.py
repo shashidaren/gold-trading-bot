@@ -3356,6 +3356,144 @@ check("X: the running digest line carries the plan phrase",
       _running_x.startswith("box alerts: running") and "last plan" in _running_x, _running_x)
 
 
+print("\nScenario Y: restart-with-open-trade must not reuse a trade number (duplicate #697, 2026-10-25)")
+tmp_y = tempfile.mkdtemp(prefix="gold_smoke_y_")
+engine.LOG_FILE_PATH = os.path.join(tmp_y, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_y, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_y, "trades.csv")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_y, "skipped_trades.csv")
+
+# The ledger ends at #696; status.json holds trade #697 open with next_trade_num 698.
+# load_trade_stats() derives next_trade_num = 697 from the CSV; the restore must lift
+# it back to 698 from status.json (the fix), not leave it at 697 (the #697 bug).
+with open(engine.TRADES_LOG_PATH, "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["Trade_Num", "Trade_Type", "Entry_Time", "Exit_Time", "Entry_Price",
+                "Stop_Loss", "Take_Profit", "Exit_Price", "Exit_Reason", "Profit",
+                "Balance_After", "RSI_At_Entry", "ATR_At_Entry", "Wick_Ratio_At_Entry",
+                "EMA50_At_Entry", "EMA200_At_Entry"])
+    w.writerow(["696", "BUY", "2026-10-23 10:00:00", "2026-10-23 10:05:00", "4020.00",
+                "4015.00", "4027.50", "4027.50", "TP", "7.50", "137.38", "50.0", "2.00",
+                "45.0%", "4018.00", "4010.00"])
+status_y = {"equity": 137.38, "total_trades": 697, "next_trade_num": 698,
+            "wins": 140, "losses": 301, "be_exits": 253, "time_exits": 3,
+            "trade_active": True, "trade_type": "BUY", "daily_losses": 0,
+            "max_daily_losses": 10, "last_update": "2026-10-23 13:46:00",
+            "mt5_last_candle_ts": None, "rsi": None, "ema_fast": None,
+            "ema_slow": None, "atr": None,
+            "entry_price": 4027.91, "stop_loss": 4019.21, "take_profit": 4036.07,
+            "be_armed": False, "entry_time": "2026-10-23 11:17:06",
+            "current_trade_num": 697,
+            "entry_rsi": None, "entry_atr": None, "entry_wick_ratio": None,
+            "entry_ema_fast": None, "entry_ema_slow": None,
+            "funnel": {}}
+with open(engine.STATUS_FILE_PATH, "w") as f:
+    json.dump(status_y, f)
+
+eng_y = engine.GoldEngine()
+check("Y: restore lifts next_trade_num from status.json (no duplicate after restart)",
+      eng_y.next_trade_num == 698 and eng_y.current_trade_num == 697
+      and eng_y.trade_active and eng_y.trade_type == "BUY",
+      f"next={eng_y.next_trade_num} current={eng_y.current_trade_num}")
+
+# Open the next trade: it must take #698, not #697.
+# (execute_simulated_trade formats self.rsi into its alert, so warm it like the
+# live engine does after evaluating candles.)
+eng_y.atr = 2.0
+eng_y.rsi = 55.0
+eng_y.execute_simulated_trade("BUY", 4030.00, 0.5, "2026-10-23 15:15:07")
+check("Y: the trade opened after the restart takes #698, not #697",
+      eng_y.current_trade_num == 698 and eng_y.next_trade_num == 699,
+      f"current={eng_y.current_trade_num} next={eng_y.next_trade_num}")
+
+# Close it at TP and confirm the logged row carries #698.
+eng_y.check_position(4037.00)
+with open(engine.TRADES_LOG_PATH, newline="") as f:
+    rows_y = list(csv.DictReader(f))
+check("Y: the closed trade's row is numbered #698",
+      rows_y[-1]["Trade_Num"] == "698", f"last row num={rows_y[-1]['Trade_Num']}")
+shutil.rmtree(tmp_y, ignore_errors=True)
+
+
+print("\nScenario Z: daily-closure gap guard suppresses new entries only "
+      "(PREREG-2026-10-25-gap-guard-daily-closure)")
+from datetime import datetime, timezone  # noqa: E402
+tmp_z = tempfile.mkdtemp(prefix="gold_smoke_z_")
+engine.LOG_FILE_PATH = os.path.join(tmp_z, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_z, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_z, "trades.csv")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_z, "skipped_trades.csv")
+
+# A price log with a repeating 20:58 -> 22:00 UTC hole: the signature must be DERIVED
+# from that, never hard-coded. Five days so the sample bar (GUARD_MIN_SAMPLES) is met.
+with open(engine.LOG_FILE_PATH, "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["Timestamp", "Open", "High", "Low", "Close"])
+    for day in range(12, 17):                       # 2026-10-12 .. 2026-10-16
+        for hh, mm in [(20, 58), (22, 0), (22, 1)]:  # close, reopen, after
+            w.writerow([f"2026-10-{day:02d} {hh:02d}:{mm:02d}:00", 4000, 4001, 3999, 4000])
+closure_z = engine.derive_daily_closure(engine.LOG_FILE_PATH)
+check("Z: the daily-break signature is derived from the log, not hard-coded",
+      closure_z == ((20, 58), (22, 0)), f"derived={closure_z}")
+
+def _z_utc(day, hh, mm):
+    return datetime(2026, 10, day, hh, mm, tzinfo=timezone.utc)
+
+check("Z: 20:27 (outside the 30-min cutoff) is allowed",
+      engine.guard_blocks_entry(_z_utc(14, 20, 27), closure_z) is False)
+check("Z: 20:28 (exactly 30 min before the close) is blocked",
+      engine.guard_blocks_entry(_z_utc(14, 20, 28), closure_z) is True)
+check("Z: during the closure (21:30) is blocked",
+      engine.guard_blocks_entry(_z_utc(14, 21, 30), closure_z) is True)
+check("Z: at the reopen (22:00) entries resume",
+      engine.guard_blocks_entry(_z_utc(14, 22, 0), closure_z) is False)
+check("Z: an underivable signature fails OPEN (no schedule is invented)",
+      engine.guard_blocks_entry(_z_utc(14, 21, 30), None) is False
+      and engine.guard_blocks_entry(_z_utc(14, 21, 30), ((20, 58), (22, 0))) is True)
+
+# A window that wraps midnight must still block on both sides of 00:00.
+_wrap = ((23, 50), (0, 30))
+check("Z: a midnight-crossing window blocks before and after midnight",
+      engine.guard_blocks_entry(_z_utc(14, 23, 40), _wrap) is True
+      and engine.guard_blocks_entry(_z_utc(14, 0, 10), _wrap) is True
+      and engine.guard_blocks_entry(_z_utc(14, 12, 0), _wrap) is False)
+
+# Engine wiring: a suppressed setup must consume NO trade number and open no position.
+eng_z = engine.GoldEngine()
+eng_z.atr = 2.0
+eng_z.rsi = 55.0
+next_before_z = eng_z.next_trade_num
+eng_z.guard_now_override = _z_utc(14, 21, 30)          # inside the window
+eng_z.execute_simulated_trade("BUY", 4000.00, 0.5, "2026-10-14 21:30:00")
+check("Z: an entry inside the window is suppressed",
+      eng_z.trade_active is False, f"trade_active={eng_z.trade_active}")
+check("Z: a suppressed entry consumes no trade number",
+      eng_z.next_trade_num == next_before_z,
+      f"next {next_before_z} -> {eng_z.next_trade_num}")
+_rows_z = []
+if os.path.exists(engine.TRADES_LOG_PATH):
+    with open(engine.TRADES_LOG_PATH, newline="") as f:
+        _rows_z = list(csv.DictReader(f))
+check("Z: a suppressed entry writes no ledger row", len(_rows_z) == 0,
+      f"{len(_rows_z)} row(s) written")
+
+# Outside the window the same call must open normally (guard is scoped, not a halt).
+eng_z.guard_now_override = _z_utc(14, 12, 0)
+eng_z.execute_simulated_trade("BUY", 4000.00, 0.5, "2026-10-14 12:00:00")
+check("Z: an entry outside the window opens normally",
+      eng_z.trade_active is True and eng_z.next_trade_num == next_before_z + 1,
+      f"active={eng_z.trade_active} next={eng_z.next_trade_num}")
+
+# The schedule is re-derived when the log changes, and the derivation is read-only.
+_with = os.path.getmtime(engine.LOG_FILE_PATH)
+engine.derive_daily_closure(engine.LOG_FILE_PATH)
+check("Z: deriving the signature does not modify the price log",
+      os.path.getmtime(engine.LOG_FILE_PATH) == _with)
+shutil.rmtree(tmp_z, ignore_errors=True)
+
+
 print()
 if FAILURES:
     print(f"SMOKE TEST FAILED: {FAILURES}")
