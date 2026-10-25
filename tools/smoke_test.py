@@ -3416,6 +3416,84 @@ check("Y: the closed trade's row is numbered #698",
 shutil.rmtree(tmp_y, ignore_errors=True)
 
 
+print("\nScenario Z: daily-closure gap guard suppresses new entries only "
+      "(PREREG-2026-10-25-gap-guard-daily-closure)")
+from datetime import datetime, timezone  # noqa: E402
+tmp_z = tempfile.mkdtemp(prefix="gold_smoke_z_")
+engine.LOG_FILE_PATH = os.path.join(tmp_z, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_z, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_z, "trades.csv")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_z, "skipped_trades.csv")
+
+# A price log with a repeating 20:58 -> 22:00 UTC hole: the signature must be DERIVED
+# from that, never hard-coded. Five days so the sample bar (GUARD_MIN_SAMPLES) is met.
+with open(engine.LOG_FILE_PATH, "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["Timestamp", "Open", "High", "Low", "Close"])
+    for day in range(12, 17):                       # 2026-10-12 .. 2026-10-16
+        for hh, mm in [(20, 58), (22, 0), (22, 1)]:  # close, reopen, after
+            w.writerow([f"2026-10-{day:02d} {hh:02d}:{mm:02d}:00", 4000, 4001, 3999, 4000])
+closure_z = engine.derive_daily_closure(engine.LOG_FILE_PATH)
+check("Z: the daily-break signature is derived from the log, not hard-coded",
+      closure_z == ((20, 58), (22, 0)), f"derived={closure_z}")
+
+def _z_utc(day, hh, mm):
+    return datetime(2026, 10, day, hh, mm, tzinfo=timezone.utc)
+
+check("Z: 20:27 (outside the 30-min cutoff) is allowed",
+      engine.guard_blocks_entry(_z_utc(14, 20, 27), closure_z) is False)
+check("Z: 20:28 (exactly 30 min before the close) is blocked",
+      engine.guard_blocks_entry(_z_utc(14, 20, 28), closure_z) is True)
+check("Z: during the closure (21:30) is blocked",
+      engine.guard_blocks_entry(_z_utc(14, 21, 30), closure_z) is True)
+check("Z: at the reopen (22:00) entries resume",
+      engine.guard_blocks_entry(_z_utc(14, 22, 0), closure_z) is False)
+check("Z: an underivable signature fails OPEN (no schedule is invented)",
+      engine.guard_blocks_entry(_z_utc(14, 21, 30), None) is False
+      and engine.guard_blocks_entry(_z_utc(14, 21, 30), ((20, 58), (22, 0))) is True)
+
+# A window that wraps midnight must still block on both sides of 00:00.
+_wrap = ((23, 50), (0, 30))
+check("Z: a midnight-crossing window blocks before and after midnight",
+      engine.guard_blocks_entry(_z_utc(14, 23, 40), _wrap) is True
+      and engine.guard_blocks_entry(_z_utc(14, 0, 10), _wrap) is True
+      and engine.guard_blocks_entry(_z_utc(14, 12, 0), _wrap) is False)
+
+# Engine wiring: a suppressed setup must consume NO trade number and open no position.
+eng_z = engine.GoldEngine()
+eng_z.atr = 2.0
+eng_z.rsi = 55.0
+next_before_z = eng_z.next_trade_num
+eng_z.guard_now_override = _z_utc(14, 21, 30)          # inside the window
+eng_z.execute_simulated_trade("BUY", 4000.00, 0.5, "2026-10-14 21:30:00")
+check("Z: an entry inside the window is suppressed",
+      eng_z.trade_active is False, f"trade_active={eng_z.trade_active}")
+check("Z: a suppressed entry consumes no trade number",
+      eng_z.next_trade_num == next_before_z,
+      f"next {next_before_z} -> {eng_z.next_trade_num}")
+_rows_z = []
+if os.path.exists(engine.TRADES_LOG_PATH):
+    with open(engine.TRADES_LOG_PATH, newline="") as f:
+        _rows_z = list(csv.DictReader(f))
+check("Z: a suppressed entry writes no ledger row", len(_rows_z) == 0,
+      f"{len(_rows_z)} row(s) written")
+
+# Outside the window the same call must open normally (guard is scoped, not a halt).
+eng_z.guard_now_override = _z_utc(14, 12, 0)
+eng_z.execute_simulated_trade("BUY", 4000.00, 0.5, "2026-10-14 12:00:00")
+check("Z: an entry outside the window opens normally",
+      eng_z.trade_active is True and eng_z.next_trade_num == next_before_z + 1,
+      f"active={eng_z.trade_active} next={eng_z.next_trade_num}")
+
+# The schedule is re-derived when the log changes, and the derivation is read-only.
+_with = os.path.getmtime(engine.LOG_FILE_PATH)
+engine.derive_daily_closure(engine.LOG_FILE_PATH)
+check("Z: deriving the signature does not modify the price log",
+      os.path.getmtime(engine.LOG_FILE_PATH) == _with)
+shutil.rmtree(tmp_z, ignore_errors=True)
+
+
 print()
 if FAILURES:
     print(f"SMOKE TEST FAILED: {FAILURES}")
