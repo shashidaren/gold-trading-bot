@@ -8,7 +8,7 @@ import shutil
 import math
 import requests
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from trade_filter import should_take_trade, get_daily_sl_count, MAX_DAILY_LOSSES, load_recent_trades
 
@@ -68,6 +68,27 @@ SL_CLEAR_ATR = 0.5           # min distance the stop sits beyond the tested leve
 # stop widens: TP = RR_TARGET * risk == ATR_TP_MULT * ATR whenever the level does not
 # bind, i.e. the pre-2026-10-05 geometry is reproduced exactly in that case.
 RR_TARGET = ATR_TP_MULT / ATR_SL_MULT
+
+# ── DAILY-CLOSURE ENTRY GUARD (gap guard) ─────────────────────────────────────
+# REGISTERED 2026-10-25: docs/PREREG-2026-10-25-gap-guard-daily-closure.md
+# Why: the §7 closure-gap REVERT trigger FIRED at 3/2 post-cutover rides
+# (#595/#610/#687), all of them across the broker's DAILY break (20:58 -> 22:00 UTC
+# under the current +3h offset). The structural stop cannot be enforced while the
+# market is shut, so a position opened just before the close rides the gap.
+# Scope (owner-approved 2026-10-25): suppress NEW ENTRIES only, for
+# GUARD_CUTOFF_MIN before the derived daily close through the derived reopen.
+# Open positions are NOT flattened (that would be a separate registration), and no
+# stop/TP/risk parameter changes.
+# Schedule source: DERIVED from the observed price-log gaps (never a guessed clock).
+# Fail-open: if the daily break signature cannot be derived (fresh install, no
+# history), the guard does not block — it cannot invent a schedule. A stale feed
+# needs no special case: entries only happen when a NEW candle is evaluated, and a
+# stale feed publishes none.
+GUARD_CUTOFF_MIN = 30        # owner-approved 2026-10-25 (block from close-30min)
+GUARD_LOOKBACK_DAYS = 30     # price-log window used to derive the break signature
+GUARD_MIN_BREAK_MIN = 30.0   # a daily break is 30-180 min (check_gap_rides uses the same)
+GUARD_MAX_BREAK_MIN = 180.0
+GUARD_MIN_SAMPLES = 3        # fewer observed breaks than this -> no signature -> fail-open
 
 # Breakeven stop ratchet (adopted 2026-09-10, docs/ANALYSIS-2026-09-10-losing-trades.md):
 # once a trade is +BE_TRIGGER_R in profit, SL moves to entry. Sequence-aware replay of all
@@ -268,6 +289,107 @@ def utc_now_str() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _parse_log_ts(s: str):
+    """Parse a forward_test_log.csv timestamp (UTC) or return None."""
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(s.strip(), fmt).replace(tzinfo=timezone.utc)
+        except (ValueError, AttributeError):
+            continue
+    return None
+
+
+def _modal_minute_of_day(samples):
+    """Most common minute-of-day in `samples` [(h, m)], ties broken by the median.
+
+    Used to turn a handful of observed breaks into one signature. The break clock is
+    stable to the minute in the log (20:58 every day in the current era), so the mode
+    is the right estimator; the median keeps a tie from being arbitrary.
+    """
+    if not samples:
+        return None
+    counts = {}
+    for s in samples:
+        counts[s] = counts.get(s, 0) + 1
+    best = max(counts.values())
+    winners = sorted(k for k, v in counts.items() if v == best)
+    if len(winners) == 1:
+        return winners[0]
+    mins = sorted(h * 60 + m for h, m in winners)
+    mid = mins[len(mins) // 2]
+    return (mid // 60, mid % 60)
+
+
+def derive_daily_closure(log_path: str = None, lookback_days: int = GUARD_LOOKBACK_DAYS):
+    """Derive the broker's daily-break signature from the observed price log.
+
+    Returns `(close_tod, reopen_tod)` as (hour, minute) UTC tuples, or None when the
+    signature cannot be established. Read-only: the log is never modified.
+
+    A "daily break" is a hole in the bar series of 30-180 minutes (the weekly close is
+    >= 24 h and ignored, because the Sunday reopen is the same clock time anyway). The
+    signature is the modal start and modal end minute-of-day. Fewer than
+    GUARD_MIN_SAMPLES observed breaks -> None (caller fails open).
+    """
+    path = log_path or LOG_FILE_PATH
+    try:
+        with open(path, newline="") as f:
+            rows = list(csv.reader(f))
+    except (OSError, ValueError):
+        return None
+    if len(rows) < 2:
+        return None
+
+    stamps = []
+    for row in rows[1:]:
+        if not row:
+            continue
+        ts = _parse_log_ts(row[0])
+        if ts is not None:
+            stamps.append(ts)
+    if len(stamps) < 2:
+        return None
+
+    cutoff = stamps[-1] - timedelta(days=lookback_days)
+    starts, ends = [], []
+    for a, b in zip(stamps, stamps[1:]):
+        if a < cutoff:
+            continue
+        mins = (b - a).total_seconds() / 60.0
+        if GUARD_MIN_BREAK_MIN <= mins <= GUARD_MAX_BREAK_MIN:
+            starts.append((a.hour, a.minute))
+            ends.append((b.hour, b.minute))
+    if len(starts) < GUARD_MIN_SAMPLES:
+        return None
+    close_tod = _modal_minute_of_day(starts)
+    reopen_tod = _modal_minute_of_day(ends)
+    if close_tod is None or reopen_tod is None:
+        return None
+    return close_tod, reopen_tod
+
+
+def guard_blocks_entry(now_utc: datetime, closure, cutoff_min: int = GUARD_CUTOFF_MIN) -> bool:
+    """True when a NEW entry must be suppressed by the daily-closure gap guard.
+
+    The blocked window is `[daily_close - cutoff_min, daily_reopen)`, evaluated on the
+    UTC minute-of-day, and it wraps past midnight if the broker's break does. `closure`
+    is the (close_tod, reopen_tod) tuple from derive_daily_closure(); None -> never
+    block (fail-open, see the constant block).
+    """
+    if not closure or now_utc is None:
+        return False
+    close_tod, reopen_tod = closure
+    close_min = close_tod[0] * 60 + close_tod[1]
+    reopen_min = reopen_tod[0] * 60 + reopen_tod[1]
+    now_min = now_utc.hour * 60 + now_utc.minute
+    start_min = (close_min - cutoff_min) % (24 * 60)
+
+    if start_min <= reopen_min:
+        return start_min <= now_min < reopen_min
+    # window wraps midnight
+    return now_min >= start_min or now_min < reopen_min
+
+
 def is_market_quiet(now_utc: datetime = None) -> bool:
     """True during hours where no price ticks are expected.
 
@@ -307,6 +429,11 @@ class GoldEngine:
         self.rsi_gains = deque(maxlen=RSI_PERIOD)
         self.rsi_losses = deque(maxlen=RSI_PERIOD)
         self.ema50_history = deque(maxlen=EMA_SLOW)   # for the EMA-slope regime gate
+
+        # Daily-closure entry guard (registered 2026-10-25): the break signature is
+        # derived from the price log at most once per UTC day, never hard-coded.
+        self._guard_closure = None
+        self._guard_closure_date = None
 
         self.prev_close = None
         self.rsi = None
@@ -545,6 +672,14 @@ class GoldEngine:
         self.current_trade_num = data.get("current_trade_num")
         if self.current_trade_num is None:
             self.current_trade_num = max(1, self.next_trade_num - 1)
+        # Restore next_trade_num too: after a restart-with-open-trade the CSV still
+        # ends at the open trade's number - 1, so load_trade_stats() resets
+        # next_trade_num to the open trade's own number and the NEXT trade reuses it
+        # (duplicate #697, 2026-10-25). status.json carries next_trade_num; take it
+        # when it is ahead of the CSV-derived value - never move the number backwards.
+        stored_next = data.get("next_trade_num")
+        if isinstance(stored_next, int) and stored_next > self.next_trade_num:
+            self.next_trade_num = stored_next
         self.entry_rsi = data.get("entry_rsi")
         self.entry_atr = data.get("entry_atr")
         self.entry_wick_ratio = data.get("entry_wick_ratio")
@@ -1312,6 +1447,15 @@ class GoldEngine:
         return lots if lots >= VOLUME_MIN else None
 
     def execute_live_trade(self, direction: str, c: float, wick_ratio: float, ts: str, level=None):
+        # Daily-closure gap guard (registered 2026-10-25) — same rule as the paper path:
+        # no NEW entry inside the window before the broker's daily break.
+        _guard = self.entry_guard_reason(self._guard_now())
+        if _guard:
+            print(f"\nTrade skipped -> {_guard}\n")
+            self.send_telegram(
+                f"{direction} SETUP SKIPPED\nReason: `{_guard}`\n"
+                f"Price: `${c:.2f}`", kind="skip")
+            return
         print(f"\nALL CONDITIONS MET! PREPARING LIVE {direction} ORDER...")
         point = mt5.symbol_info(SYMBOL).point
         tick = mt5.symbol_info_tick(SYMBOL)
@@ -1391,7 +1535,64 @@ class GoldEngine:
                 kind="trade",
             )
 
+    def _guard_now(self):
+        """Current UTC time for the guard; `guard_now_override` makes it testable."""
+        override = getattr(self, "guard_now_override", None)
+        if override is not None:
+            return override
+        return datetime.now(timezone.utc)
+
+    def guard_closure(self, now_utc: datetime = None):
+        """The daily-break signature, re-derived at most once per UTC day.
+
+        Deriving it walks the whole price log, so it is cached per calendar day rather
+        than per candle. Returns None when the signature is not observable (fail-open).
+        """
+        if now_utc is None:
+            now_utc = datetime.now(timezone.utc)
+        today = now_utc.date()
+        if self._guard_closure_date != today:
+            self._guard_closure = derive_daily_closure(LOG_FILE_PATH)
+            self._guard_closure_date = today
+            if self._guard_closure:
+                ct, rt = self._guard_closure
+                print(f"Gap guard: daily break {ct[0]:02d}:{ct[1]:02d} -> "
+                      f"{rt[0]:02d}:{rt[1]:02d} UTC (entries blocked "
+                      f"{GUARD_CUTOFF_MIN} min before the close)")
+            else:
+                print("Gap guard: no daily-break signature in the price log yet "
+                      "- entries not blocked (fail-open)")
+        return self._guard_closure
+
+    def entry_guard_reason(self, now_utc: datetime = None):
+        """None when a new entry is allowed, else the skip reason (gap guard).
+
+        Registered scope (2026-10-25): NEW ENTRIES only, in the
+        [daily_close - GUARD_CUTOFF_MIN, daily_reopen) window. Open positions are not
+        touched. See docs/PREREG-2026-10-25-gap-guard-daily-closure.md.
+        """
+        if now_utc is None:
+            now_utc = datetime.now(timezone.utc)
+        closure = self.guard_closure(now_utc)
+        if guard_blocks_entry(now_utc, closure):
+            ct, rt = closure
+            return (f"Gap guard: within {GUARD_CUTOFF_MIN} min of the daily close "
+                    f"({ct[0]:02d}:{ct[1]:02d} -> {rt[0]:02d}:{rt[1]:02d} UTC) - "
+                    f"no new entry rides the market closure")
+        return None
+
     def execute_simulated_trade(self, direction: str, c: float, wick_ratio: float, ts: str, level=None):
+        # Daily-closure gap guard: refuse BEFORE a trade number is consumed, so a
+        # suppressed setup burns nothing (same rule as the sizer refusal below).
+        _guard = self.entry_guard_reason(self._guard_now())
+        if _guard:
+            print(f"\nTrade skipped -> {_guard}\n")
+            self.send_telegram(
+                f"{direction} SETUP SKIPPED\nReason: `{_guard}`\n"
+                f"Price: `${c:.2f}` | RSI: `{self.rsi if self.rsi is not None else 0:.1f}` "
+                f"| ATR: `{self.atr if self.atr is not None else 0:.2f}`",
+                kind="skip")
+            return
         # risk = ATR floor, pushed out beyond the tested 20-bar level when that level
         # sits further away (see structural_risk / SL_CLEAR_ATR). TP keeps the 1:1.5
         # ratio against the ACTUAL risk, so the BE ratchet trigger (0.75R) and every
