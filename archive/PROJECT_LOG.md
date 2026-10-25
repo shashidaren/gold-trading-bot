@@ -497,3 +497,40 @@ Handoff snapshot + §1/§4/§5/§6 refreshed, replaced §1 archived to `docs/HAN
 `docs/EXECUTION-PLAN.md` re-based. Gap-guard blocker, $0.40 cost assumption and all §4 thresholds
 unchanged. No engine, filter, parameter, gate or deployment change; no ledger modification; no PR
 merge (owner is finalising the session).
+
+## 2026-10-25 (follow-up) — stop-hunt mark-outs + stop-clearance grid replay (evidence only, no runtime change)
+
+Owner hypothesis (delegated the decision: "no vast experience with chart or gold instrument —
+help me make the decisions u see best"): price hovers at the stop level, tags it, and bounces
+back; some traders place their stop slightly past the level the instrument suggests, to avoid
+exactly that.
+
+**Built.** `tools/stop_hunt_markout.py` — reproducible bounded 24 h mark-outs (observed bars
+only, gaps never bridged; ratchet-risk reconstruction for rows where `Stop_Loss == Entry`).
+`structstop1.5` clearance variant added to `tools/strategy_lab.py` (one VARIANTS entry;
+`--calib-only` recall 99.8% unchanged; `smoke_test.py` PASSED).
+
+**Mark-outs (era n=200).** 84% of SLs hovered ≤0.25R of the stop before printing (TP wins 13%,
+BE 17%); 27% of SLs back at entry ≤15 m, 31% by 1 h, 12% never within 24 h; median hunt before
+a ≤15 m bounce ≈0.17R (≈1.1 ATR past the tested level; p75 ≈2.1 ATR); 21/90 (23%) carry the full
+SL→entry→TP signature (88% of the fast bounces). Counterweight: **29% of TP wins survived ≥0.5R
+adverse movement** — the same adversity threatens winners, so the pattern alone cannot justify a
+stop change (base rate vs cost decides).
+
+**Grid (costed stateful replay, post-cutover era).** Net R/t by cost: at every cost 1.5 > 1.0 >
+live 0.5 > 0.25 > old geometry (reconfirms 10-06 was the right direction). **structstop1.5 =
+−0.000R/trade at registered $0.20/side, −0.023R at measured $0.275** (live: −0.102/−0.132) —
+breakeven at registered cost, first positive-slope point in project history; decWR 43.1% vs
+38.7%. Pre-declared bar (≥+0.05R at both costs, WR no drop, DD within 25%, n within 15%): 1.5
+passes 3 of 4 — n 163 vs 207 (−21.3%) misses, mechanism disclosed (longer holds, 5 TIME vs 2);
+still 10.2 trades/day. 1.0 ATR fails bar 1 (+0.026R) — measured-and-insufficient.
+
+**Verdict.** NO live change. `structstop1.5` = **pre-registration candidate, not registered**
+(one variable: `SL_CLEAR_ATR` 0.5→1.5; TP stays 1.5× actual risk; 10-05-style SCREEN/PASS/REVERT
+bars drafted in the analysis). Sequencing: the fired §7 gap trigger keeps the owner's gap-guard
+decision first in the queue; this is the next single variable after it, not a stack. Owner is
+asked to decide (1) gap-guard a/b/c, (2) register the 1.5 ATR arm or not, (3) the 2-line
+duplicate-#697 engine fix — in one sitting if preferred. No engine, filter, gate or runtime
+change; no ledger modification; nothing merged.
+
+Record: `docs/ANALYSIS-2026-10-25-stop-hunt-markouts-and-clearance-grid.md`.
