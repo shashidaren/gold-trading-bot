@@ -545,6 +545,14 @@ class GoldEngine:
         self.current_trade_num = data.get("current_trade_num")
         if self.current_trade_num is None:
             self.current_trade_num = max(1, self.next_trade_num - 1)
+        # Restore next_trade_num too: after a restart-with-open-trade the CSV still
+        # ends at the open trade's number - 1, so load_trade_stats() resets
+        # next_trade_num to the open trade's own number and the NEXT trade reuses it
+        # (duplicate #697, 2026-10-25). status.json carries next_trade_num; take it
+        # when it is ahead of the CSV-derived value - never move the number backwards.
+        stored_next = data.get("next_trade_num")
+        if isinstance(stored_next, int) and stored_next > self.next_trade_num:
+            self.next_trade_num = stored_next
         self.entry_rsi = data.get("entry_rsi")
         self.entry_atr = data.get("entry_atr")
         self.entry_wick_ratio = data.get("entry_wick_ratio")

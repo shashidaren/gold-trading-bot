@@ -3356,6 +3356,66 @@ check("X: the running digest line carries the plan phrase",
       _running_x.startswith("box alerts: running") and "last plan" in _running_x, _running_x)
 
 
+print("\nScenario Y: restart-with-open-trade must not reuse a trade number (duplicate #697, 2026-10-25)")
+tmp_y = tempfile.mkdtemp(prefix="gold_smoke_y_")
+engine.LOG_FILE_PATH = os.path.join(tmp_y, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_y, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_y, "trades.csv")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_y, "skipped_trades.csv")
+
+# The ledger ends at #696; status.json holds trade #697 open with next_trade_num 698.
+# load_trade_stats() derives next_trade_num = 697 from the CSV; the restore must lift
+# it back to 698 from status.json (the fix), not leave it at 697 (the #697 bug).
+with open(engine.TRADES_LOG_PATH, "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["Trade_Num", "Trade_Type", "Entry_Time", "Exit_Time", "Entry_Price",
+                "Stop_Loss", "Take_Profit", "Exit_Price", "Exit_Reason", "Profit",
+                "Balance_After", "RSI_At_Entry", "ATR_At_Entry", "Wick_Ratio_At_Entry",
+                "EMA50_At_Entry", "EMA200_At_Entry"])
+    w.writerow(["696", "BUY", "2026-10-23 10:00:00", "2026-10-23 10:05:00", "4020.00",
+                "4015.00", "4027.50", "4027.50", "TP", "7.50", "137.38", "50.0", "2.00",
+                "45.0%", "4018.00", "4010.00"])
+status_y = {"equity": 137.38, "total_trades": 697, "next_trade_num": 698,
+            "wins": 140, "losses": 301, "be_exits": 253, "time_exits": 3,
+            "trade_active": True, "trade_type": "BUY", "daily_losses": 0,
+            "max_daily_losses": 10, "last_update": "2026-10-23 13:46:00",
+            "mt5_last_candle_ts": None, "rsi": None, "ema_fast": None,
+            "ema_slow": None, "atr": None,
+            "entry_price": 4027.91, "stop_loss": 4019.21, "take_profit": 4036.07,
+            "be_armed": False, "entry_time": "2026-10-23 11:17:06",
+            "current_trade_num": 697,
+            "entry_rsi": None, "entry_atr": None, "entry_wick_ratio": None,
+            "entry_ema_fast": None, "entry_ema_slow": None,
+            "funnel": {}}
+with open(engine.STATUS_FILE_PATH, "w") as f:
+    json.dump(status_y, f)
+
+eng_y = engine.GoldEngine()
+check("Y: restore lifts next_trade_num from status.json (no duplicate after restart)",
+      eng_y.next_trade_num == 698 and eng_y.current_trade_num == 697
+      and eng_y.trade_active and eng_y.trade_type == "BUY",
+      f"next={eng_y.next_trade_num} current={eng_y.current_trade_num}")
+
+# Open the next trade: it must take #698, not #697.
+# (execute_simulated_trade formats self.rsi into its alert, so warm it like the
+# live engine does after evaluating candles.)
+eng_y.atr = 2.0
+eng_y.rsi = 55.0
+eng_y.execute_simulated_trade("BUY", 4030.00, 0.5, "2026-10-23 15:15:07")
+check("Y: the trade opened after the restart takes #698, not #697",
+      eng_y.current_trade_num == 698 and eng_y.next_trade_num == 699,
+      f"current={eng_y.current_trade_num} next={eng_y.next_trade_num}")
+
+# Close it at TP and confirm the logged row carries #698.
+eng_y.check_position(4037.00)
+with open(engine.TRADES_LOG_PATH, newline="") as f:
+    rows_y = list(csv.DictReader(f))
+check("Y: the closed trade's row is numbered #698",
+      rows_y[-1]["Trade_Num"] == "698", f"last row num={rows_y[-1]['Trade_Num']}")
+shutil.rmtree(tmp_y, ignore_errors=True)
+
+
 print()
 if FAILURES:
     print(f"SMOKE TEST FAILED: {FAILURES}")
