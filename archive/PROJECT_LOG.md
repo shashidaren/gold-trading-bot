@@ -468,3 +468,32 @@ further tuning.
 `test_manual_chart.py` 32 OK; `test_box_report.py` 14 OK; `test_signal_outlook.py` 9 OK;
 `handoff_check.py` FRESH. **Not verified here:** the Flask dashboard routes (no Flask in this
 sandbox) — the excision was checked by `py_compile` and a zero-hit grep for `/scalp`.
+
+## 2026-10-25 — "execute the plan": session refresh + duplicate trade #697 found (docs only, no runtime change)
+
+Ran the plan's session-start checks on the collection-334 snapshot (data through 2026-10-23 20:57
+UTC): `check_data.py` 0 fail / 8 warn; `handoff_check.py` FRESH after `--update`;
+`check_structural_stop.py` **PASS at n=200** (0 inside level, 83.5% level-bound, +0.50 ATR
+clearance, median risk 3.33 ATR); `check_gap_rides.py` still **3/2** (#595/#610/#687 — no
+gap-through, no worse exit); `pressure_report.py` SCREEN MET on all five checks (SL/day 6.00, SL
+share 45.00%, scratch 26.50%, gross −0.052R, decisive 37.93% [30.4–46.0]); `xm_quote_report.py`
+**10/14** complete days, 1/2 weekends, median $0.55 (newest synced row 10-24 14:59:30, Saturday
+frozen tick; 10-21 tick stall up to ~1 h noted for the host health check). The DST discriminating
+window opened 01:00 UTC; no post-transition offset observed yet — next sync decides the rule.
+
+**New finding — duplicate `Trade_Num` #697.** The synced ledger has two rows numbered 697: the
+10-23 11:17 BUY (SL −$8.70) and the 10-23 15:15 SELL (TIME −$0.36, should be #698). Root cause is a
+latent engine bug: `trades.csv` rows are written only at close, while `restore_open_trade_from_status()`
+restores `current_trade_num` but **not** `next_trade_num` — after any restart with an open trade, the
+next trade reuses the open trade's number. Same pattern as the long-standing #1/#2/#3 (09-04) and
+#171 (09-15) duplicates. No current metric or judgement is affected (every tool is row-based; the
+balance chain 137.02 → 136.66 and `status.json` agree), but the key is non-unique and the bug is
+live on the host at the next restart-with-open-trade. Proposed: two-line engine fix (restore
+`next_trade_num` from status.json, max with the CSV-derived value), a hermetic smoke scenario, and an
+optional renumber of the SELL row — **none applied**; owner review pending. Record:
+`docs/REVIEW-2026-10-25-duplicate-trade-number.md`.
+
+Handoff snapshot + §1/§4/§5/§6 refreshed, replaced §1 archived to `docs/HANDOFF-HISTORY.md`,
+`docs/EXECUTION-PLAN.md` re-based. Gap-guard blocker, $0.40 cost assumption and all §4 thresholds
+unchanged. No engine, filter, parameter, gate or deployment change; no ledger modification; no PR
+merge (owner is finalising the session).
