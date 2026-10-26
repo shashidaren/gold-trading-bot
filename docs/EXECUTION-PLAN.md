@@ -1,85 +1,168 @@
-# Gold bot execution plan
+# Gold bot execution plan — “follow execution plan”
 
-**Status:** living session queue — reconciled 2026-10-25 ~03:00 UTC (post-PR-#58 merge + autosync `71317da`, collection 335)
-**Purpose:** make progress consistent across sessions while the bot remains in paper/forward-test mode.
+**Status:** living session queue — re-based **2026-10-26 ~14:15 UTC** on collection 349 (data through `2026-10-26 11:59:07 UTC`).
+**Purpose:** make progress consistent across sessions while the bot stays in paper/forward-test mode, until there is — or is not — something genuinely workable for live trade.
+**Canonical prompt:** **“Follow execution plan.”** (The older “Execute the plan.” remains an exact alias; README/HANDOFF point here.)
 
-## The one-line prompt
+Full audit of the current state: **`docs/REVIEW-2026-10-26-full-system-audit.md`**.
+Current state + operating rules: **`docs/HANDOFF.md`**. Exact experiment thresholds stay in their dated pre-registrations/reviews; this plan must never replace or relax them.
 
-In a new session, simply say:
+---
 
-> **Execute the plan.**
+## 0. What the phrase means (binding)
 
-That means: read this plan and `docs/HANDOFF.md`, verify the current repository/data, and do the **first eligible step only**. Update the plan and handoff with what actually happened. Do not ask the owner to restate the project context. If a step needs a production-host action, a missing trading-rule definition, or new risk approval, do the safe work that is possible and report the exact blocker rather than pretending it was completed.
+In any new session, the owner says **“Follow execution plan.”** That means:
 
-This prompt does **not** authorize real orders, a switch to LIVE, bypassing a pre-registration, or stacking strategy changes. The engine is in `FORWARD_TEST`; remain paper-only unless the owner separately makes an explicit, informed decision after the evidence gates below.
+1. Read this file and `docs/HANDOFF.md`; verify the repository/data with the **session ritual** (§5). Do not ask the owner to restate the project context.
+2. Select the **lowest-numbered eligible step** in §3. A step is eligible only if its gate is met, its pre-registration exists where required, and it has no unresolved blocker. **Do one step per session** (plus the ritual and doc updates). Never stack two strategy variables.
+3. Do the safe work that is possible. If a step needs a production-host action, a missing trading-rule definition, or a new risk approval, report the **exact blocker** rather than pretending the step was completed.
+4. Land every conclusion in a dated `REVIEW`/`ANALYSIS`/`PREREG` doc, update this plan's status/queue, refresh `docs/HANDOFF.md` (§1/§4/§5/§6 + `handoff_check.py --update`), and add a line to `archive/PROJECT_LOG.md`.
+5. End with: what changed, what the tests said, the single next eligible step, and any blocker.
 
-## Goal and guardrails
+**The phrase authorises (paper-only):** analysis, tools, tests, docs, pre-registrations, PRs, and — **only for a change whose dated pre-registration is already signed off and whose own gates pass** — merging that one pre-registered paper-trading change to `main` (autosync deploys it into the **paper** engine). It does **not** authorise a second variable on the same window.
 
-The goal is not to maximize win rate in isolation. It is to learn—using complete, time-stamped data—whether the bot can achieve positive expectancy **after realistic costs** without unacceptable drawdown. The owner's observation—that pressure-guided manual management can stay in positions the bot would stop out of, and those positions may later recover—is a valuable hypothesis, not yet matched to the bot's entries or measured as a rule.
+**The phrase NEVER authorises:** real orders; setting `TRADING_MODE = "LIVE"`; arming `GOLD_LIVE_ARMED`; bypassing or retro-editing a pre-registration; stacking strategy changes; hand-editing `/opt/gold`; committing credentials, account identifiers or an unredacted manual journal. Those need a separate, explicit, informed owner decision.
 
-Keep these guardrails in every phase:
+**Two approval gates remain in the whole plan:**
+- **G1 (one time, now):** sign off `docs/PREREG-2026-10-26-structstop1.5.md` — i.e. approve branch (A) over the literal §7 revert. Until G1, step A1 is blocked and every other step is still eligible.
+- **G2 (at the end):** any real-money trading. Never delegated to the phrase.
 
-- Preserve the currently open experiment and its original, dated decision bars. One runtime variable per forward-test window.
-- Use the costed, stateful `tools/strategy_lab.py` replay for exit/gate ideas; quick path/exit scans are descriptive only.
-- Keep rejected candidates rejected unless new, pre-registered evidence justifies reopening them. Do not tune thresholds after looking at the outcome.
-- Evaluate net R/trade, payoff, drawdown, stop-loss severity, sample size and uncertainty—not win rate alone.
-- Treat the dashboard pressure composite as context only. Its existing calibration says it is collinear with the bot's trade side and has no useful within-side contrast; it is not a validated entry/hold signal. The owner's manual pressure method may be different and must be defined separately.
-- Never remove or widen a live stop because selected examples later recovered. Any “hold past stop” idea must first be bounded, costed, shadow-tested and pre-registered.
-- Do not put account identifiers, credentials, personal balances or an unredacted manual-trade journal into this repository. Keep any owner-specific journal private and outside Git.
+If the owner wants per-change sign-off instead of the phrase acting as sign-off for pre-registered paper changes, say **“hold merges”** once; it will be recorded here.
 
-## Current baseline (from the checked-in data on 2026-10-25, collection 335 / `71317da`, bar log through 2026-10-23 20:57 UTC)
+---
 
-- **697 closed paper trades**; 140 wins, 301 stop losses, 253 breakeven exits and 3 time exits; decisive win rate 31.7% [27.6–36.2]. At the assumed $0.40 round-trip cost, the overall ledger remains negative (−$659.10; gross engine ledger $136.66). No paper trade is open at the snapshot (`status.json` `next_trade_num: 698`).
-- **Ledger numbering finding (2026-10-25) — FIXED & DEPLOYED (`8d84dcf` via `71317da`):** two rows are numbered **#697** (the 10-23 11:17 BUY, SL, and the 10-23 15:15 SELL, TIME — the SELL should have been #698). Latent engine bug (restart-with-open-trade lost `next_trade_num`; rows are written only at close); same pattern as the long-standing #1/#2/#3 and #171 duplicates. No metric or judgement affected (row-based tools; balance chain + `status.json` agree). Commit `8d84dcf` restores `next_trade_num` from `status.json` on restart-with-open-trade (smoke Scenario Y) and deployed on `/opt/gold` at `2026-10-25 02:48:12 UTC` (`71317da`). The historical duplicate row was **deliberately NOT renumbered** (`docs/REVIEW-2026-10-25-duplicate-trade-number.md`).
-- **Structural-stop judgement (time gate reached 2026-10-19 21:00 UTC, recorded 21:19 UTC):** the judged snapshot ended at 18:10 UTC and contained 139 post-cutover trades (39W/65L/34BE/1TIME; 11 entry dates). The geometry guard passed: **zero** post-cutover stops inside the tested level; 81.3% level-bound, median clearance +0.50 ATR, median risk 3.27 ATR. The registered n=150 arm was not reached.
-- The registered **SCREEN is MET** on that judged snapshot: SL/day 5.91 (≤6.5), SL share 46.76% (≤47.0%), scratch share 24.46% (≤35%), gross R/trade −0.071R (≥−0.10R), decisive WR 37.50% [28.8–47.1] (≥36%). **PASS was not met**: n=139 <150 and Wilson 95% lower bound 28.8% is not >32.1%.
-- **The n=150 arm lapsed with the time gate.** The era has since grown to **n=200** (55W/90L/53BE/2TIME) with every bar still inside its threshold (SL/day 6.00, SL share 45.00%, scratch 26.50%, gross −0.052R, decisive 37.93% [30.4–46.0]). Those are **observations on a grown sample, not a re-judgement**: crossing n=150 later does not re-open PASS/SCREEN, because the registration said "n=150 or the time gate, whichever comes first". A genuinely re-opened arm needs a new dated pre-registration written before the data is used. See `docs/REVIEW-2026-10-20-post-gate-refresh.md` §3.
-- **The §7 closure-gap revert trigger FIRED:** using the documented tool rule (a post-cutover trade open across a >5-minute log hole classified as a scheduled daily/weekly closure), the count is **3/2** (#595, #610, #687 — #687 SELL 2026-10-22 rode the daily break and reopened $4.46 above its SELL stop). None gapped through, none exited worse; one stop was ratcheted to entry; no weekend closure was ridden; `0 / 200` post-cutover entries fell inside `[20:28, 22:00)`. See `docs/REVIEW-2026-10-19-struct-stop-judgement.md` §3.
-- **Gap guard DEPLOYED (`71317da`, 2026-10-25 02:48:12 UTC) + DST-lag fix (`1c02b2c`):** `docs/PREREG-2026-10-25-gap-guard-daily-closure.md` — cutoff **30 min**, **entries only** (no flattening of open positions), schedule **derived from observed price-log daily breaks** (`20:58 → 22:00 UTC` under `+3h`), fail-open below 3 breaks, wired into both trade paths ahead of trade-number assignment (Scenario Z), deployed harmlessly into the closed weekend market via PR #58 / `71317da`. On session branch `arena/c5824a9f-gold-trading-bot`, **`1c02b2c` makes `derive_daily_closure()` DST-responsive** (5-break recent baseline + immediate Day-1/Day-2 `±60 min` Sunday-reopen / post-weekend break shift adaptation, immune to feed outages; +7 Scenario Z checks) so a `±1 h` DST transition does not lag ~10 trading days behind a 30-day mode. **Owner decision (`hold_for_dst`, 2026-10-25 post-merge):** hold `SL_CLEAR_ATR = 0.5` + gap guard through Sunday reopen / Monday until the post-DST broker offset (`+2h` EU vs `+3h` US) is observed, then choose between pre-registering **`structstop1.5` (`SL_CLEAR_ATR = 1.5`)** (`docs/ANALYSIS-2026-10-25-stop-hunt-markouts-and-clearance-grid.md`) or executing the literal §7 `2·ATR / 3·ATR` revert. The 0.25 ATR level test remains ineligible.
-- **Quote-cost logging is STALE on the host (`data collection 335`):** the latest report covers 10 complete UTC days (1 of 2 complete weekends, 31 653 rows), median spread/round trip **$0.55** — **newest synced row is `2026-10-24 15:34:30 UTC` (~11.3 h old at the `02:48 UTC` autosync, no `quotes-2026-10-25.csv`)**, plus the earlier 10-21 ~1 h tick stall. **Host action before Sunday reopen:** restart/verify `mt5quotes-gold` and `mt5feed`. Keep the $0.40 round-trip assumption until the 14-complete-day/two-weekend sample target is met.
-- **Broker-clock/DST is still unverified:** only one offset (+3h) is in the data. The discriminating window **opened 2026-10-25 01:00 UTC** (EU rule, →+2h) and runs to 2026-11-01 06:00 UTC (US rule); because `mt5quotes-gold` stopped at `10-24 15:34:30 UTC` and the market is closed for the weekend, no post-transition offset has been observed yet — verify tonight/Monday on the first post-reopen bars/quotes.
-- **Pressure calibration:** the bot's dashboard composite remains a side proxy, not a signal (re-join at n=200 still collinear: BUY 76 aligned/5 mixed, SELL 114 aligned/5 mixed). The manual method described by the owner is not yet specified or recorded in the repo.
-- The engine remains `TRADING_MODE = "FORWARD_TEST"`. The measured/demo/account metadata is not permission to send real orders.
+## 1. Guardrails (unchanged, still binding)
 
-Always refresh these facts from the current data before relying on them. The plan is a queue, not a substitute for the ledger or the dated pre-registrations.
+- Preserve the open experiment and its original, dated decision bars. **One runtime variable per forward-test window.**
+- Use the costed, stateful `tools/strategy_lab.py` replay for exit/gate ideas; `exit_sims.py` / `pathwalk_sims.py` / `phantom_trades.py` are descriptive only.
+- Keep rejected candidates rejected unless **new, dated, pre-registered evidence** justifies reopening them. Never tune a threshold after seeing the outcome.
+- Judge net R/trade, payoff, drawdown, SL severity, sample size **and** uncertainty — not win rate alone.
+- Pressure composite = context only (collinear with side). The owner's manual pressure method is a separate, unmeasured hypothesis. Never widen or remove a live stop because selected examples later recovered.
+- Cutover dates come from the host's `autosync: merge upstream` commit time, confirmed from the ledger — never from the plan or the PR merge.
+- No account identifiers, credentials, personal balances or unredacted manual journals in Git.
+- **`TRADING_MODE` stays `FORWARD_TEST`** until G2. `python3 tools/live_readiness.py --strict` must be green before G2 is even discussed, and a green scorecard is **not** itself permission.
 
-## Timeline and gated work
+---
 
-| When / gate | Work to execute | Completion test / next step |
-|---|---|---|
-| **Every session — start here** | Check branch/worktree and current data. Run `python3 tools/check_data.py`, `python3 tools/handoff_check.py`, `python3 tools/check_structural_stop.py`, `python3 tools/check_gap_rides.py`, and `python3 tools/pressure_report.py --root .`. Refresh the handoff snapshot after data changes. | State the current experiment, sample count, blockers and next eligible action. If code changes, also run `python3 tools/smoke_test.py`, `python3 -m py_compile engine.py trade_filter.py`, and the relevant replay/calibration checks. |
-| **21:00 UTC gate; judgement completed 21:19 UTC — structural stop** | Judged the latest available checked-in snapshot (last log row 18:10 UTC; n=139, n=150 not reached). Re-ran integrity, structural-stop, calibration, gap-ride, pressure, ledger-cost and replay checks; recorded the closure counting rule. | `docs/REVIEW-2026-10-19-struct-stop-judgement.md`: A1–A5 and SCREEN pass; PASS is unavailable; the 2/2 closure-gap trigger FIRED. The pre-registered action is REVERT with the gap guard first. No runtime change was safe because the guard's cutoff/position policy is unspecified and host state is operator-only; the decision and blocker are recorded, not waived. |
-| **Post-gate refresh — done 2026-10-20 11:57 UTC (no runtime change)** | Re-ran every session check on the 08:59 UTC snapshot (collection 294): integrity 0 fail/8 warn, structural-stop guard PASS at n=147, gap-ride count still 2/2, `--calib-only` recall 99.8%/99.7%, quote report 6.7 days (6/14). Refreshed the handoff snapshot and §1/§5/§6/§11, archived the replaced §1, and re-based this plan's baseline. | `docs/REVIEW-2026-10-20-post-gate-refresh.md`: the n=150 arm **lapsed with the time gate** and is not re-opened by the grown sample; the recorded judgement (SCREEN MET at n=139, PASS unavailable, gap trigger fired) stands. Next eligible action is unchanged and still blocked on the owner. |
-| **Session refresh — done 2026-10-25 01:45 UTC (no runtime change)** | "Execute the plan" on the collection-334 snapshot (data through 2026-10-23 20:57 UTC): integrity 0 fail/8 warn, handoff FRESH after `--update`, structural-stop guard **PASS at n=200** (0 inside level, 83.5% level-bound, +0.50 ATR clearance, 3.33 ATR risk), gap-ride count still **3/2**, SCREEN MET on all five checks (decisive 37.93% [30.4–46.0]), quote report **10/14** days (1/2 weekends, $0.55 median; newest row Saturday frozen tick), DST window opened 01:00 UTC with no observed offset yet. Refreshed the handoff snapshot + §1/§4/§5/§6, archived the replaced §1, and re-based this baseline. | `docs/REVIEW-2026-10-25-duplicate-trade-number.md`: **new finding — duplicate `Trade_Num` #697** in the synced ledger (latent restart-with-open-trade bug; no metric affected; two-line fix + smoke scenario proposed, not applied — owner review pending). The n=150 arm remains lapsed; the recorded judgement (SCREEN MET at n=139, PASS unavailable, gap trigger fired) stands. Next eligible repo action is the owner's review of that fix; the queue's blocked item is unchanged. |
-| **2026-10-25 (same session, follow-up — owner delegated the decision: "help me make the decisions u see best")** | Owner hypothesis: price hovers at stops, tags them, bounces; some traders place stops slightly past the suggested level. Built `tools/stop_hunt_markout.py` (bounded 24 h mark-outs) and added the `structstop1.5` clearance variant to `tools/strategy_lab.py`; ran the costed grid replay (calib 99.8% re-verified, smoke PASSED). | `docs/ANALYSIS-2026-10-25-stop-hunt-markouts-and-clearance-grid.md`: mark-outs (84% of SLs hovered ≤0.25R pre-exit; 27% back at entry ≤15 m; median hunt ≈1.1 ATR past the level; 21/90 full signature; **29% of winners survived ≥0.5R MAE — the counterweight that keeps mark-outs from being a rule**). Grid (post-cutover era, net R/t): 1.5 ATR = **−0.000R at $0.20/side, −0.023R at measured $0.275** vs live −0.102/−0.132 — breakeven at registered cost, monotone with clearance at every cost. Pre-declared bar: 1.5 passes 3 of 4 (n −21.3% misses, mechanism disclosed); 1.0 fails. **Verdict: NO live change; structstop1.5 = pre-registration candidate, NOT registered** (one variable, 10-05-style SCREEN/PASS/REVERT drafted) — runs only after the owner's gap-guard decision (fired §7 trigger is first in the queue). |
-| **DONE 2026-10-25 02:48:12 UTC (`71317da`) — gap guard + `#697` fix deployed; DST-lag fix in `1c02b2c`** | PR #58 (`d38117a`: `8d84dcf` `#697` restore fix + `4d911fa` 30-min entries-only daily-closure gap guard, `docs/PREREG-2026-10-25-gap-guard-daily-closure.md`) merged and deployed via `autosync` (`71317da`) into the closed weekend market (0 trades open/affected). Post-merge session (`arena/c5824a9f-gold-trading-bot`) verified `71317da` + collection 335, flagged `mt5quotes-gold` STALE (~11.3 h old, stopped `10-24 15:34:30 UTC`), and shipped `1c02b2c` making `derive_daily_closure()` DST-responsive (5-break recent baseline + immediate Day-1/Day-2 `±60 min` Sunday-reopen / post-weekend shift adaptation; +7 Scenario Z checks). | Smoke A–Z PASSED, `check_data` 0 fail/8 warn, `check_structural_stop` PASS at n=200, `check_gap_rides` 3/2. **Owner decision (`hold_for_dst`):** keep `SL_CLEAR_ATR = 0.5` + gap guard until Sunday reopen / Monday confirms the post-DST broker offset (`+2h` EU vs `+3h` US); merge the `1c02b2c` PR before Sunday's reopen so Day-1 DST adaptation is live on `/opt/gold`, and restart `mt5quotes-gold` on the host. |
-| **NEXT — after Sunday reopen (`2026-10-25 ~22:00–23:00 UTC`) / Monday `2026-10-26`** | Observe the real post-DST broker offset (`+2h` EU vs `+3h` US) from the first post-reopen synced bars/quotes (`xm_quote_report.py` + `forward_test_log.csv` reopen timestamp), verify `derive_daily_closure()` matches the observed post-DST break, and execute the owner's single-variable stop-geometry choice: **(A)** pre-register & stage **`structstop1.5` (`SL_CLEAR_ATR = 1.5`)** (`−0.000R/trade` at $0.20/side, `−0.023R` at $0.275/side; `docs/ANALYSIS-2026-10-25-stop-hunt-markouts-and-clearance-grid.md`) or **(B)** execute the literal §7 `2·ATR / 3·ATR` revert (`−0.130R`/`−0.176R`, worst in replay). | Gated on at least one post-reopen synced snapshot confirming the broker's winter offset. Never bundle two strategy variables; `tol0.25` remains ineligible. |
-| **In parallel, as data becomes available** | Let the quote logger collect until it reports **14 complete days including 2 weekends**. Re-run `python3 tools/xm_quote_report.py`; cost the ledger and canonical replay using the measured figure and a sensitivity range. Check the broker-clock/DST transition around **2026-10-25** from observed offsets; do not guess the timezone. | Keep $0.20/side ($0.40 round trip) as the registered assumption until the sample target is reached. A spread-only result is not a complete slippage/commission model. If box/service inspection is needed, follow `docs/XM-LOGGER.md`; local repo access cannot verify systemd on the production host. |
-| **In parallel, research only — start a private observation log** | Capture **all** eligible bot stop events, not just memorable recoveries, and the owner's manual decisions before the later price path is known. Record the exact pressure source/indicator, timeframe, raw reading and timestamp of the last closed bar; bot side/entry/SL/TP; pressure at entry and at the first hypothetical stop touch; whether the owner would hold/exit and why; and the later bounded mark-out (fixed horizons or a predeclared exit), including MFE/MAE and costs. Keep personal/account data out of Git. | This phase changes no bot behavior. At least 100 matched post-stop observations may be used as an **exploratory screen**, not proof; keep a chronological holdout and account for clustering by trading day. If the pressure measure or the hold/exit rule is not explicit, ask the owner for that definition before coding or testing it. |
-| **After a pressure hypothesis is specified and screened** | Write a new dated pre-registration before any rule is tested or deployed. Compare the current stop with one bounded alternative on matched entries, both sides, costed data, full portfolio state, chronological holdout and relevant market regimes. Include worst-loss/tail-risk and drawdown, not only “recovered to target.” | Only if the pre-registered evidence is promising should a separate shadow/forward-test window be proposed. No pressure signal is promoted to an engine gate or stop override based on this plan or anecdotal winners. |
-| **Next 2–4 months; then 6–12 months** | Accumulate a meaningful sample across different market regimes, review the registered experiment(s), measured costs, operational feed health and risk controls. | Stay paper-only until positive expectancy after realistic costs is demonstrated on a sufficiently large, independent forward sample and the owner explicitly approves any separate live-readiness work. No automatic go-live milestone. |
+## 2. Baseline (re-based 2026-10-26 — always refresh before relying on it)
 
-### Manual observation record (private; do not commit filled rows)
+- **709 closed paper trades** — 142W/306L/258BE/3TIME, decisive WR **31.7%**; engine ledger **$131.30**, true equity **$114.34**, **net −$669.26** at the registered $0.40 round trip. No open trade (`next_trade_num: 710`). Log 51 215 bars through `2026-10-26 11:59:07 UTC`.
+- **Structural-stop era n=212** (57W/95L/58BE/2TIME): decisive WR **37.5% [30.2–45.4]**, gross **−0.054R/trade**, SCREEN MET on all five registered checks. The **n=150 PASS arm lapsed with the 10-19 time gate** — the grown sample is an observation, not a re-judgement. Geometry guard **PASS**: 0 stops inside the level, 83.0% level-bound, +0.50 ATR clearance, 3.32 ATR median risk.
+- **§7 closure-gap revert trigger FIRED at 3/2** (#595/#610/#687; 0 gapped through, 0 worse exits, no weekend ride). The **30-min entries-only gap guard is deployed** (`71317da`, 10-25 02:48:12 UTC) and `derive_daily_closure()` is DST-responsive.
+- **DST gate MET:** observed broker offset `+3h` → **`+2h` from 2026-10-25 22:00:30 UTC**; the EU DST rule fits 100% of 24 379 rows. `history_to_log.py --dst eu` is now evidence-backed. No post-DST **daily** break has been logged yet (first due 10-26 evening), so the derived guard schedule is still `(20:58, 22:00)` — verify after that break.
+- **Quote logger healthy again:** 14 files / 35 571 rows, **11/14 complete UTC days, 1/2 weekends**, median spread **$0.55** (measured round trip $0.55 on 131 matched trades) vs the registered $0.40. Spec `filling_mode = 2` → **IOC only**; account kind **REAL** (a live pilot must use a DEMO account + separate data dir).
+- **New host action:** the quote sidecar was fresh from Sunday 22:00 UTC but the **price-bar log resumes only at 23:59:24 UTC** (~2 h of open-market M1 bars missing at the reopen). Verify `mt5feed` / `goldbot` restart on the host.
+- **Replay calibration:** `--calib-only` recall **99.8%**. Post-cutover net R/trade at $0.20/side: old geometry −0.137, **live 0.5 ATR −0.110**, 1.0 ATR −0.099, **1.5 ATR −0.024** (at $0.275/side: −0.184 / −0.140 / −0.126 / **−0.047**). 1.5 ATR passes 3 of 4 pre-declared bar points; the 4th (trade count −21.9%) fails and is disclosed.
+- **Live gate CLOSED:** `tools/live_readiness.py` = **9 PASS / 8 TODO / 3 MANUAL**. Paper engine fully tested (`smoke_test.py` A–Z + AA PASSED, 64 `goldbot` tests, 18 `live_readiness` tests, `check_data.py` 0 fail/8 warn).
+- **Verdict: no demonstrated edge after costs.** Whole book and live era both net negative after cost. Nothing here is permission to trade real money.
 
-Use one row per eligible signal/stop event, including cases where the owner does **not** override the stop and cases that lose. Keep a bot entry and a manual entry separate; do not call them a matched trade unless the timestamps and setup actually match. Minimum fields:
+---
+
+## 3. The queue
+
+**Selection rule:** ritual first (§5), then the lowest-numbered step whose gate is met. Tracks A (strategy evidence) and B (execution engineering) run in parallel; a blocked step never blocks the other track. Track C is the final go/no-go.
+
+### Step 0 — DONE 2026-10-26 (this session)
+
+| | |
+|---|---|
+| Work | Full-system audit, DST-gate verification, handoff refresh, LIVE-path hardening (arm gate + kill switch, IOC filling from spec, closed-bar/dedup `run_live`), `tools/live_readiness.py` scorecard, Scenario AA + 18 unit tests, `structstop1.5` pre-registration draft. |
+| Completion test | `docs/REVIEW-2026-10-26-full-system-audit.md` exists; `smoke_test.py` PASSED; `test_live_readiness.py` 18 OK; `live_readiness.py --strict` exits 1 (gate closed); no strategy parameter changed. |
+| Result | All met. **No runtime strategy change, no deploy, no real order.** |
+
+### Track A — evidence and the open strategy experiment
+
+| ID | Gate / when | Work | Completion test | Blocker |
+|---|---|---|---|---|
+| **A1** | **G1 now** | Owner signs (or rejects) `docs/PREREG-2026-10-26-structstop1.5.md`. If signed: register it verbatim (dated, before any post-change trade), do the §2 pre-deploy tool work (new era cutover in `strategy_lab` / `check_structural_stop` / `win_rate_report` / `pressure_report` / journal; smoke assertion for 1.5 ATR clearance), and confirm the post-DST daily-break signature. If rejected: execute the literal §7 revert instead, with its own dated REVIEW. | signed + dated PREREG; `strategy_lab.CLEAR15_CUTOVER` exists with the deploy date **unknown until deploy**; all tests pass; a REVIEW records the gate decision. | **G1 owner sign-off** (deviation from the literal §7 revert). |
+| **A2** | A1 done, no open trade | Single-variable change `SL_CLEAR_ATR = 0.5 → 1.5` in one commit + PR; merge (the phrase is the sign-off **only** because A1's registration exists). Record the real cutover from the host's `autosync: merge upstream` commit, confirm from the ledger boundary. | one-line diff; `smoke_test.py` PASSED; `check_structural_stop.py` shows the OLD/NEW boundary at the recorded cutover; dated REVIEW with the cutover time. | Host autosync (3 h cycle); never hand-edit `/opt/gold`. |
+| **A3** | A2 + 10–20 new-era trades | Judge **A1–A5** of the registered bar (geometry + calibration). | dated REVIEW: 0 stops inside level, ≥1.5 ATR clearance, recall 99.6–100%, level-bound 70–90%, median risk 3.8–5.0 ATR. A failure = REVERT, no P&L reading. | none |
+| **A4** | n=100 in the new era | **SCREEN** judgement (net R/trade ≥ −0.05R at $0.20/side, decisive WR ≥ 40%, B1–B3, A still passes). | dated REVIEW with Wilson CIs, per-day columns, cost sensitivity. | none |
+| **A5** | n=150 or 2026-12-01 21:00 UTC, whichever comes first | **PASS/FAIL/REVERT** judgement exactly as registered. | dated REVIEW; PASS requires Wilson LB > 40%, net ≥ 0.00R at $0.20/side, ≥ −0.05R at $0.275/side, era DD ≤ $200. | none |
+| **A6** | in parallel, when the quote logger reaches **14 complete days + 2 weekends** (~end of October) | Complete the cost model: measured all-in round trip (spread + slippage + commission + swap), re-cost the ledger and canonical replay with a sensitivity range, write a dated cost doc. Keep $0.40 registered until then. | `xm_quote_report.py` target met; `live_readiness.py` `quote_sample` + `cost_model` turn PASS; dated `ANALYSIS` doc. | logger uptime (host). |
+| **A7** | after A5, only if PASS | **Independent** forward window on the **same unchanged strategy** — 2–4 months, multiple regimes, chronological holdout. This, not a replay, is the edge test. | dated pre-registration before the window; positive net expectancy after measured cost with acceptable drawdown and uncertainty. | time; a FAIL/REVERT ends this track. |
+| **A8** | research only, parallel | Private manual observation log (§7) for the owner's pressure/hold hypothesis. No bot behaviour change. ≥100 matched post-stop observations before any exploratory screen; then a new dated pre-registration, never an engine gate. | private log (outside Git) + optional dated ANALYSIS. | the manual rule is still undefined — ask the owner for the definition before coding it. |
+
+### Track B — LIVE execution engineering (all paper-safe; none places an order)
+
+Every step must move at least one `live_readiness.py` check from TODO to PASS **and** add a hermetic test. The gate stays CLOSED until all of them plus the MANUAL items are PASS.
+
+| ID | Gate / when | Work | Completion test | Blocker |
+|---|---|---|---|---|
+| **B1** | DONE 10-26 | `tools/live_readiness.py` scorecard + arm/filling/closed-bar hardening. | 9 PASS / 8 TODO / 3 MANUAL. | — |
+| **B2** | any session | Broker-side **BE ratchet** (`TRADE_ACTION_SLTP` at +0.75R) **and** the 240-min **time stop**, or a dated registration of the explicit divergence (paper and LIVE would otherwise be different strategies). Decide first, then implement once. | `live_readiness.py` `broker_be` + `broker_time_stop` PASS; fake-MT5 tests for modify/close/rejection/retry. | choice must be recorded before coding (default: implement, do not diverge). |
+| **B3** | any session | **Reconciliation:** adopt an existing broker position on startup (magic filter), refuse a duplicate order, read realised P&L from `history_deals_get`, persist ticket↔trade number, and prove restart recovery. | `position_reconcile` + `deal_reconcile` PASS; fake-MT5 restart tests. | none |
+| **B4** | any session | **Pre-order safety:** `terminal_info().connected`, `volume_max`/step/stops/freeze levels from the live spec, and a **spread-as-%-of-R** veto (measured $0.55 is ~10% of 1R; `MIN_SPREAD_POINTS=60` is too loose). | `disconnect_safety`, `sizing_limits`, `cost_guard` PASS; unit tests with a fake spec. | none |
+| **B5** | B2–B4 done | **DEMO-account** evidence on the host: fill (IOC), SL/TP, BE/time management, rejection handling, disconnect, restart, reconciliation, kill switch, and 48 h of stable running. Use a DEMO account and a separate data dir — the captured spec says REAL. | `docs/DEMO-EVIDENCE.md` (**new file to be created**, redacted) exists; `live_readiness.py` `demo_evidence` PASS. | **HOST/operator action** — cannot be done from the repo checkout. |
+| **B6** | B5 done | Ops runbook: `GOLD_LIVE_ARMED=1`, `LIVE_HALT` kill-switch drill, service/user separation, monitoring/alerts, rollback, and a written “who can arm it” rule. | dated `docs/RUNBOOK-LIVE.md` (**new file to be created**) + a drill log; no credential in Git. | none |
+
+### Track C — the only path to a live pilot
+
+| ID | Gate | Work | Completion test |
+|---|---|---|---|
+| **C1** | A7 (edge) + B1–B6 (all PASS) + A6 (cost) | Separate **live-readiness review**: independent sample, measured costs, drawdown, operational evidence, worst-case loss, position sizing, and a **tightly capped pilot** plan. | dated `REVIEW` with an explicit GO/NO-GO, plus **G2** — the owner's separate, explicit, informed approval. No automatic go-live. |
+
+**“Workable for live trade” is defined as:** (1) one unchanged strategy with positive net expectancy after **measured** costs on an independent forward sample across multiple regimes; (2) acceptable drawdown and tail risk with uncertainty bounds; (3) every blocking `live_readiness.py` check PASS; (4) a dated DEMO test report; (5) a cost model, kill switch, reconciliation and monitoring that have survived an outage; (6) G2. Anything less stays paper. **No date can be promised for profitable live trading** — failed gates extend the horizon indefinitely (current conditional estimate: strategy reassessment Dec 2026–Feb 2027; separate live-readiness review Apr–Oct 2027; `docs/REVIEW-2026-10-20-live-readiness-timeline.md`).
+
+---
+
+## 4. Compact history (completed queue items — do not re-do)
+
+| When | What |
+|---|---|
+| 2026-10-19 21:00 UTC | Structural-stop time gate judged: geometry PASS, **SCREEN MET**, **PASS unavailable** (n=139 < 150; Wilson LB 28.8%). §7 closure-gap trigger fired 2/2. `docs/REVIEW-2026-10-19-struct-stop-judgement.md`. |
+| 2026-10-20 | Post-gate refresh: n=150 arm **lapsed with the time gate**; no re-judgement on a grown sample. `docs/REVIEW-2026-10-20-post-gate-refresh.md`. |
+| 2026-10-25 ~03:30 UTC | Owner stop-hunt hypothesis → `tools/stop_hunt_markout.py` + `structstop1.5` replay variant. Deeper stops monotone-better at every cost; 1.5 ATR passes 3/4 of a **pre-declared** bar; **NO live change**, candidate only. `docs/ANALYSIS-2026-10-25-stop-hunt-markouts-and-clearance-grid.md`. |
+| 2026-10-25 02:48:12 UTC | PR #58 deployed: 30-min **entries-only** gap guard + `#697` duplicate-number fix, into the closed weekend market. Owner chose `hold_for_dst`. `docs/PREREG-2026-10-25-gap-guard-daily-closure.md`, `docs/REVIEW-2026-10-25-duplicate-trade-number.md`. |
+| 2026-10-25 (post-merge) | `derive_daily_closure()` made DST-responsive (5-break baseline + Day-1/Day-2 ±60 min adaptation; +7 Scenario Z checks). Deployment of that commit is part of the same safe-work backlog if it is not already on `main`. |
+| 2026-10-26 | Full audit, DST gate verified, LIVE-path hardening + readiness scorecard, pre-registration draft, this rewritten queue. `docs/REVIEW-2026-10-26-full-system-audit.md`. |
+
+---
+
+## 5. Session ritual (every “follow execution plan” session)
+
+```bash
+git status --short && git log --oneline -3
+python3 tools/check_data.py                 # 0 fail; warnings are documented
+python3 tools/handoff_check.py             # STALE -> --update, then rewrite §1/§4/§5/§6 prose
+python3 tools/check_structural_stop.py     # PASS (0 inside level)
+python3 tools/check_gap_rides.py           # registered closure count + damage facts
+python3 tools/pressure_report.py --root .  # era verdict + calibration
+python3 tools/xm_quote_report.py           # cost sample + DST offsets
+python3 tools/live_readiness.py            # live gate scorecard
+python3 tools/strategy_lab.py --calib-only # only when a replay/param idea is in play
+python3 tools/handoff_check.py --update    # after checking the underlying files
+```
+If code changed, also: `python3 tools/smoke_test.py`, `python3 tools/test_live_readiness.py`,
+`python3 -m unittest discover -s goldbot/tests -t .`,
+`python3 -m py_compile engine.py trade_filter.py`, and the relevant replay/calibration checks.
+
+**End-of-session checklist**
+1. Mark the completed step and its evidence in §3; leave future gates untouched.
+2. Refresh the handoff snapshot and prose; append the replaced §1 block to `docs/HANDOFF-HISTORY.md` (never prepend history to §1).
+3. Land conclusions in a dated doc — never in chat only.
+4. Push every commit immediately; keep the session PR open until sign-off (or use the phrase's pre-registered-merge authority, §0).
+5. Report the next eligible step and any owner/host blocker.
+
+---
+
+## 6. Precedence when several steps look eligible
+
+1. A data-integrity failure or a feed outage — fix/report first; no judgement on bad data.
+2. Any expired **time gate** — judge it on the latest available snapshot, exactly as registered, before any new change.
+3. Track A in order (A1 → A5), unless blocked by G1 or a host action.
+4. Track B in order (B2 → B6), one `live_readiness.py` check at a time.
+5. A6/A8 (cost sample, private observation log) whenever their data arrives.
+6. C1 only when everything above is complete.
+
+Never start a step whose pre-registration does not exist. Never re-open a lapsed arm because the sample later grew.
+
+---
+
+## 7. Manual observation record (private; do not commit filled rows)
+
+One row per eligible signal/stop event, including cases where the owner does **not** override the stop and cases that lose. Keep bot and manual entries separate; do not call them matched unless timestamps and setup actually match. Minimum fields:
 
 `timestamp_utc, bot_trade_id, side, bot_entry, bot_sl, bot_tp, manual_entry, manual_exit, pressure_source, pressure_metric, pressure_timeframe, pressure_value_at_entry, pressure_value_at_stop_touch, last_closed_bar_utc, contemporaneous_action, reason_code, max_hold_or_exit_rule, post_stop_markout_horizons, mfe, mae, hypothetical_exit, estimated_cost, notes_without_account_identifiers`
 
-A trade that later touches its former target after the bot's stop is a **counterfactual mark-out**, not a win under the bot's current rules. The entry, stop event, and decision must be timestamped before looking at the recovery path.
-
-## Session checklist
-
-At the end of each execution session:
-
-1. Mark the completed item and its evidence here; leave future gates untouched.
-2. Update `docs/HANDOFF.md` where current state or next steps changed; run `python3 tools/handoff_check.py --update` only after checking the underlying files.
-3. Record any conclusion in a dated review/pre-registration, not only in chat.
-4. List the next eligible action and any owner/production-host blocker in the final response.
-
-### 2026-10-20 dashboard-only follow-up
-
-Added manual BUY/SELL watch references, costed geometry and health/chase warnings;
-see `docs/REVIEW-2026-10-20-box-watch-cards.md`. No strategy work was advanced,
-no guard definition was invented, and no deployment or real orders were authorized.
-Live-readiness estimate is recorded separately in
-`docs/REVIEW-2026-10-20-live-readiness-timeline.md`.
+A trade that later touches its former target after the bot's stop is a **counterfactual mark-out**, not a win under the bot's rules. The entry, stop event and decision must be timestamped **before** looking at the recovery path. This phase changes no bot behaviour.

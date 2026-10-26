@@ -1,17 +1,25 @@
 # gold-trading-bot
 
 Forward-testing engine for a gold (XAU/USD) price-action strategy. All trades
-are simulated (paper) until the strategy proves an edge. For a new session, the
-owner can simply say **“Execute the plan.”** The ordered queue is in
-`docs/EXECUTION-PLAN.md`; current state and operating rules are in
-`docs/HANDOFF.md`. See `archive/PROJECT_LOG.md` for the full architecture,
-strategy rules, and changelog.
+are simulated (paper) until the strategy proves an edge — and until the LIVE
+execution gate is open. For a new session, the owner simply says
+**“Follow execution plan.”** (“Execute the plan.” is the older alias). The
+phrase's exact authority, the session ritual and the gated two-track queue are
+in `docs/EXECUTION-PLAN.md`; current state and operating rules are in
+`docs/HANDOFF.md`. The phrase never authorises real orders or a switch to LIVE:
+two explicit approval gates remain (pre-registration sign-off and real money).
+See `archive/PROJECT_LOG.md` for the full architecture, strategy rules, and
+changelog, and `docs/REVIEW-2026-10-26-full-system-audit.md` for the latest
+full-system review.
 
 ## 📁 Where everything lives
 
 | Path | What it is |
 |---|---|
-| `docs/EXECUTION-PLAN.md` | **Session execution queue and timeline.** In a new session, the owner can say “Execute the plan”; work the first eligible step only and preserve every registered gate. |
+| `docs/EXECUTION-PLAN.md` | **Canonical session queue.** Say **“Follow execution plan.”** (alias “Execute the plan.”): run the ritual, do the lowest-numbered eligible step only, land the result in a dated doc, and never bypass a pre-registration or the two approval gates. Track A = strategy evidence, Track B = LIVE execution engineering, Track C = go/no-go. |
+| `docs/REVIEW-2026-10-26-full-system-audit.md` | **Latest full-system review**: current evidence, the LIVE-path gaps, what “finalise the engine” actually requires, and the honest live-readiness verdict. |
+| `docs/PREREG-2026-10-26-structstop1.5.md` | **DRAFT (not registered)** one-variable pre-registration for `SL_CLEAR_ATR = 1.5`, with SCREEN/PASS/REVERT bars. Needs G1 owner sign-off before it can be deployed. |
+| `tools/live_readiness.py` | Read-only **LIVE gate scorecard**: 20 AST/data/evidence checks, `--json` / `--strict`. A PASS is a code check, not a demo test. Current verdict: **CLOSED**. |
 | `docs/HANDOFF.md` | **Current session handoff** — current state, definitions, evidence, next steps, and ops. Read it with the execution plan. §1 is current-state only. |
 | `docs/HANDOFF-HISTORY.md` | Dated session archaeology — the per-session state blocks §1 replaced (append-only, newest first). Read it for the *why* behind a rule or the full record of an incident, **never for current numbers**. |
 | `engine.py` | Data ingestion, indicators (EMA/RSI/ATR), the Buy/Sell signal funnel, trade execution. Includes `migrate_trades_csv()` — self-healing schema fix (see 09-10 review) — the **structural stop** (`SL_CLEAR_ATR = 0.5` + `RR_TARGET`, live **2026-10-06 03:00 UTC** — planned for 10-05 21:00, deployed by the 03:00 autosync: risk = `max(2·ATR, |entry − level| + 0.5·ATR)`, TP = 1.5 × that risk — see `docs/ANALYSIS-2026-10-05-stop-loss-geometry.md`), and the breakeven stop ratchet (`BE_TRIGGER_R`: 0.30R since the 09-10 losing-trade analysis, **raised to 0.75R on 09-15** — the tight trigger was scratching 77% of trades; see `docs/REVIEW-2026-09-15.md`). |
@@ -47,6 +55,8 @@ strategy rules, and changelog.
 
 ```bash
 python3 tools/check_data.py       # 1. integrity gate — run FIRST, trust nothing before it passes
+python3 tools/live_readiness.py   # 1b. LIVE execution gate scorecard (read-only; --strict exits 1 while CLOSED)
+python3 tools/test_live_readiness.py # 1c. LIVE-path hermetic tests
 python3 tools/win_rate_report.py  # 2. win-rate decomposition (era/side/day, ratchet grid)
 python3 tools/validate_gates.py   # 3. replay entry gates against all historical trades
 python3 tools/phantom_trades.py   # 4. what did the blocked (skipped) signals actually do?
