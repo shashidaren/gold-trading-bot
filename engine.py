@@ -207,6 +207,17 @@ CONTRACT_SIZE   = 100     # XM GOLD Standard = 100 oz; GOLDmicro = 1
 VOLUME_MIN      = 0.01    # MT5 symbol spec: minimum volume
 VOLUME_STEP     = 0.01    # MT5 symbol spec: volume step
 
+# ── LIVE execution safety (2026-10-26; LIVE path ONLY, paper untouched) ──────
+# Flipping TRADING_MODE to "LIVE" is NOT sufficient to place a real order.
+# An operator must explicitly arm the process (GOLD_LIVE_ARMED=1) and must not
+# have dropped the kill-switch file. Both are re-checked on every loop and
+# again immediately before an order, so `touch /opt/gold/LIVE_HALT` stops new
+# exposure without a code change or a restart. See
+# docs/REVIEW-2026-10-26-full-system-audit.md and tools/live_readiness.py.
+# None of this changes FORWARD_TEST behaviour, entries, exits or the ledger.
+LIVE_ARM_ENV = "GOLD_LIVE_ARMED"
+LIVE_HALT_FILE = os.getenv("GOLD_LIVE_HALT_FILE", "/opt/gold/LIVE_HALT")
+
 LOG_FILE_PATH = "/opt/gold/forward_test_log.csv"
 STATUS_FILE_PATH = "/opt/gold/status.json"
 # DATA_SOURCE=MT5: the Wine sidecar (tools/mt5_feed.py) publishes the latest
@@ -501,6 +512,43 @@ def latest_closed_candle_ts(rates):
     return int(rates[0]["time"])
 
 
+def live_armed(env=None, halt_path=None) -> bool:
+    """True only when LIVE is explicitly armed AND no kill-switch file exists.
+
+    Pure apart from one os.path.isfile; `env` and `halt_path` are injectable so
+    tests are hermetic. Fails CLOSED on any error. LIVE path only — the paper
+    engine never consults this. Deliberate two-key design: an accidental
+    TRADING_MODE="LIVE" (or a bad config edit) cannot place real orders on its
+    own, and a single file stops new exposure without touching the process.
+    """
+    env = os.environ if env is None else env
+    if str(env.get(LIVE_ARM_ENV, "")).strip() != "1":
+        return False
+    path = halt_path if halt_path is not None else LIVE_HALT_FILE
+    try:
+        return not os.path.isfile(path)
+    except OSError:
+        return False
+
+
+def resolve_order_filling(mt5_mod, symbol_info):
+    """Return the ORDER_FILLING_* constant this symbol actually supports.
+
+    `symbol_info().filling_mode` is a bitmask: bit0 = FOK, bit1 = IOC, bit2 = BOC
+    (same decoding as tools/mt5_quotes.py FILLING_BITS). The captured XM spec
+    (xm_data/symbol_spec.json, 2026-10-26) reports filling_mode = 2 => IOC ONLY,
+    so the previously hard-coded ORDER_FILLING_FOK would be rejected by the
+    broker. None means "no supported policy is known" — the caller must refuse
+    the order rather than guess. Read-only and pure; no MT5 call here.
+    """
+    mode = int(getattr(symbol_info, "filling_mode", 0) or 0)
+    if mode & 1 and getattr(mt5_mod, "ORDER_FILLING_FOK", None) is not None:
+        return mt5_mod.ORDER_FILLING_FOK
+    if mode & 2 and getattr(mt5_mod, "ORDER_FILLING_IOC", None) is not None:
+        return mt5_mod.ORDER_FILLING_IOC
+    return None
+
+
 if TRADING_MODE == "LIVE":
     import MetaTrader5 as mt5
 else:
@@ -579,6 +627,12 @@ class GoldEngine:
         # forward_test_log.csv and free to re-enter a trade on it).
         self._mt5_last_candle_ts = None
         self.restore_mt5_candle_ts_from_status()
+
+        # LIVE closed-bar watermark. Separate status.json key on purpose: a
+        # live/demo pilot must never inherit or clobber the paper feed's
+        # mt5_last_candle_ts (the two paths can run from different data dirs).
+        self._live_last_bar_ts = None
+        self.restore_live_bar_ts_from_status()
 
         # MT5 feed-health state (see mt5_feed_problem / run_mt5_test)
         self._mt5_feed_read_error = None      # last read_mt5_feed() failure, if any
@@ -725,6 +779,17 @@ class GoldEngine:
             print(f"Restored MT5 candle watermark -> "
                   f"{datetime.fromtimestamp(self._mt5_last_candle_ts, tz=timezone.utc):%Y-%m-%d %H:%M:%S} UTC "
                   f"(restart will not re-play this candle)")
+
+    def restore_live_bar_ts_from_status(self):
+        """Restore the LIVE closed-bar dedup watermark (own key, fail-open)."""
+        if not os.path.isfile(STATUS_FILE_PATH):
+            return
+        try:
+            with open(STATUS_FILE_PATH) as f:
+                ts = json.load(f).get("live_last_candle_ts")
+            self._live_last_bar_ts = int(ts) if ts else None
+        except Exception:
+            self._live_last_bar_ts = None
 
     def restore_open_trade_from_status(self):
         """Restore open simulated trade from status.json after crash/restart."""
@@ -896,6 +961,7 @@ class GoldEngine:
             "max_daily_losses": MAX_DAILY_LOSSES,
             "last_update": utc_now_str(),
             "mt5_last_candle_ts": self._mt5_last_candle_ts,
+            "live_last_candle_ts": self._live_last_bar_ts,
             "rsi": round(self.rsi, 1) if self.rsi else None,
             "ema_fast": round(self.ema_fast, 2) if self.ema_fast else None,
             "ema_slow": round(self.ema_slow, 2) if self.ema_slow else None,
@@ -1536,6 +1602,14 @@ class GoldEngine:
         return lots if lots >= VOLUME_MIN else None
 
     def execute_live_trade(self, direction: str, c: float, wick_ratio: float, ts: str, level=None):
+        # LIVE arming / kill switch (2026-10-26): checked AGAIN here, not only in
+        # run_live, so no code path can place a real order while disarmed.
+        if not live_armed():
+            print("\nLIVE ORDER BLOCKED -> GOLD_LIVE_ARMED != 1 or LIVE_HALT present\n")
+            self.send_telegram(
+                f"LIVE ORDER BLOCKED\nLive execution is not armed ({LIVE_ARM_ENV} != 1 "
+                "or kill-switch file present)", kind="risk")
+            return
         # Daily-closure gap guard (registered 2026-10-25) — same rule as the paper path:
         # no NEW entry inside the window before the broker's daily break.
         _guard = self.entry_guard_reason(self._guard_now())
@@ -1546,7 +1620,22 @@ class GoldEngine:
                 f"Price: `${c:.2f}`", kind="skip")
             return
         print(f"\nALL CONDITIONS MET! PREPARING LIVE {direction} ORDER...")
-        point = mt5.symbol_info(SYMBOL).point
+        symbol_info = mt5.symbol_info(SYMBOL)
+        if symbol_info is None:
+            print("LIVE order skipped -> symbol_info() unavailable, no point/filling data")
+            self.send_telegram("LIVE ORDER SKIPPED\nsymbol_info() unavailable - no point/filling data",
+                              kind="risk")
+            return
+        # The captured XM spec reports filling_mode = 2 (IOC only). Sending the
+        # old hard-coded ORDER_FILLING_FOK would be rejected on every real order.
+        filling = resolve_order_filling(mt5, symbol_info)
+        if filling is None:
+            print("LIVE order skipped -> no supported FOK/IOC filling policy for this symbol")
+            self.send_telegram(
+                "LIVE ORDER SKIPPED\nNo supported FOK/IOC order filling policy "
+                f"(filling_mode={getattr(symbol_info, 'filling_mode', None)})", kind="risk")
+            return
+        point = symbol_info.point
         tick = mt5.symbol_info_tick(SYMBOL)
         if tick is None:
             print("Failed to get tick data")
@@ -1601,7 +1690,7 @@ class GoldEngine:
             "magic": MAGIC_NUMBER,
             "comment": f"Gold Engine Live {direction}",
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_FOK,
+            "type_filling": filling,
         }
         print(f"   Sending: {direction} {self.trade_lots} {SYMBOL} @ {price:.2f} | SL: {sl_price:.2f} | TP: {tp_price:.2f}")
 
@@ -1848,32 +1937,49 @@ class GoldEngine:
             self.aggregate_tick(price)
 
     def run_live(self):
-        print("Gold Engine LIVE starting...")
+        """LIVE loop: CLOSED M1 bars only, deduplicated by candle timestamp.
+
+        2026-10-26 hardening (LIVE path only; paper behaviour unchanged):
+          * position 0 is the still-FORMING bar. Evaluating it made every live
+            signal differ from the paper engine (which only ever sees closed
+            bars) and re-evaluated the same minute repeatedly. Use position 1.
+          * `mt5_next_candle` + a status.json watermark (live_last_candle_ts)
+            means each closed bar is evaluated exactly once, including across
+            a restart — the same invariant the MT5 paper feed already has.
+          * `live_armed()` is checked every loop; a kill-switch file or an
+            unarmed process stops NEW exposure (execute_live_trade re-checks).
+          * Known divergence still open: broker-side BE ratchet / TIME stop,
+            deal-level reconciliation and demo-account evidence. See
+            tools/live_readiness.py — this loop is NOT live-ready on its own.
+        """
+        print("Gold Engine LIVE starting... (closed M1 bars only)")
+        if not live_armed():
+            print(f"LIVE NOT ARMED: {LIVE_ARM_ENV} != 1 or {LIVE_HALT_FILE} exists. "
+                  "Bars will be read but NO real order can be placed.")
+        last_ts = self._live_last_bar_ts or 0
+        if last_ts:
+            print(f"Resuming LIVE after bar ts={last_ts} "
+                  f"({datetime.fromtimestamp(last_ts, tz=timezone.utc):%Y-%m-%d %H:%M:%S} UTC)")
         candles_fetched = 0
         while True:
             try:
-                rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_M1, 0, 1)
-                if rates is None or len(rates) == 0:
-                    time.sleep(1)
-                    continue
-                last_candle = rates[0]
-                o, h, l, c, vol = (
-                    float(last_candle["open"]),
-                    float(last_candle["high"]),
-                    float(last_candle["low"]),
-                    float(last_candle["close"]),
-                    int(last_candle["tick_volume"]),
-                )
-                self.evaluate_candle(o, h, l, c, vol)
-                if candles_fetched % 10 == 0:
-                    print(
-                        f"Heartbeat: Processed candle @ "
-                        f"{datetime.fromtimestamp(last_candle['time'], tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC "
-                        f"| Close: {c}"
-                    )
-                candles_fetched += 1
-                for _ in range(12):
+                rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_M1, 1, 1)
+                candle = self.mt5_next_candle(rates, last_ts)
+                if candle is None:
                     time.sleep(5)
+                    continue
+                ts, o, h, l, c, vol = candle
+                last_ts = ts
+                self._live_last_bar_ts = ts
+                self.evaluate_candle(o, h, l, c, vol)
+                candles_fetched += 1
+                if candles_fetched % 10 == 1:
+                    print(
+                        f"Heartbeat: closed candle @ "
+                        f"{datetime.fromtimestamp(ts, tz=timezone.utc):%Y-%m-%d %H:%M:%S} UTC "
+                        f"| Close: {c} | armed: {live_armed()}"
+                    )
+                time.sleep(5)
             except KeyboardInterrupt:
                 print("\nShutting down...")
                 mt5.shutdown()
