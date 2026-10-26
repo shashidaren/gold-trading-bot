@@ -32,7 +32,7 @@ produces. Everything else in this file holds if these are true:
 | `docs/HANDOFF.md` has its snapshot block | the advisory freshness check reads it | `cd /opt/gold && python3 tools/handoff_check.py --quiet` |
 | *(optional)* the quote logger `mt5quotes-gold` is running | autosync commits its `xm_data/` and reports its liveness; without it the digest just says `not collecting yet` | `systemctl status mt5quotes-gold` (install: `docs/XM-LOGGER.md` §3) |
 | *(optional)* the box notifier `boxalert-gold` is running | the `🔔` line reports it from the sidecar's heartbeat; without it the line says `notifier not running (optional …)` | `cd /opt/gold && python3 tools/box_alert.py --quiet` (install: `deploy/boxalert.service`) |
-| No **uncommitted hand-edits** in `engine.py` / `trade_filter.py` / `dashboard.py` / `tools/` | the script refuses to deploy over them | `cd /opt/gold && git status --short` |
+| No **uncommitted hand-edits** in `engine.py` / `trade_filter.py` / `dashboard.py` / `pressure.py` / `chart.py` / `readiness.py` / `tools/` | the script refuses to deploy over them | `cd /opt/gold && git status --short` |
 
 `/opt/gold/.env` is read for the Telegram token / chat id but is never committed or required —
 without it the script still runs, it just stays silent. The script keeps the pair in its own unexported
@@ -202,8 +202,10 @@ Safe: the engine restores an open trade from `status.json` and re-seeds its stat
 from `trades.csv` / `forward_test_log.csv` on start, so a restart mid-trade resumes the same trade
 (including its structural stop; smoke Scenario N). The engine is only stopped and restarted when
 `engine.py` or `trade_filter.py` changed (`CORE_CHANGED`); a `dashboard.py` change or a change to its
-helpers (`pressure.py`, `chart.py`, `goldbot/`) only restarts the dashboard
-(`DASH_CHANGED`); a tools-only or docs-only change restarts nothing. The `goldbot/` v2 harness is
+helpers (`pressure.py`, `chart.py`, `readiness.py`, `goldbot/`) only restarts the dashboard
+(`DASH_CHANGED`). `tools/live_readiness.py` is watched by the same `DASH_CHANGED` rule: it is the
+Readiness tab's scorecard source, and a restart rebuilds that tab's 5-minute cached view. Other
+tools-only or docs-only changes restart nothing. The `goldbot/` v2 harness is
 never started as a service by autosync: it has no order path and no daemon, and is run by hand.
 
 The smoke gate runs before the restart, so a broken commit is rolled back *before* the engine ever
