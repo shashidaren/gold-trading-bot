@@ -119,7 +119,11 @@ the quote logger exists, `xm_data/` is part of every data commit.)
   silenced:** anything in the 🚨/⚠️/🛑 block (feed starvation, `check_data` failure, rollback,
   failed push), a deploy that rolled back / failed / was skipped for server hand-edits, and a
   push that did not go through. Routine digests are delivered with `disable_notification=true`
-  (silent); incidents buzz. Revert: `GOLD_DIGEST_EVERY_HOURS=0`.
+  (silent); incidents buzz. Revert: `GOLD_DIGEST_EVERY_HOURS=0`. **Not an incident:** after a
+  *successful* merge, `ENGINE SERVICE NOT ACTIVE` and `engine active but status.json looks STALE`
+  stay in the 12 h-limited digest — a dead engine is silent until `📈 candles: STALE` (> 90 open
+  min) fires, i.e. up to the next 3-hourly run. After any deploy, look at the engine yourself
+  (`docs/REVIEW-2026-10-26-autosync-rollback-push-failed.md` §6, §9).
 - **📝 handoff** — `tools/handoff_check.py --quiet`: does the machine-checked snapshot block in
   `docs/HANDOFF.md` still describe the data on the box?
 
@@ -180,9 +184,11 @@ the quote logger exists, `xm_data/` is part of every data commit.)
 | `SKIPPED (AUTO_DEPLOY=0)` | data-only mode | expected if you set it |
 | `SKIPPED - local code edits detected on server` | someone hand-edited code on the box | `cd /opt/gold && git status` → commit or `git checkout -- <file>` |
 | `ROLLED BACK (smoke=FAIL)` + 🚨 | the smoke gate failed after merging; code was reset to the pre-merge SHA | read `/tmp/autosync_smoke.log`, fix, re-merge |
-| `push FAILED` + ⚠️ | data is safe in a **local commit**, retried next run | fix git credentials on the box |
+| `ROLLED BACK (smoke=not run (no code change))` + 🚨 | **`git merge` itself failed — the smoke gate never ran.** `(no code change)` is only the variable's default label and is printed even when `.py` files changed (2026-10-26: 8 files incl. `engine.py`). Typical cause: an uncommitted edit to a tracked file the incoming change also touches — the hand-edit guard covers code paths only, so a **doc** slips through. The merge output is not logged, and the rollback's `git reset --hard` wipes the edit **and any live rows written since the data commit**. A stale-handoff line in the same digest is a *consequence* (the box kept the old `HANDOFF.md`) | re-run `sudo /opt/gold/tools/autosync.sh`: if it merges, the cause was transient. If not, `cd /opt/gold && git status --short && git merge origin/main` by hand shows the real reason. Review: `docs/REVIEW-2026-10-26-autosync-rollback-push-failed.md` |
+| `push FAILED` + ⚠️ | data is safe in a **local commit**, retried next run. Next to `ROLLED BACK` / `SKIPPED` it is the **consequence** — origin is ahead and the local branch was not merged, so the push is a non-fast-forward — not a credentials fault | fix the deploy first; the retry run pushes both. Only if it persists next to `deployed …` / `none`: fix git credentials on the box |
 | `engine service NOT FOUND - restart engine manually` + ⚠️ | `detect_service` found no systemd unit that references `/opt/gold` **and** `engine.py` | restart manually, or set `ENGINE_SERVICE=` in the crontab |
-| `engine active but status.json looks STALE` | the unit is up but has not written state for 3+ minutes | check `journalctl -u goldbot` |
+| `engine active but status.json looks STALE` | the unit is up but has not written state for 3+ minutes | check `journalctl -u goldbot` (**silent** — no 🚨/⚠️, see *Cadence*) |
+| `…; ENGINE SERVICE NOT ACTIVE` | merged, but the engine unit is not running after the restart | `systemctl status goldbot`, `journalctl -u goldbot -n 50` (**silent**, as above) |
 
 Machine-readable history: `/var/log/gold_autosync.log` (each run's `done.` line ends with
 `handoff=[…] xm=[…] boxalert=[…]`). Per-run detail: `/tmp/autosync_smoke.log`, `/tmp/autosync_check.log`,
