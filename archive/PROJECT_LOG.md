@@ -559,3 +559,15 @@ Record: `docs/ANALYSIS-2026-10-25-stop-hunt-markouts-and-clearance-grid.md`.
 
 **Docs updated.** `docs/HANDOFF.md` (`handoff_check.py --update` to collection 335, start-here note, era-timeline row, rewritten §1, §4 live table, §5, §6 items 0/1/3(h)/3(j)/6, §11 milestones), `docs/HANDOFF-HISTORY.md` (archived collection-334 §1 verbatim), `docs/PREREG-2026-10-25-gap-guard-daily-closure.md` (status header + §9 deploy & DST-refinement record), `docs/EXECUTION-PLAN.md` (baseline + timeline queue), `archive/PROJECT_LOG.md` (this entry).
 
+
+## 2026-10-26 (post-merge autosync) — PR #61 deployed (`d4686f8`); first attempt rolled back, push "failed" (incident review, docs only)
+
+**Trigger.** The 15:38 UTC digest: `🚨 deploy rolled back` + `⚠️ push to origin failed` (`data collection 351`, `smoke=not run (no code change)`, handoff `STALE +66.7 h`). User asked whether it was all good.
+
+**Finding.** Two forced autosync runs ~80 s apart. Run #1 (`fde881a`, 15:37:50): `git merge` of PR #61 (`0f7f71e`, merged 15:33:21) failed → rollback → the push was a non-fast-forward by construction. Run #2 (`fd2746e` 15:39:09 → merge **`d4686f8` 15:39:13 = the cutover**): merged, smoke passed, engine + dashboard restarted, everything pushed. **No data lost** (bar log 0 gaps > 90 s, quote logger unbroken, ledger #704–#711 contiguous, digest numbers reproduce to the cent), credentials fine, the stale-handoff line was a consequence of the rollback.
+
+**Verification.** `d4686f8`'s tree equals a clean re-merge of `fd2746e` + `0f7f71e`; replaying run #1's merge on a clean tree exits 0 (not a textual conflict); `smoke_test.py` 484/0; 218 unit tests OK; `check_data` 0 fail/8 warn; `check_structural_stop` PASS (n=214); gap-ride 3/2 unchanged; live gate CLOSED 9/8/3. `engine.py` AST diff vs `dc330a5`: 103/112 definitions identical, paper path unchanged (only `__init__` + `save_status` touch it: a fail-open read and the new `live_last_candle_ts: null` key). Startup of the real engine on the real data is identical old vs new; every `status.json` consumer accepts the key.
+
+**Open.** Why run #1's merge failed is unconfirmed — `autosync.sh` discards `git merge` output and the rollback's `git reset --hard` erases the evidence. Sandbox reproduction with the real script: an uncommitted edit to a tracked *doc* (the hand-edit guard covers code paths only) yields the exact digest and a succeeding retry. The engine after the restart is not yet visible in the repo (next data commit 18:00) and a dead engine after a successful merge is **silent** (not an incident). Seven `autosync.sh` defects (D1–D7: misleading smoke label, discarded merge/push output, destructive `reset --hard` rollback, guard ignores docs, silent engine-down, redundant restart, cosmetic redirect) are proposed in the review, **none applied**.
+
+**Docs updated.** `docs/REVIEW-2026-10-26-autosync-rollback-push-failed.md` (new), `docs/AUTOSYNC.md` (rollback-without-smoke row, real meaning of `push FAILED`, `ENGINE SERVICE NOT ACTIVE` row, "not an incident" note), `docs/HANDOFF.md` era timeline. No code, parameter, ledger or deploy change.
