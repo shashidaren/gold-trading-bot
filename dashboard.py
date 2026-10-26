@@ -3,6 +3,7 @@ import csv
 import json
 from datetime import datetime, timezone
 from flask import Flask, redirect, render_template_string, request, url_for
+from jinja2.filters import do_format as _JINJA_DO_FORMAT
 
 try:  # display-only helper library (see pressure.py's docstring)
     import pressure as PR
@@ -22,6 +23,27 @@ else:
 
 
 app = Flask(__name__)
+
+
+def _safe_format(value, *args, **kwargs):
+    """`format` filter that renders a missing number as '—' instead of a 500.
+
+    `format` is this template's most common way to print a number, and several
+    read layers legitimately return None when a window has no data — e.g. the
+    24h chop read with no completed breaks (`recent_false_break_pct`) or the
+    outlook's median hold before any era trade has closed (`hold_median_min`).
+    Jinja's built-in raises `TypeError: must be real number, not NoneType`, which
+    turns a display-only panel into a full-page 500. Returning '—' is exactly
+    what the explicit `x is not none else '—'` guards elsewhere do, so a missing
+    number can never take the page down. Non-None values are untouched.
+    """
+    if args and args[0] is None:
+        return "—"
+    return _JINJA_DO_FORMAT(value, *args, **kwargs)
+
+
+app.jinja_env.filters["format"] = _safe_format
+
 
 DATA_DIR = os.getenv("GOLD_DATA_DIR", "/opt/gold")
 LOG_FILE_PATH = os.getenv("GOLD_LOG_FILE", os.path.join(DATA_DIR, "forward_test_log.csv"))
@@ -526,8 +548,8 @@ HTML_TEMPLATE = """
                 <div class="text-sm text-slate-300 mt-1">{{ bx.chop.headline }} — {{ bx.chop.detail }}</div>
                 <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mt-3 text-xs">
                     <div><div class="text-slate-500">breaks, last 24 h</div><div class="font-mono text-slate-200">{{ bx.chop.recent_breaks }}</div></div>
-                    <div><div class="text-slate-500">closed back inside</div><div class="font-mono text-slate-200">{{ bx.chop.recent_false_breaks }} ({{ '%.0f'|format(bx.chop.recent_false_break_pct) }}%)</div></div>
-                    <div><div class="text-slate-500">baseline in view</div><div class="font-mono text-slate-200">{{ '%.0f'|format(bx.chop.baseline_false_break_pct) }}% <span class="text-slate-500">of {{ bx.chop.baseline_breaks }}</span></div></div>
+                    <div><div class="text-slate-500">closed back inside</div><div class="font-mono text-slate-200">{{ bx.chop.recent_false_breaks }} ({{ '%.0f'|format(bx.chop.recent_false_break_pct) if bx.chop.recent_false_break_pct is not none else '—' }}%)</div></div>
+                    <div><div class="text-slate-500">baseline in view</div><div class="font-mono text-slate-200">{{ '%.0f'|format(bx.chop.baseline_false_break_pct) if bx.chop.baseline_false_break_pct is not none else '—' }}% <span class="text-slate-500">of {{ bx.chop.baseline_breaks }}</span></div></div>
                     <div><div class="text-slate-500">efficiency 60 / 240 bars</div><div class="font-mono text-slate-200">{{ '%.2f'|format(bx.chop.eff_60) if bx.chop.eff_60 is not none else '—' }} / {{ '%.2f'|format(bx.chop.eff_240) if bx.chop.eff_240 is not none else '—' }}</div></div>
                     <div><div class="text-slate-500">20-bar box now</div><div class="font-mono text-slate-200">{{ '%.1f'|format(bx.chop.box_width_atr) if bx.chop.box_width_atr else '—' }} ATR <span class="text-slate-500">vs {{ '%.1f'|format(bx.chop.box_width_median_atr) if bx.chop.box_width_median_atr else '—' }} median</span></div></div>
                     <div><div class="text-slate-500">span measured</div><div class="font-mono text-slate-200">{{ bx.chop.baseline_span_days }} days</div></div>

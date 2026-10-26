@@ -52,6 +52,35 @@ class DashboardContextTests(unittest.TestCase):
         for title in ('Risk now', 'Market map', 'Costed evidence'):
             self.assertIn(title, response.get_data(as_text=True))
 
+    def test_format_filter_renders_a_missing_number_as_dash(self):
+        # The template's `format` filter must not raise on the None a read layer
+        # returns for an empty window (2026-10-26 dashboard 500s).
+        import dashboard
+        self.assertEqual(dashboard._safe_format("%.0f", None), "—")
+        self.assertEqual(dashboard._safe_format("%.2f", 3.14159), "3.14")
+
+    def test_render_survives_an_open_trade_outlook(self):
+        # Before any era trade has closed, signal_outlook() has no hold to take a
+        # median of, so hold_median_min is None. The template used to pass that
+        # straight into '%.0f'|format() -> 500. The page must still render.
+        os.environ['GOLD_DATA_DIR'] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        import dashboard
+        dashboard._outlook_cache.update({"key": None, "value": None, "at": 0.0})
+        real_base = dashboard._outlook_base
+
+        def base_without_closed_holds():
+            value = dict(real_base())
+            value["hold_median_min"] = None
+            return value
+
+        dashboard._outlook_base = base_without_closed_holds
+        try:
+            response = dashboard.app.test_client().get('/')
+        finally:
+            dashboard._outlook_base = real_base
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Strong-signal outlook", response.get_data(as_text=True))
+
 
 
 class BoxReadTests(unittest.TestCase):
@@ -191,6 +220,28 @@ class BoxReadTests(unittest.TestCase):
         # every timeframe link keeps the tab
         for tf in ("1", "5", "15"):
             self.assertIn(f"?tab=chart&tf={tf}", html)
+
+    def test_render_survives_a_chop_window_with_no_breaks(self):
+        # Regression: with 0 completed breaks in the last 24 h, box_chop() has no
+        # recent sample and returns recent_false_break_pct=None; the template fed
+        # that None straight into '%.0f'|format() -> 500. The page must render.
+        os.environ["GOLD_DATA_DIR"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        import dashboard
+        dashboard._box_cache.update({"key": None, "geom": None, "regime": None})
+        real_regime = dashboard.PR.box_regime
+
+        def regime_with_empty_recent(rows, window_bars=dashboard.PR.BOX_CHOP_WINDOW_BARS):
+            regime = real_regime(rows, window_bars=window_bars)
+            regime["chop"] = dict(regime["chop"], recent_false_break_pct=None)
+            return regime
+
+        dashboard.PR.box_regime = regime_with_empty_recent
+        try:
+            response = dashboard.app.test_client().get("/")
+        finally:
+            dashboard.PR.box_regime = real_regime
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Is the tape choppy?", response.get_data(as_text=True))
 
 
 if __name__ == '__main__':
