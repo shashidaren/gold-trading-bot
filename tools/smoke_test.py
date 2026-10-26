@@ -3595,6 +3595,138 @@ check("Z: non-DST schedule change converges within 3 breaks (no 30-day modal lag
 shutil.rmtree(tmp_z, ignore_errors=True)
 
 
+# --- Scenario AA -----------------------------------------------------------
+print("\nScenario AA: LIVE-path hardening (2026-10-26) — arm gate, filling spec, "
+      "closed-bar dedup; paper path unchanged")
+import inspect  # noqa: E402
+
+_tmp_aa = tempfile.mkdtemp(prefix="gold_smoke_aa_")
+_halt_aa = os.path.join(_tmp_aa, "LIVE_HALT")
+
+# (1) Arming must fail closed, and a kill-switch file must override it.
+check("AA: an unarmed LIVE process cannot place a real order",
+      engine.live_armed(env={}, halt_path=_halt_aa) is False)
+check("AA: GOLD_LIVE_ARMED=0 cannot place a real order",
+      engine.live_armed(env={engine.LIVE_ARM_ENV: "0"}, halt_path=_halt_aa) is False)
+check("AA: explicit arming with no halt file allows the order path",
+      engine.live_armed(env={engine.LIVE_ARM_ENV: "1"}, halt_path=_halt_aa) is True)
+with open(_halt_aa, "w") as _f_aa:
+    _f_aa.write("stop")
+check("AA: the kill-switch file overrides arming",
+      engine.live_armed(env={engine.LIVE_ARM_ENV: "1"}, halt_path=_halt_aa) is False)
+
+
+class _FakeMT5AA:
+    ORDER_FILLING_FOK = 1
+    ORDER_FILLING_IOC = 2
+    TIMEFRAME_M1 = 1
+
+    def __init__(self, ts):
+        self.ts = ts
+        self.calls = []
+        self.shutdowns = 0
+
+    def copy_rates_from_pos(self, symbol, timeframe, pos, count):
+        self.calls.append((symbol, timeframe, pos, count))
+        return [{"time": self.ts, "open": 4000.0, "high": 4001.2,
+                 "low": 3999.1, "close": 4000.5, "tick_volume": 30}]
+
+    def shutdown(self):
+        self.shutdowns += 1
+
+
+class _SymAA:
+    def __init__(self, mode):
+        self.filling_mode = mode
+        self.point = 0.01
+
+
+# (2) Filling policy must come from the symbol, never a guess. XM is IOC-only.
+for _mode, _want in ((1, 1), (2, 2), (3, 1), (0, None), (4, None)):
+    check(f"AA: filling_mode={_mode} resolves to {_want}",
+          engine.resolve_order_filling(_FakeMT5AA, _SymAA(_mode)) == _want)
+with open(os.path.join(ROOT, "xm_data", "symbol_spec.json")) as _f_aa:
+    _spec_aa = json.load(_f_aa)
+check("AA: captured XM spec is IOC-only and FOK is never sent",
+      _spec_aa["symbol_info"]["filling_mode"] == 2
+      and engine.resolve_order_filling(_FakeMT5AA, _SymAA(2)) == 2)
+
+_run_live_src_aa = inspect.getsource(engine.GoldEngine.run_live)
+_order_src_aa = inspect.getsource(engine.GoldEngine.execute_live_trade)
+check("AA: run_live reads the last CLOSED bar, never the forming one",
+      "TIMEFRAME_M1, 1, 1" in _run_live_src_aa
+      and "TIMEFRAME_M1, 0, 1" not in _run_live_src_aa)
+check("AA: run_live dedups through mt5_next_candle",
+      "self.mt5_next_candle(rates, last_ts)" in _run_live_src_aa)
+check("AA: execute_live_trade re-checks the arm gate before any order",
+      "live_armed()" in _order_src_aa)
+check("AA: the paper strategy is byte-for-byte unchanged by LIVE hardening",
+      engine.TRADING_MODE == "FORWARD_TEST" and engine.SL_CLEAR_ATR == 0.5
+      and engine.GUARD_CUTOFF_MIN == 30 and engine.BE_TRIGGER_R == 0.75)
+
+
+# (3) Functional loop: one closed bar -> exactly one evaluation, persisted
+#     watermark, and NO re-evaluation after a simulated restart. No real MT5.
+class _LiveStubAA:
+    mt5_next_candle = engine.GoldEngine.mt5_next_candle
+
+    def __init__(self, watermark=None):
+        self._live_last_bar_ts = watermark
+        self.evals = []
+
+    def evaluate_candle(self, o, h, l, c, tick_count):
+        self.evals.append((o, h, l, c, tick_count))
+
+
+_ts_aa = 1793023140
+_fake_aa = _FakeMT5AA(_ts_aa)
+_real_mt5_aa = getattr(engine, "mt5", None)
+_real_armed_aa = engine.live_armed
+_real_sleep_aa = engine.time.sleep
+engine.mt5 = _fake_aa
+engine.live_armed = lambda: False          # disarmed: no order can be attempted
+try:
+    _sleeps_aa = {"n": 0}
+
+    def _sleep_until_interrupt_aa(_seconds):
+        _sleeps_aa["n"] += 1
+        if _sleeps_aa["n"] >= 2:
+            raise KeyboardInterrupt
+
+    engine.time.sleep = _sleep_until_interrupt_aa
+    _stub_aa = _LiveStubAA()
+    engine.GoldEngine.run_live(_stub_aa)
+    check("AA: LIVE loop evaluates a closed bar exactly once",
+          len(_stub_aa.evals) == 1, f"evals={len(_stub_aa.evals)}")
+    check("AA: the LIVE watermark advances to that bar",
+          _stub_aa._live_last_bar_ts == _ts_aa)
+    check("AA: every copy_rates_from_pos call asks for position 1 (closed)",
+          all(call[2] == 1 for call in _fake_aa.calls))
+
+    # Restart: the watermark must suppress the same bar.
+    _sleeps2_aa = {"n": 0}
+
+    def _sleep_interrupt_now_aa(_seconds):
+        _sleeps2_aa["n"] += 1
+        raise KeyboardInterrupt
+
+    engine.time.sleep = _sleep_interrupt_now_aa
+    _stub2_aa = _LiveStubAA(watermark=_ts_aa)
+    engine.GoldEngine.run_live(_stub2_aa)
+    check("AA: a restart does NOT re-evaluate the boundary closed bar",
+          _stub2_aa.evals == [], f"evals={_stub2_aa.evals}")
+    check("AA: KeyboardInterrupt shuts the terminal down cleanly",
+          _fake_aa.shutdowns == 2)
+finally:
+    engine.time.sleep = _real_sleep_aa
+    engine.live_armed = _real_armed_aa
+    if _real_mt5_aa is None:
+        delattr(engine, "mt5")
+    else:
+        engine.mt5 = _real_mt5_aa
+shutil.rmtree(_tmp_aa, ignore_errors=True)
+
+
 print()
 if FAILURES:
     print(f"SMOKE TEST FAILED: {FAILURES}")
