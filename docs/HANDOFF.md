@@ -136,6 +136,7 @@ ritual before drawing any conclusion. The list below is the detailed version.
 | Engine regression | `python3 tools/smoke_test.py` (A–Z + AA) |
 | **LIVE execution gate scorecard** | `python3 tools/live_readiness.py` (`--json`, `--strict` → exit 1 while closed) — 20 checks; a PASS is a code check, not a demo test |
 | LIVE-path unit tests | `python3 tools/test_live_readiness.py` (18) |
+| **How many days to live? what's done / pending?** | `python3 readiness.py` (`--json`) — the same read the dashboard's **🚦 Readiness** tab renders (`?tab=readiness`, `?readiness=refresh`); `python3 tools/test_readiness_tab.py` (16). Estimates, never deadlines or a profit forecast |
 | Force autosync now | `sudo /opt/gold/tools/autosync.sh` |
 | Live state | `cat /opt/gold/status.json` |
 | Engine service | `systemctl status goldbot` (or unit that runs `engine.py` under `/opt/gold`) |
@@ -962,13 +963,21 @@ tools/             other analysis / integrity / report scripts (not on the hot p
   2026-10-23 the unit has **two jobs**: the rate-limited break notice and the twice-daily session
   watch plan (07:00 / 13:00 UTC; `--no-plan` drops the second). Volume measured at **5.1 messages/day**
   (`tools/box_report.py --alert-scan`); `GOLD_BOX_ALERT_DAILY_CAP` is the knob that binds.
-- A `dashboard.py` / `pressure.py` / `chart.py` / `goldbot/` change is a **dashboard-only** deploy
+- A `dashboard.py` / `pressure.py` / `chart.py` / `readiness.py` / `tools/live_readiness.py` /
+  `goldbot/` change is a **dashboard-only** deploy
   (`DASH_CHANGED`): the dashboard service restarts, the `goldbot` engine unit does not. Main tabs are
-  `Simple`, `Journal`, `Chart & Placement`, `Boxes & Timing` and `Full`; there is no separate manual
-  workspace any more. Tab preference uses `localStorage` + `?tab=`; `?tf=1|5|15` picks the chart
+  `Simple`, `Journal`, `Chart & Placement`, `Boxes & Timing`, **`Readiness`** and `Full`; there is no separate
+  manual workspace any more. Tab preference uses `localStorage` + `?tab=`; `?tf=1|5|15` picks the chart
   timeframe. For a local render: `GOLD_DATA_DIR=. python3 dashboard.py` (also `GOLD_LOG_FILE`,
   `GOLD_TRADES_FILE`, `GOLD_SKIP_FILE`, `GOLD_STATUS_FILE`); defaults stay `/opt/gold/*`.
   `goldbot/` is never deployed as a service — it has no daemon and no order path.
+- **🚦 Readiness tab (2026-10-26, `?tab=readiness`, display-only):** the owner's *when* reference. It shows
+  elapsed forward-test / structural-stop-era days, days left to the cost sample, US DST cross-check and
+  pre-registered window, plus the conditional 2–4 month edge review and 6–12 month G2 review; a dated
+  **completed** milestone list and the **pending** owner/host blockers; and the live 20-check
+  `tools/live_readiness.py` scorecard. `readiness.py` is stdlib-only, imports no engine module, writes
+  nothing and cannot open the LIVE gate. Its view is cached 5 min (`?readiness=refresh` forces a new read);
+  same read in the terminal: `python3 readiness.py` / `--json`. Tests: `tools/test_readiness_tab.py` (16).
 - Logs: `journalctl -u goldbot -f`; autosync log `/var/log/gold_autosync.log`.
 
 ## 11. How to keep this file honest

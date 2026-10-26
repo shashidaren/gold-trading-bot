@@ -1,6 +1,7 @@
 import os
 import csv
 import json
+import time
 from datetime import datetime, timezone
 from flask import Flask, redirect, render_template_string, request, url_for
 from jinja2.filters import do_format as _JINJA_DO_FORMAT
@@ -20,6 +21,14 @@ except Exception as _exc:  # never take the dashboard down over the read layer
     _CH_IMPORT_ERROR = str(_exc)
 else:
     _CH_IMPORT_ERROR = ""
+
+try:  # display-only readiness timeline (see readiness.py's docstring)
+    import readiness as RD
+except Exception as _exc:  # never take the dashboard down over the read layer
+    RD = None
+    _RD_IMPORT_ERROR = str(_exc)
+else:
+    _RD_IMPORT_ERROR = ""
 
 
 app = Flask(__name__)
@@ -116,8 +125,9 @@ HTML_TEMPLATE = """
             <button id="tab-journal" onclick="showTab('journal')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📒 Journal</button>
             <button id="tab-boxes" onclick="showTab('boxes')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📦 Boxes &amp; Timing</button>
             <button id="tab-chart" onclick="showTab('chart')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">🧭 Chart &amp; Placement</button>
+            <button id="tab-readiness" onclick="showTab('readiness')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">🚦 Readiness</button>
             <button id="tab-details" onclick="showTab('details')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📊 Full Dashboard</button>
-            <span class="ml-auto text-[11px] text-slate-500 hidden md:inline">Simple is the mood · Chart shows <em>where</em> a trade would go · Boxes is the checklist · Full shows every gate. All <span class="text-slate-300">paper only</span> — no real orders.</span>
+            <span class="ml-auto text-[11px] text-slate-500 hidden md:inline">Simple is the mood · Chart shows <em>where</em> a trade would go · Boxes is the checklist · Readiness is the <em>when</em> · Full shows every gate. All <span class="text-slate-300">paper only</span> — no real orders.</span>
         </div>
 
         <!-- ================= SIMPLE TAB ================= -->
@@ -894,6 +904,169 @@ HTML_TEMPLATE = """
             {% endif %}
         </div>
         <!-- ================= END CHART & PLACEMENT TAB ================= -->
+
+
+        <!-- ================= READINESS TAB — timeline in days, done vs pending ================= -->
+        <div id="panel-readiness" class="hidden">
+            {% if ctx.readiness and ctx.readiness.ok %}
+            {% set r = ctx.readiness %}
+            {% set g = r.gate %}
+
+            <!-- Gate card -->
+            <div class="rounded-2xl border p-5 mb-5
+                {% if g.open %} bg-emerald-950/30 border-emerald-700 {% else %} bg-rose-950/30 border-rose-700 {% endif %}">
+                <div class="flex flex-col md:flex-row md:items-center gap-4">
+                    <div class="text-4xl">{% if g.open %}✅{% else %}🚦{% endif %}</div>
+                    <div class="flex-1">
+                        <h2 class="text-xl font-semibold text-slate-100">Live readiness — timeline in days</h2>
+                        <div class="text-sm text-slate-300 mt-1">
+                            LIVE GATE <span class="font-bold {% if g.open %}text-emerald-300{% else %}text-rose-300{% endif %}">{{ g.label }}</span>
+                            · {{ g.headline }}
+                        </div>
+                        <div class="text-xs text-slate-400 mt-2">
+                            Checks: <span class="text-emerald-300">{{ g.counts.pass }} PASS</span> ·
+                            <span class="text-amber-300">{{ g.counts.todo }} TODO</span> ·
+                            <span class="text-slate-300">{{ g.counts.manual }} MANUAL</span>
+                            ({{ g.counts.total }} total) · as of {{ r.as_of }}
+                        </div>
+                        <div class="text-xs text-slate-400 mt-1">
+                            Elapsed: forward test <span class="font-mono text-slate-200">{{ r.elapsed.forward_test_days }} d</span> ·
+                            structural-stop era <span class="font-mono text-slate-200">{{ r.elapsed.era_days }} d</span> ·
+                            since full audit <span class="font-mono text-slate-200">{{ r.elapsed.since_audit_days }} d</span> ·
+                            newest synced data {{ r.elapsed.as_of_data }}
+                        </div>
+                        <div class="text-xs text-slate-400 mt-1">
+                            Cost sample <span class="font-mono text-slate-200">{{ r.progress.days_done }}/{{ r.progress.days_target }} days,
+                            {{ r.progress.weekends_done }}/{{ r.progress.weekends_target }} weekends</span> ·
+                            median spread <span class="text-amber-300">{{ r.progress.median_spread_text }}</span> vs registered
+                            <span class="text-slate-200">{{ r.progress.assumed_cost_text }}</span> ·
+                            broker offsets <span class="font-mono text-slate-200">{{ r.progress.offsets|join(', ') }}</span>
+                        </div>
+                    </div>
+                    <div class="text-right text-xs text-slate-400 space-y-1 shrink-0">
+                        <div>CLI: <span class="font-mono text-slate-300">python3 readiness.py</span></div>
+                        <div>gate: <span class="font-mono text-slate-300">tools/live_readiness.py</span></div>
+                        <div>queue: <span class="font-mono text-slate-300">docs/EXECUTION-PLAN.md</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Timeline in days -->
+            <div class="bg-slate-800 rounded-xl border border-slate-700 p-4 mb-5">
+                <h3 class="text-sm font-semibold text-amber-300 mb-3">⏳ Timeline in days — estimates, not deadlines</h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-xs">
+                        <thead class="text-slate-400 border-b border-slate-700">
+                            <tr><th class="text-left py-2 pr-3">Days</th><th class="text-left py-2 pr-3">Gate / phase</th>
+                                <th class="text-left py-2 pr-3">State</th><th class="text-left py-2 pr-3">Target</th>
+                                <th class="text-left py-2">What it means</th></tr>
+                        </thead>
+                        <tbody>
+                        {% for t in r.timeline %}
+                            <tr class="border-b border-slate-700/60">
+                                <td class="py-2 pr-3 font-mono whitespace-nowrap
+                                    {% if t.state == 'done' %}text-emerald-300{% elif t.state == 'blocked' %}text-rose-300
+                                    {% elif t.state == 'active' %}text-amber-300{% else %}text-slate-300{% endif %}">{{ t.days_text }}</td>
+                                <td class="py-2 pr-3 text-slate-100">{{ t.label }}</td>
+                                <td class="py-2 pr-3">
+                                    <span class="px-1.5 py-0.5 rounded text-[10px]
+                                        {% if t.tone == 'ok' %}bg-emerald-900/60 text-emerald-200
+                                        {% elif t.tone == 'warn' %}bg-amber-900/60 text-amber-200
+                                        {% elif t.tone == 'block' %}bg-rose-900/60 text-rose-200
+                                        {% else %}bg-slate-700 text-slate-300{% endif %}">{{ t.state }}</span>
+                                </td>
+                                <td class="py-2 pr-3 font-mono text-slate-300 whitespace-nowrap">{{ t.target }}</td>
+                                <td class="py-2 text-slate-400">{{ t.detail }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
+                <!-- Completed -->
+                <div class="bg-slate-800 rounded-xl border border-slate-700 p-4">
+                    <h3 class="text-sm font-semibold text-emerald-300 mb-3">✅ Completed ({{ r.completed|length }})</h3>
+                    <div class="space-y-2 max-h-[520px] overflow-y-auto pr-1">
+                        {% for m in r.completed %}
+                        <div class="border-l-2 border-emerald-600/70 pl-3 py-1">
+                            <div class="text-xs font-mono text-slate-500">{{ m.date }}</div>
+                            <div class="text-sm text-slate-100">{{ m.title }}</div>
+                            <div class="text-xs text-slate-400">{{ m.detail }}</div>
+                            <div class="text-[10px] font-mono text-slate-500 mt-0.5">{{ m.doc }}</div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <!-- Pending / blockers -->
+                <div class="bg-slate-800 rounded-xl border border-slate-700 p-4">
+                    <h3 class="text-sm font-semibold text-rose-300 mb-3">⛔ Pending — owner / host blockers ({{ r.blockers|length }})</h3>
+                    <div class="space-y-2 mb-4">
+                        {% for b in r.blockers %}
+                        <div class="border-l-2 border-rose-600/70 pl-3 py-1">
+                            <div class="text-xs font-mono text-rose-300">{{ b.who }}</div>
+                            <div class="text-sm text-slate-100">{{ b.what }}</div>
+                            <div class="text-xs text-slate-400">{{ b.why }}</div>
+                            <div class="text-[10px] font-mono text-slate-500 mt-0.5">{{ b.doc }}</div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <h4 class="text-xs font-semibold text-amber-300 mb-2">Open LIVE-gate checks ({{ r.pending_checks|length }})</h4>
+                    <div class="space-y-1.5 max-h-[320px] overflow-y-auto pr-1">
+                        {% for c in r.pending_checks %}
+                        <div class="text-xs border border-slate-700 rounded px-2 py-1.5">
+                            <div>
+                                <span class="px-1 py-0.5 rounded text-[10px] font-mono
+                                    {% if c.status == 'MANUAL' %}bg-slate-700 text-slate-200{% else %}bg-amber-900/60 text-amber-200{% endif %}">{{ c.status }}</span>
+                                <span class="font-mono text-slate-200 ml-1">{{ c.id }}</span>
+                                <span class="text-slate-400">— {{ c.title }}</span>
+                            </div>
+                            <div class="text-slate-500 mt-0.5">{{ c.evidence }}</div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- All checks -->
+            <div class="bg-slate-800 rounded-xl border border-slate-700 p-4 mb-5">
+                <h3 class="text-sm font-semibold text-slate-200 mb-3">🧪 All {{ r.checks|length }} LIVE-gate checks (read-only)</h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-xs">
+                        <thead class="text-slate-400 border-b border-slate-700">
+                            <tr><th class="text-left py-2 pr-3">Status</th><th class="text-left py-2 pr-3">Area</th>
+                                <th class="text-left py-2 pr-3">Check</th><th class="text-left py-2">Evidence / next action</th></tr>
+                        </thead>
+                        <tbody>
+                        {% for c in r.checks %}
+                            <tr class="border-b border-slate-700/60">
+                                <td class="py-1.5 pr-3 font-mono
+                                    {% if c.status == 'PASS' %}text-emerald-300{% elif c.status == 'TODO' %}text-amber-300{% else %}text-slate-300{% endif %}">{{ c.status }}</td>
+                                <td class="py-1.5 pr-3 text-slate-400">{{ c.area }}</td>
+                                <td class="py-1.5 pr-3 text-slate-100">{{ c.id }}</td>
+                                <td class="py-1.5 text-slate-400">{{ c.evidence }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="text-xs text-slate-500 border-t border-slate-800 pt-3 mb-6">
+                {{ r.disclaimer }}
+                <div class="mt-2 font-mono">Sources: {{ r.sources|join(' · ') }}</div>
+            </div>
+
+            {% else %}
+            <div class="bg-amber-900/30 border border-amber-700 rounded-xl p-4 text-sm text-amber-200">
+                Readiness view unavailable — {{ (ctx.readiness.reason if ctx.readiness else 'no context yet') }}.
+                Run <span class="font-mono">python3 readiness.py</span> to see the same read in the terminal.
+            </div>
+            {% endif %}
+        </div>
+        <!-- ================= END READINESS TAB ================= -->
 
 
         <!-- ================= DETAILS TAB (original dashboard) ================= -->
@@ -1682,7 +1855,7 @@ HTML_TEMPLATE = """
 
     </div>
     <script>
-    var TABS = ['simple', 'journal', 'chart', 'boxes', 'details'];
+    var TABS = ['simple', 'journal', 'chart', 'boxes', 'readiness', 'details'];
     function showTab(name) {
         TABS.forEach(function(t) {
             var panel = document.getElementById('panel-' + t);
@@ -1703,6 +1876,9 @@ HTML_TEMPLATE = """
         try {
             var url = new URL(window.location.href);
             url.searchParams.set('tab', name);
+            // ?readiness=refresh is one-shot: the 15s meta refresh must not
+            // replay it and re-scan the quote CSVs on every page load.
+            url.searchParams.delete('readiness');
             window.history.replaceState(null, '', url.pathname + url.search + url.hash);
         } catch(e) {}
     }
@@ -1712,7 +1888,7 @@ HTML_TEMPLATE = """
             var saved = localStorage.getItem('gold_tab');
             if (TABS.indexOf(saved) >= 0) start = saved;
         } catch(e) {}
-        // Also allow ?tab=simple|chart|boxes|details deep links
+        // Also allow ?tab=simple|journal|chart|boxes|readiness|details deep links
         try {
             var params = new URLSearchParams(window.location.search);
             var wanted = params.get('tab');
@@ -1891,6 +2067,30 @@ def pressure_context():
 
 _box_cache = {"key": None, "geom": None, "regime": None}
 _chart_cache = {"key": None, "group": None, "view": None}
+_readiness_cache = {"at": 0.0, "view": None}
+READINESS_TTL_SECONDS = 300
+
+
+def readiness_context(force=False):
+    """Read-only readiness timeline for the Readiness tab (never a trade gate).
+
+    The 20-check scorecard re-reads the quote CSVs, so cache it for five
+    minutes; a page refresh does not change a days-scale timeline.  Nothing
+    here writes state or imports the engine — same contract as pressure.py.
+    """
+    if RD is None:
+        return {"ok": False, "reason": f"readiness.py unavailable: {_RD_IMPORT_ERROR}"}
+    now_ts = time.time()
+    if (not force and _readiness_cache["view"] is not None
+            and now_ts - _readiness_cache["at"] < READINESS_TTL_SECONDS):
+        return _readiness_cache["view"]
+    try:
+        view = RD.readiness_view()
+    except Exception as exc:
+        return {"ok": False, "reason": f"readiness read failed: {exc}"}
+    _readiness_cache["view"] = view
+    _readiness_cache["at"] = now_ts
+    return view
 
 
 def box_context(portfolio=None, feed=None):
@@ -2138,6 +2338,10 @@ def index():
     trades = recent_trades(TRADES_FILE_PATH, n=20)
     eras = compute_era_stats(TRADES_FILE_PATH)
     ctx = pressure_context()
+    # Readiness tab: days-scale reference view. Independent of pressure.py so a
+    # broken/missing pressure read can never hide the readiness timeline.
+    ctx["readiness"] = readiness_context(
+        force=request.args.get("readiness") == "refresh")
     chart_tf = None
     try:
         chart_tf = int(request.args.get("tf") or 0) or None

@@ -7,6 +7,12 @@
 Full audit of the current state: **`docs/REVIEW-2026-10-26-full-system-audit.md`**.
 Current state + operating rules: **`docs/HANDOFF.md`**. Exact experiment thresholds stay in their dated pre-registrations/reviews; this plan must never replace or relax them.
 
+**Owner's quick view (display-only):** the dashboard's 🚦 **Readiness** tab (`?tab=readiness`) or
+`python3 readiness.py` renders §3's queue as a **timeline in days**, §4's completed milestones and the
+**pending** owner/host blockers, alongside the live `tools/live_readiness.py` scorecard. It mirrors this
+plan — this file stays canonical. Day counts are conditional estimates, **not deadlines**, not a profit
+forecast, and never a gate: the tab writes no state and cannot authorise or place a live trade.
+
 ---
 
 ## 0. What the phrase means (binding)

@@ -185,50 +185,72 @@ def code_checks(root=ROOT):
     return out
 
 
-def data_checks(root=ROOT):
+def quote_progress(root=ROOT):
+    """Structured cost-sample progress — ONE quote read, shared with the dashboard tab.
+
+    Everything here is a measurement of `xm_data/`; nothing is inferred or written.
+    `newest_ts` is a UTC epoch float (or None). Kept in this tool so the CLI
+    scorecard and the readiness tab can never disagree about the sample target.
+    """
+    qdir = os.path.join(root, "xm_data")
+    import xm_quote_report as QR  # stdlib-only, read-only
+    samples, bad, files = QR.load_quotes(qdir)
+    cov = QR.coverage(samples)
+    good = sorted(s.spread for s in samples if QR.usable(s))
+    spec = QR.load_spec(qdir) or {}
+    return dict(
+        complete_days=len(cov["complete"]) if cov else 0,
+        weekends=len(cov["weekends"]) if cov else 0,
+        target_days=getattr(QR, "TARGET_DAYS", 14),
+        target_weekends=getattr(QR, "TARGET_WEEKENDS", 2),
+        rows=len(samples),
+        files=files,
+        malformed=bad,
+        newest_ts=max((s.t for s in samples), default=None),
+        median_spread=QR.pct(good, .5) if good else None,
+        offsets=sorted({s.off for s in samples if getattr(s, "off", None) is not None}),
+        spec=spec,
+        filling_mode=(spec.get("symbol_info") or {}).get("filling_mode"),
+        filling_flags=(spec.get("decoded") or {}).get("filling_allowed_flags"),
+    )
+
+
+def data_checks(root=ROOT, progress=None):
     """Evidence checks from the checked-in quote/spec data (read-only)."""
     out = []
-    qdir = os.path.join(root, "xm_data")
     try:
-        import xm_quote_report as QR  # stdlib-only, read-only
-        import mt5_quotes as Q
-        samples, _bad, _files = QR.load_quotes(qdir)
-        cov = QR.coverage(samples)
-        good = sorted(s.spread for s in samples if QR.usable(s))
-        offsets = sorted({s.off for s in samples if getattr(s, "off", None) is not None})
-        spec = QR.load_spec(qdir) or {}
-        raw_filling = (spec.get("symbol_info") or {}).get("filling_mode")
+        pg = progress if progress is not None else quote_progress(root)
     except Exception as exc:  # a missing/invalid data dir is a TODO, never a crash
         out.append(_check("data_available", "data", "quote/spec data readable", TODO, str(exc)))
         return out
 
-    days = len(cov["complete"]) if cov else 0
-    weekends = len(cov["weekends"]) if cov else 0
-    target_days = getattr(QR, "TARGET_DAYS", 14)
-    target_weekends = getattr(QR, "TARGET_WEEKENDS", 2)
+    days, weekends = pg["complete_days"], pg["weekends"]
+    target_days, target_weekends = pg["target_days"], pg["target_weekends"]
     out.append(_check(
         "quote_sample", "data", f"cost sample {target_days} days / {target_weekends} weekends",
         PASS if days >= target_days and weekends >= target_weekends else TODO,
         f"{days}/{target_days} complete UTC days, {weekends}/{target_weekends} weekends; "
         f"keep the registered $0.40 round trip until met"))
 
-    med = QR.pct(good, .5) if good else None
+    med = pg["median_spread"]
+    offsets = pg["offsets"]
     out.append(_check(
         "dst_offsets", "data", "post-DST broker offset observed",
         PASS if len(offsets) >= 2 else TODO,
         f"observed server offsets (seconds): {offsets}"))
 
+    raw_filling = pg["filling_mode"]
     out.append(_check(
         "spec_filling", "data", "captured symbol filling policy",
         PASS if raw_filling is not None else TODO,
         f"filling_mode={raw_filling} (1=FOK, 2=IOC, 4=BOC) — "
-        f"decoded {QR.load_spec(qdir).get('decoded', {}).get('filling_allowed_flags')}"))
+        f"decoded {pg['filling_flags']}"))
 
     # The logger already allow-lists what it writes. Only the `account` block can
     # carry an identifier; `terminal.name` is a product name, not an account id.
     forbidden = {"login", "server", "balance", "password", "token", "investor",
                  "email", "broker", "account_name"}
-    account = spec.get("account") or {}
+    account = (pg["spec"] or {}).get("account") or {}
     hits = sorted(k for k in account if any(f in k.lower() for f in forbidden))
     out.append(_check(
         "no_account_ids", "data", "no account identifiers in the repo",
@@ -262,6 +284,15 @@ def data_checks(root=ROOT):
 
 def all_checks(root=ROOT):
     return code_checks(root) + data_checks(root)
+
+
+def snapshot(root=ROOT):
+    """(checks, progress) with ONE quote read — the dashboard tab's entry point."""
+    try:
+        pg = quote_progress(root)
+    except Exception:
+        pg = None
+    return code_checks(root) + data_checks(root, progress=pg), pg
 
 
 def gate_open(checks):
