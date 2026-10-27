@@ -1,8 +1,8 @@
-# PREREG (DRAFT) — `structstop1.5`: one-variable stop-clearance window
+# PREREG — `structstop1.5`: one-variable stop-clearance window **REGISTERED 2026-10-27, NOT YET DEPLOYED**
 
 **Date:** 2026-10-26 ~14:15 UTC
 **Data used to write the bar:** collection 349, 709 closed trades, struct-stop era n=212, log through `2026-10-26 11:59:07 UTC`.
-**Status:** **DRAFT — NOT REGISTERED, NOT DEPLOYED.** Owner sign-off is required before this becomes binding, because it **supersedes the literal response** to the fired §7 closure-gap trigger (`docs/ANALYSIS-2026-10-05-stop-loss-geometry.md` §7). No engine parameter has been changed. SL_CLEAR_ATR remains **0.5**.
+**Status:** **REGISTERED (owner sign-off 2026-10-27 ~13:17 UTC) — NOT DEPLOYED.** The owner chose branch **(A)** over the literal §7 revert, so from this line down this document is the binding bar for the `structstop1.5` window: it may not be edited, re-tuned or re-sliced after outcomes are seen (§2's own freeze rule: "no second variable, no re-slicing of eras, no threshold tuning after looking at outcomes"; a miss is reported as a miss). **Deployment is a separate step (A2)** and is still gated on there being no open trade on the host; `engine.SL_CLEAR_ATR` is **0.5** until that commit lands, and `strategy_lab.CLEAR15_CUTOVER` stays **None** until the deploy happens, so no pre-change trade can be counted into the window. Sign-off record: `docs/REVIEW-2026-10-27-g1-decision.md`.
 **Evidence:** `docs/ANALYSIS-2026-10-25-stop-hunt-markouts-and-clearance-grid.md` (pre-declared grid + bar), refreshed on today's data in `docs/REVIEW-2026-10-26-full-system-audit.md` §3.
 
 ---
@@ -18,10 +18,10 @@ The owner's 10-25 decision (`hold_for_dst`) explicitly reframed the response as 
 
 **Recommendation: (A).** On today's costed/stateful replay, (B) is the **worst** cell at every cost tested (`−0.137R/t` at $0.20/side vs `−0.110R/t` live and `−0.024R/t` for 1.5 ATR) and would put ~66% of stops back inside the 20-bar level the trade was built on. (A) passes **3 of 4** points of the *pre-declared* bar written on 10-25 (see §4). That is new, dated, pre-declared evidence — the only mechanism this repo allows for revisiting a rejected candidate. It is **still a hypothesis**: the 4th bar point (trade count) fails, the replay's pessimistic same-bar ordering systematically favours deeper stops, and the era is net negative after cost.
 
-**Sign-off required (one line is enough):**
-> Approved / rejected by owner on ________ (UTC). If approved, this draft becomes the registered bar **before** any post-change trade exists.
+**Sign-off (one line, as required above):**
+> **Approved by the owner on 2026-10-27 (branch A — register `structstop1.5` and stage the deploy as A2)**, recorded in the Arena session's owner response and written up in `docs/REVIEW-2026-10-27-g1-decision.md`. The approval was given **before** any post-change trade exists (the last ledger row at sign-off was trade #723, still open, entered under the 0.5 ATR rule), which is the condition this line imposed.
 
-No agent session may declare this registered on the owner's behalf.
+No agent session may declare this registered on the owner's behalf — this line exists only because the owner answered the question; it reproduces that answer and adds nothing to it.
 
 ---
 
@@ -32,9 +32,11 @@ No agent session may declare this registered on the owner's behalf.
 Frozen for the whole window: `ATR_SL_MULT`, `ATR_TP_MULT`, `RR_TARGET`, `FLOOR_BUFFER_PCT`, `BE_TRIGGER_R = 0.75`, `MAX_HOLD_MINUTES = 240`, `MAX_BELOW_EMA_ATR`, RSI/ATR bounds, blackouts, cooldowns, daily breaker, `GUARD_CUTOFF_MIN = 30` and the derived gap-guard schedule, the LIVE-path hardening from 10-26, and the data source. **No second variable, no re-slicing of eras, no threshold tuning after looking at outcomes.**
 
 **Pre-deploy engineering tasks (must be done before the change can be judged):**
-1. Add the new cutover to `tools/strategy_lab.py` (`CLEAR15_CUTOVER`), `tools/check_structural_stop.py` (a `--since` era that checks **1.5 ATR** clearance), `tools/win_rate_report.py`, `tools/pressure_report.py` and the journal's era split. Today those tools assume `SL_CLEAR_ATR = 0.5`; without this the A-guard cannot be evaluated.
-2. Add a `structstop1.5` geometry assertion to `tools/smoke_test.py` (the stop must clear the level by ≥1.5 ATR; TP = 1.5 × actual risk; BE arms against the new risk).
-3. Verify the post-DST daily break in the price log and confirm `derive_daily_closure()` matches it (`docs/PREREG-2026-10-25-gap-guard-daily-closure.md` §2.4). A wrong guard schedule invalidates the window.
+All three are **DONE on 2026-10-27** (see `docs/REVIEW-2026-10-27-g1-decision.md` §3 for the evidence each was checked against). What each became:
+
+1. ✅ `tools/strategy_lab.py`: `CLEAR15_ATR = 1.5`, `CLEAR15_CUTOVER = None`, `CLEAR15_ERA = "structstop1.5"`, `clear15_eras()` feeding `--table`; a `VARIANTS["structstop1.5"]` entry already existed. `tools/check_structural_stop.py`: `--era {auto,struct,clear15}`, geometry classified against the **judged era's** clearance (`OLD/NEW/???` now means "≥ cur bar / ≥ prev bar / neither"), an `[OK/FAIL] A2 clearance` line, and a hard FAIL on any level-bound trade in the window under the bar; it prints `NOT STARTED` and exits 0 while `CLEAR15_CUTOVER is None`. `tools/win_rate_report.py`: a second era book + ERAS row for `structstop1.5`, inert until the cutover exists. `pressure.py` / `tools/pressure_report.py`: `BAR15` (this document's §5, transcribed) + a `5b` card and `--era clear15`. `tools/journal.py`: `--era clear15`.
+2. ✅ `tools/smoke_test.py` **Scenario AB**: with only `SL_CLEAR_ATR` patched to 1.5 on Scenario N's tape, risk = distance-to-level + 1.5·ATR, the stop clears the floor by ≥1.5 ATR, TP stays 1.5×the actual risk, the ratchet arms at 0.75R of the **wider** risk, and the delta vs the live bar is exactly one ATR; it also pins that the three judging tools refuse the unstarted window.
+3. ✅ Post-DST daily break confirmed on the host feed: the first post-DST break is `2026-10-26 20:58 → 22:00` UTC and matches `derive_daily_closure()` byte-for-byte, and the quote sidecar shows the break is fixed in UTC across the offset change (recorded in `docs/HANDOFF.md`'s 2026-10-27 timeline row). Re-verified on 2026-10-27 06:02 UTC: market open, last bar 06:00, trade #723 open — no break signature to re-pin, so `(20:58, 22:00)` stands.
 
 **Cutover date is NOT this document's date and NOT the PR merge time.** It is the host's `autosync: merge upstream` commit time (the 10-13 erratum rule), confirmed from the ledger by the OLD/NEW boundary evidence in `tools/check_structural_stop.py`. Record it in a dated REVIEW before the first post-change trade is judged.
 

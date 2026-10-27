@@ -1,6 +1,10 @@
 # Gold bot execution plan — “follow execution plan”
 
-**Status:** living session queue — re-based **2026-10-26 ~14:15 UTC** on collection 349 (data through `2026-10-26 11:59:07 UTC`).
+**Status:** living session queue — re-based **2026-10-26 ~14:15 UTC** on collection 349 (data through `2026-10-26 11:59:07 UTC`);
+§2 numbers refreshed **2026-10-27 ~12:00 UTC** on collection 359. **G1 is SIGNED (2026-10-27, branch A):**
+`docs/PREREG-2026-10-26-structstop1.5.md` is the registered bar for one window, step **A1 is DONE**, and the next
+eligible step is **A2 — the deploy itself**, which waits for a moment with no open position on the host.
+The decision and its evidence: `docs/REVIEW-2026-10-27-g1-decision.md`.
 **Purpose:** make progress consistent across sessions while the bot stays in paper/forward-test mode, until there is — or is not — something genuinely workable for live trade.
 **Canonical prompt:** **“Follow execution plan.”** (The older “Execute the plan.” remains an exact alias; README/HANDOFF point here.)
 
@@ -30,7 +34,7 @@ In any new session, the owner says **“Follow execution plan.”** That means:
 **The phrase NEVER authorises:** real orders; setting `TRADING_MODE = "LIVE"`; arming `GOLD_LIVE_ARMED`; bypassing or retro-editing a pre-registration; stacking strategy changes; hand-editing `/opt/gold`; committing credentials, account identifiers or an unredacted manual journal. Those need a separate, explicit, informed owner decision.
 
 **Two approval gates remain in the whole plan:**
-- **G1 (one time, now):** sign off `docs/PREREG-2026-10-26-structstop1.5.md` — i.e. approve branch (A) over the literal §7 revert. Until G1, step A1 is blocked and every other step is still eligible.
+- **G1 (one time) — SIGNED 2026-10-27:** the owner approved branch **(A)**, `docs/PREREG-2026-10-26-structstop1.5.md` (`SL_CLEAR_ATR = 1.5`) instead of the literal §7 revert. A1 (registration + pre-deploy tool work) is done; the gate that remains on this track is **A2's own condition** — no open trade on the host when the one line lands. Signing G1 authorised the change, not a second variable, and it did not make PASS likely (§4 eligibility stays 3/4).
 - **G2 (at the end):** any real-money trading. Never delegated to the phrase.
 
 If the owner wants per-change sign-off instead of the phrase acting as sign-off for pre-registered paper changes, say **“hold merges”** once; it will be recorded here.
@@ -62,6 +66,31 @@ If the owner wants per-change sign-off instead of the phrase acting as sign-off 
 - **Live gate CLOSED:** `tools/live_readiness.py` = **9 PASS / 8 TODO / 3 MANUAL**. Paper engine fully tested (`smoke_test.py` A–Z + AA PASSED, 64 `goldbot` tests, 18 `live_readiness` tests, `check_data.py` 0 fail/8 warn).
 - **Verdict: no demonstrated edge after costs.** Whole book and live era both net negative after cost. Nothing here is permission to trade real money.
 
+### 2b. Refresh 2026-10-27 ~12:00 UTC (collection 359, log through `2026-10-27 11:59:06 UTC`)
+
+Read with §2; nothing below re-opens a closed judgement.
+
+- **722 closed** (143W/315L/261BE/3TIME, decisive 31.2%), engine ledger **$92.38**, true equity **$75.44**, net **−$713.36**
+  at the registered $0.40 round trip. BUY #723 open at the snapshot. `check_data` 0 fail/8 warn, `handoff_check` FRESH.
+- **Era n=225** (58W/104L/61BE/2TIME): decisive **35.8% [28.8–43.4]**, gross **−0.081R/trade** (was −0.054R at the
+  registered 10-19 gate), SL/day 6.12, SL share 46.2%, avg SL $5.80, era DD $151.65. Geometry guard still **PASS**
+  (0 stops inside the level, 82.2% level-bound, +0.50 ATR clearance, 3.31 ATR median risk). This is a grown-sample
+  observation — the 10-19 judgement is closed and the lapsed n=150 arm stays lapsed.
+- **Post-DST daily break: VERIFIED, host blocker cleared from data.** First post-DST break `2026-10-26 20:58:09 →
+  22:00:04 UTC` and `derive_daily_closure()` returns exactly `(20:58, 22:00)`; the break is fixed in **UTC** across the
+  offset change (quote-sidecar freeze 20:59→22:00 UTC on both 10-22 at +3h and 10-26 at +2h), so the deployed
+  gap-guard schedule is right and its ±60-min adaptation correctly did not fire. This completes PREREG §2.3 — the
+  pre-deploy engineering item that did not need a signature. No reopen hole on 10-26; the 10-25 one is still a host item.
+- **Replay refreshed** (post-cutover era, `strategy_lab --table`): live 0.5 ATR **−0.141R/t** at $0.20/side
+  (−0.171 at $0.275, −0.202 at $0.35), `structstop1.5` **−0.046 / −0.069 / −0.092** → Δ **+0.095 / +0.102 / +0.110R/t**;
+  the literal §7 revert is the **worst** cell at every cost (−0.155 / −0.202 / −0.249). `1.0 ATR` buys only +0.015R.
+  Registered eligibility bar unchanged at **3/4** (trade count −21.9% then, −21.6% now — recorded, not re-scored).
+- **PASS-arm feasibility, stated plainly:** Wilson LB > 40% at n=150 needs ≈**48%** decisive WR (72/150); the live era
+  reads 35.8% and the best replay reading of `1.5` is 40.3% [32.0–49.3]. The likely outcomes are KEEP-no-edge or REVERT.
+- **Cost sample 12/14 complete UTC days, 1/2 weekends** (38 451 rows, median spread $0.55, measured round trip $0.55
+  on 144 matched trades) — still short of the target, so **$0.40 stays registered**. `live_readiness` unchanged at
+  **9 PASS / 8 TODO / 3 MANUAL, gate CLOSED**.
+
 ---
 
 ## 3. The queue
@@ -80,8 +109,8 @@ If the owner wants per-change sign-off instead of the phrase acting as sign-off 
 
 | ID | Gate / when | Work | Completion test | Blocker |
 |---|---|---|---|---|
-| **A1** | **G1 now** | Owner signs (or rejects) `docs/PREREG-2026-10-26-structstop1.5.md`. If signed: register it verbatim (dated, before any post-change trade), do the §2 pre-deploy tool work (new era cutover in `strategy_lab` / `check_structural_stop` / `win_rate_report` / `pressure_report` / journal; smoke assertion for 1.5 ATR clearance), and confirm the post-DST daily-break signature. If rejected: execute the literal §7 revert instead, with its own dated REVIEW. | signed + dated PREREG; `strategy_lab.CLEAR15_CUTOVER` exists with the deploy date **unknown until deploy**; all tests pass; a REVIEW records the gate decision. | **G1 owner sign-off** (deviation from the literal §7 revert). |
-| **A2** | A1 done, no open trade | Single-variable change `SL_CLEAR_ATR = 0.5 → 1.5` in one commit + PR; merge (the phrase is the sign-off **only** because A1's registration exists). Record the real cutover from the host's `autosync: merge upstream` commit, confirm from the ledger boundary. | one-line diff; `smoke_test.py` PASSED; `check_structural_stop.py` shows the OLD/NEW boundary at the recorded cutover; dated REVIEW with the cutover time. | Host autosync (3 h cycle); never hand-edit `/opt/gold`. |
+| **A1** | **DONE 2026-10-27** | Owner signed branch (A); the draft was registered verbatim (`docs/PREREG-2026-10-26-structstop1.5.md`, status line + dated sign-off only — §3–§7 untouched), and its three pre-deploy tool tasks were completed: era plumbing in `strategy_lab` (`CLEAR15_ATR/CUTOVER/ERA`), `check_structural_stop.py --era clear15` (clearance-aware classification, `NOT STARTED` while the cutover is None), `win_rate_report.py` era rows, `pressure.py BAR15` + `pressure_report.py --era clear15` (§5b card), `journal.py --era clear15`, and **smoke Scenario AB** (one-dial geometry proof + the refusal guards). `docs/REVIEW-2026-10-27-g1-decision.md` records the decision and every verification. | signed + dated PREREG; `strategy_lab.CLEAR15_CUTOVER` **exists and is `None`** by design (the deploy date is unknowable until the deploy); 154 tool tests OK; smoke A–AB PASSED; live-era tool output byte-identical. | — (closed; **A2 still gated on no open trade**) |
+| **A2** | **next eligible step** — A1 is done; the only condition left is **no open position on the host** | Exactly one line in `engine.py`: `SL_CLEAR_ATR = 0.5 → 1.5`. Nothing else (PREREG §2 freeze). In the same change, set `strategy_lab.CLEAR15_CUTOVER` (and `pressure.CLEAR15_CUTOVER`) to the host's `autosync: merge upstream` commit **time** for the deploy, refresh `docs/HANDOFF.md` + `handoff_check.py --update`. | one-line diff; `smoke_test.py` PASSED (Scenario AB asserts the geometry from both sides of the constant); `python3 tools/check_structural_stop.py --era clear15` prints the OLD/NEW bracket around the recorded cutover and stops refusing with `NOT STARTED`; dated REVIEW with the cutover time. | Host autosync (3 h cycle); never hand-edit `/opt/gold`. Last host check (2026-10-27 06:02 UTC) showed **BUY #723 open** under the 0.5 ATR rule, and the host is not reachable from this sandbox now — re-confirm at deploy time. |
 | **A3** | A2 + 10–20 new-era trades | Judge **A1–A5** of the registered bar (geometry + calibration). | dated REVIEW: 0 stops inside level, ≥1.5 ATR clearance, recall 99.6–100%, level-bound 70–90%, median risk 3.8–5.0 ATR. A failure = REVERT, no P&L reading. | none |
 | **A4** | n=100 in the new era | **SCREEN** judgement (net R/trade ≥ −0.05R at $0.20/side, decisive WR ≥ 40%, B1–B3, A still passes). | dated REVIEW with Wilson CIs, per-day columns, cost sensitivity. | none |
 | **A5** | n=150 or 2026-12-01 21:00 UTC, whichever comes first | **PASS/FAIL/REVERT** judgement exactly as registered. | dated REVIEW; PASS requires Wilson LB > 40%, net ≥ 0.00R at $0.20/side, ≥ −0.05R at $0.275/side, era DD ≤ $200. | none |
@@ -122,6 +151,8 @@ Every step must move at least one `live_readiness.py` check from TODO to PASS **
 | 2026-10-25 02:48:12 UTC | PR #58 deployed: 30-min **entries-only** gap guard + `#697` duplicate-number fix, into the closed weekend market. Owner chose `hold_for_dst`. `docs/PREREG-2026-10-25-gap-guard-daily-closure.md`, `docs/REVIEW-2026-10-25-duplicate-trade-number.md`. |
 | 2026-10-25 (post-merge) | `derive_daily_closure()` made DST-responsive (5-break baseline + Day-1/Day-2 ±60 min adaptation; +7 Scenario Z checks). Deployment of that commit is part of the same safe-work backlog if it is not already on `main`. |
 | 2026-10-26 | Full audit, DST gate verified, LIVE-path hardening + readiness scorecard, pre-registration draft, this rewritten queue. `docs/REVIEW-2026-10-26-full-system-audit.md`. |
+| 2026-10-27 (later) | **G1 SIGNED (branch A) → A1 DONE. No deploy, no engine change.** `docs/PREREG-2026-10-26-structstop1.5.md` registered verbatim with the dated owner sign-off; the §2 pre-deploy tool work landed (strategy_lab / check_structural_stop / win_rate_report / pressure + pressure_report / journal all era-aware, `CLEAR15_CUTOVER = None` so every clear15 path is inert); new **smoke Scenario AB** pins the one-dial geometry and the "refuse to judge an unstarted window" guards; readiness timeline moved G1 → done and added the A2 row. Evidence: `docs/REVIEW-2026-10-27-g1-decision.md`. **A2 is the next step and it is gated on there being no open trade.** |
+| 2026-10-27 | **G1 made answerable + ritual refresh (no strategy step run).** Wrote the owner decision pack `docs/BRIEF-2026-10-27-g1-owner-decision.md`; refreshed §2/§2b on collection 359 (era 212→225, gross −0.054R→−0.081R); re-ran the costed replay for 0.5/1.0/1.5/revert at $0.20/$0.275/$0.35; **verified the post-DST daily break against `derive_daily_closure()`** (PREREG §2.3 done, host blocker closed). No parameter change, no registration, no deploy, no order — **A1 is still waiting on the owner's line.** |
 
 ---
 

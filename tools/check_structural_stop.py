@@ -54,21 +54,27 @@ import strategy_lab as SL  # noqa: E402  (canonical replay math: bars, Lab, engi
 
 LOOKBACK = SL.LOOKBACK
 GEOM_TOL = 0.03   # $: logged prices carry 2-dp rounding (same slack as the `inside` test)
+_LEGACY = object()   # sentinel: "the rule before the structural stop" = the flat 2xATR floor
 
 
-def geometry_class(risk, atr, dist, tol=GEOM_TOL):
+def geometry_class(risk, atr, dist, tol=GEOM_TOL, cur=None, prev=_LEGACY):
     """Which stop rule produced this trade? Pure function of the ledger row + its decision bar.
 
     risk = |entry - original stop| ($), atr = ATR at the decision bar, dist = |entry - level| ($).
-      OLD  - risk matches ATR_SL_MULT*ATR and NOT the structural rule (decidable only when the
-             level binds, i.e. the structural risk is more than `tol` larger)
-      NEW  - risk matches max(ATR_SL_MULT*ATR, dist + SL_CLEAR_ATR*ATR) and NOT the old rule
+    `cur`  = the clearance the era under test should be running (default: the shipped 0.5 ATR).
+    `prev` = the rule that era REPLACED. The default `_LEGACY` is the pre-2026-10-06 `2xATR`
+             floor; for the `structstop1.5` window the incumbent rule is 0.5 ATR, so pass 0.5.
+      OLD  - risk matches `prev` and NOT the rule under test (decidable only when the level
+             binds, i.e. the structural risk is more than `tol` larger)
+      NEW  - risk matches max(ATR_SL_MULT*ATR, dist + cur*ATR) and NOT the previous rule
       BOTH - the two rules agree within `tol` (the level did not bind): says nothing about
              which code was running
       ???  - matches neither (a join error, a third geometry, or a rounding outlier)
     """
-    old = SL.ATR_SL_MULT * atr
-    new = max(old, dist + SL.SL_CLEAR_ATR * atr)
+    cur = SL.SL_CLEAR_ATR if cur is None else cur
+    floor = SL.ATR_SL_MULT * atr
+    new = max(floor, dist + cur * atr)
+    old = floor if prev is _LEGACY else max(floor, dist + prev * atr)
     m_old, m_new = abs(risk - old) <= tol, abs(risk - new) <= tol
     if m_old and m_new:
         return "BOTH"
@@ -122,9 +128,34 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=".")
     ap.add_argument("--since", default=None, help="only judge trades entered at/after this date")
+    ap.add_argument("--era", default="auto", choices=("auto", "struct", "clear15"),
+                    help="which registered window to judge: `struct` = the 0.5 ATR structural-stop era "
+                         "(strategy_lab.LIVE_CUTOVER); `clear15` = the registered structstop1.5 window "
+                         "(strategy_lab.CLEAR15_CUTOVER) and it must show >= 1.5 ATR of clearance; "
+                         "`auto` (default) judges `struct` until the 1.5 change is deployed, then it "
+                         "judges that window. Nothing here changes; the judgement is read off the ledger.")
     a = ap.parse_args(argv)
     root = os.path.abspath(a.root)
     since = datetime.strptime(a.since, "%Y-%m-%d") if a.since else None
+
+    # ---- which window are we judging, and against which clearance? ─────────────────────────
+    # `clear15` is the registered structstop1.5 window (docs/PREREG-2026-10-26-structstop1.5.md,
+    # §5 A1/A2): 0 stops inside the level AND >= 1.5 ATR median clearance on level-bound trades.
+    # Its cutover is the DEPLOY time, so before A2 ships there is no window and no judgement.
+    want15 = a.era == "clear15" or (a.era == "auto" and SL.CLEAR15_CUTOVER is not None)
+    if want15 and SL.CLEAR15_CUTOVER is None:
+        if a.era == "clear15":
+            print("NOT STARTED: strategy_lab.CLEAR15_CUTOVER is None - structstop1.5 is registered "
+                  "but not deployed, so there is no 1.5 ATR window to judge (and no pre-deploy trade "
+                  "may be counted into one). Set the cutover from the host's `autosync: merge "
+                  "upstream` commit time, then re-run.")
+            return 0
+        print("  (structstop1.5 not deployed: CLEAR15_CUTOVER is None -> judging the 0.5 ATR era)\n")
+    judge_from = SL.CLEAR15_CUTOVER if want15 else SL.LIVE_CUTOVER
+    judge_cur = SL.CLEAR15_ATR if want15 else SL.SL_CLEAR_ATR
+    judge_prev = SL.SL_CLEAR_ATR if want15 else _LEGACY
+    judge_name = SL.CLEAR15_ERA if want15 else "struct-stop cutover"
+    judge_const = "CLEAR15_CUTOVER" if want15 else "LIVE_CUTOVER"
 
     bars = SL.load_bars(os.path.join(root, "forward_test_log.csv"))
     lab = SL.Lab(bars)
@@ -171,10 +202,16 @@ def main(argv=None):
                          clr=clearance / atr,
                          inside=clearance < -0.03,
                          bound=(abs(tr["ep"] - sl0) - SL.ATR_SL_MULT * atr) > 0.03,
-                         cls=geometry_class(abs(tr["ep"] - sl0), atr, abs(tr["ep"] - lvl))))
+                         cls=geometry_class(abs(tr["ep"] - sl0), atr, abs(tr["ep"] - lvl),
+                                            cur=judge_cur, prev=judge_prev)))
 
     print(f"structural-stop check — {len(T)} ledger trades "
           f"({len(rows)} joined, {len(unmatched)} unjoinable) in {root}")
+    print(f"  judging the `{judge_name}` window from {judge_from:%Y-%m-%d %H:%M} UTC "
+          f"({judge_const}); required median clearance >= {judge_cur:.2f} ATR on level-bound trades")
+    if want15:
+        print("  note: pre-window trades stay in the older era rows for context; only the rows from "
+              "the deploy time count towards the registered bar")
     if since:
         print(f"filtered to entries >= {since.date()}")
     if not rows:
@@ -183,6 +220,9 @@ def main(argv=None):
 
     eras = [("all", None), ("0.75R master", SL.ERA_RATCHET_075), ("max-hold", SL.ERA_MAXHOLD),
             ("struct-stop cutover", SL.LIVE_CUTOVER)]
+    if want15:
+        eras.append((judge_name[:20], judge_from))
+    low_clear, low_clear_rows = None, []
     bad = 0
     bad_rows = []
     for nm, frm in eras:
@@ -208,6 +248,18 @@ def main(argv=None):
         if frm is not None and frm >= SL.LIVE_CUTOVER and inside:
             bad = len(inside)
             bad_rows = inside
+        if frm == judge_from:
+            bc = sorted(r["clr"] for r in bound)
+            if bc:
+                med_b = bc[len(bc) // 2]
+                low_clear = med_b
+                if med_b < judge_cur - 0.005:
+                    low_clear_rows = [r for r in bound if r["clr"] < judge_cur - 0.005]
+                flag = "OK  " if med_b >= judge_cur - 0.005 else "FAIL"
+                print(f"  {'':20s}   [{flag}] A2 clearance on level-bound trades: median {med_b:+.2f} ATR "
+                      f"(registered bar >= {judge_cur:.2f}); {len(low_clear_rows)}/{len(bound)} below it")
+            else:
+                print(f"  {'':20s}   (no level-bound trade yet - A2 cannot be judged)")
 
     # ---- boundary evidence: which rule produced each stop, and where is the deploy?
     last_old, first_new, late_old = boundary_evidence(rows)
@@ -232,22 +284,35 @@ def main(argv=None):
             evidence_ok = False
             print(f"    !! {len(late_old)} OLD-rule trade(s) entered AFTER the first NEW-rule trade - "
                   f"mixed geometry (rollback / regression)")
-        elif lo < SL.LIVE_CUTOVER <= hi:
-            print(f"    -> the deploy happened between those two entries; LIVE_CUTOVER "
-                  f"{SL.LIVE_CUTOVER:%Y-%m-%d %H:%M} is inside the bracket: OK")
+        elif lo < judge_from <= hi:
+            print(f"    -> the deploy happened between those two entries; {judge_const} "
+                  f"{judge_from:%Y-%m-%d %H:%M} is inside the bracket: OK")
+        elif want15:
+            print(f"    -> no bracket yet for the `{judge_name}` window: the ledger's first "
+                  f"{judge_cur:.1f} ATR-clearance trade is "
+                  + (f"#{first_new['tr']['num']} at {first_new['tr']['et']} "
+                     f"(window starts {judge_from:%Y-%m-%d %H:%M})" if first_new else "missing")
+                  + " - informational only until 10-20 post-deploy trades exist")
         else:
             evidence_ok = False
-            side = "EARLY" if SL.LIVE_CUTOVER <= lo else "LATE"
-            print(f"    !! LIVE_CUTOVER {SL.LIVE_CUTOVER:%Y-%m-%d %H:%M} is too {side}: the ledger puts the "
-                  f"deploy in ({lo}, {hi}] - fix tools/strategy_lab.py LIVE_CUTOVER and the docs")
+            side = "EARLY" if judge_from <= lo else "LATE"
+            print(f"    !! {judge_const} {judge_from:%Y-%m-%d %H:%M} is too {side}: the ledger puts the "
+                  f"deploy in ({lo}, {hi}] - fix tools/strategy_lab.py {judge_const} and the docs")
     elif first_new is None:
         print("    -> no NEW-rule trade yet, so the deploy time is not evidenced by the ledger")
     print(f"\n  Pre-cutover trades are historical proof that the OLD geometry was inside the")
-    print(f"  level; from {SL.LIVE_CUTOVER:%Y-%m-%d %H:%M} UTC the count must be ZERO.")
+    print(f"  level; from {SL.LIVE_CUTOVER:%Y-%m-%d %H:%M} UTC the count must be ZERO"
+          + (f", and from {judge_from:%Y-%m-%d %H:%M} also >= {judge_cur:.1f} ATR clear." if want15 else "."))
     if bad:
         print(f"FAIL: {bad} post-cutover trade(s) have a stop inside the tested level - "
               f"the shipped change is not doing what the model says.")
         print("  diagnosis: " + diagnose_failure(bad_rows, last_old, first_new, late_old, SL.LIVE_CUTOVER))
+        return 1
+    if low_clear_rows:
+        print(f"FAIL: {len(low_clear_rows)} trade(s) in the `{judge_name}` window are level-bound with "
+              f"less than {judge_cur:.2f} ATR of clearance (median {low_clear:+.2f}) - the engine is not "
+              f"applying the registered clearance. First: "
+              + ", ".join(f"#{r['tr']['num']} {r['tr']['et']}" for r in low_clear_rows[:5]))
         return 1
     if not evidence_ok:
         print("FAIL: no stop is inside its level, but the cutover constant contradicts the ledger evidence above.")

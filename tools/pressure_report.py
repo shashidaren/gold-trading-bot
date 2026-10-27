@@ -34,6 +34,9 @@ import pressure as P  # noqa: E402
 
 ERAS = {
     "structstop": ("struct-stop era (live rule)", P.STRUCT_STOP_CUTOVER),
+    # the registered structstop1.5 window: its boundary is the host DEPLOY time, so it is None
+    # until A2 ships. A None cutover means "not started" - never "judge the old era instead".
+    "clear15": ("structstop1.5 era (registered 2026-10-27)", getattr(P, "CLEAR15_CUTOVER", None)),
     "maxhold": ("max-hold era (>= 2026-09-21 06:00)", datetime(2026, 9, 21, 6, 0)),
     "075": ("0.75R era (>= 2026-09-15 06:00)", datetime(2026, 9, 15, 6, 0)),
     "all": ("whole book", datetime(2020, 1, 1)),
@@ -46,6 +49,37 @@ def hdr(text):
 
 def rule(width=78):
     print("-" * width)
+
+
+def _print_era_card(e):
+    """One pre-registered era card: the numbers, then the registered bar rows (§5 / §7).
+
+    Shared by the live struct-stop card and the structstop1.5 window's card, because the whole
+    point of the read layer is that a session sees the SAME contract the judgement will use —
+    whichever registration that window was written under.
+    """
+    print(f"  {e['label']} (entries >= {e['cutover']:%Y-%m-%d %H:%M} UTC)  n={e['n']}"
+          f"  {e['counts']['TP']}W/{e['counts']['SL']}L/{e['counts']['BE']}BE/{e['counts']['TIME']}TIME"
+          f"  ·  {e['status']}")
+    print(f"  decisive WR {e['wr']:.1f}% (CI {e['wr_ci'][0]:.1f}-{e['wr_ci'][1]:.1f})"
+          f"  ·  R/trade {e['r_per_trade']:+.3f} (gross: ${e['gross_per_trade']:+.2f}/trade ÷ "
+          f"mean 1R ${e['mean_1r_usd']:.2f}, win_rate_report scale)"
+          f"  ·  ${e['gross']:+.2f} total")
+    print(f"  decisive-only R/trade {e['r_per_trade_decisive']:+.3f} (per-trade reward-leg risk — "
+          f"secondary read, same sign, different denominator)")
+    print(f"  SL/day {e['sl_per_day']:.1f}  ·  SL share {e['sl_share_pct']:.1f}%"
+          f"  ·  scratch {e['scratch_pct']:.1f}%  ·  avg SL ${e['avg_sl_usd']:.2f}"
+          f"  ·  era DD ${e['max_dd']:.2f}")
+    for key, c in e["checks"].items():
+        val = "—" if c["value"] is None else f"{c['value']:.2f}{c['unit']}"
+        print(f"    [{'OK  ' if c['ok'] else 'FAIL'}] {key} {c['name']}: {val} {c['cmp']} "
+              f"{c['bar']}{c['unit']} (baseline {c['baseline']})")
+    for key, g in e["geometry"].items():
+        val = "—" if g["value"] is None else f"{g['value']:.1f}"
+        print(f"    [{'OK  ' if g['ok'] else 'out '}] {key} {g['name']}: {val}{g['unit']} "
+              f"(target {g['lo']}-{g['hi']}, {g['baseline']})")
+    for key, r in e["reverts"].items():
+        print(f"    [{'FIRED' if r['fired'] else 'clear'}] {key} revert if {r['name']}")
 
 
 def main(argv=None):
@@ -67,8 +101,9 @@ def main(argv=None):
     trades = P.read_rows(P.TRADES_FILE_PATH)
     skip_rows = P.read_rows(P.SKIP_FILE_PATH)
     era_label, cutover = ERAS[args.era]
+    started = cutover is not None
     data = P.build(log_rows=log_rows, trades=trades, skip_rows=skip_rows)
-    cal = P.calibration(log_rows, trades, cutover)
+    cal = P.calibration(log_rows, trades, cutover if started else P.STRUCT_STOP_CUTOVER)
 
     if args.json:
         print(json.dumps({"context": data, "calibration": cal}, default=str, indent=2))
@@ -147,29 +182,20 @@ def main(argv=None):
     if not e:
         print("  no trades in the era yet")
     else:
-        print(f"  {e['label']} (entries >= {e['cutover']:%Y-%m-%d %H:%M} UTC)  n={e['n']}"
-              f"  {e['counts']['TP']}W/{e['counts']['SL']}L/{e['counts']['BE']}BE/{e['counts']['TIME']}TIME"
-              f"  ·  {e['status']}")
-        print(f"  decisive WR {e['wr']:.1f}% (CI {e['wr_ci'][0]:.1f}-{e['wr_ci'][1]:.1f})"
-              f"  ·  R/trade {e['r_per_trade']:+.3f} (gross: ${e['gross_per_trade']:+.2f}/trade ÷ "
-              f"mean 1R ${e['mean_1r_usd']:.2f}, win_rate_report scale)"
-              f"  ·  ${e['gross']:+.2f} total")
-        print(f"  decisive-only R/trade {e['r_per_trade_decisive']:+.3f} (per-trade reward-leg risk — "
-              f"secondary read, same sign, different denominator)")
-        print(f"  SL/day {e['sl_per_day']:.1f}  ·  SL share {e['sl_share_pct']:.1f}%"
-              f"  ·  scratch {e['scratch_pct']:.1f}%  ·  avg SL ${e['avg_sl_usd']:.2f}"
-              f"  ·  era DD ${e['max_dd']:.2f}")
-        for key, c in e["checks"].items():
-            val = "—" if c["value"] is None else f"{c['value']:.2f}{c['unit']}"
-            print(f"    [{'OK  ' if c['ok'] else 'FAIL'}] {key} {c['name']}: {val} {c['cmp']} "
-                  f"{c['bar']}{c['unit']} (baseline {c['baseline']})")
-        for key, g in e["geometry"].items():
-            val = "—" if g["value"] is None else f"{g['value']:.1f}"
-            print(f"    [{'OK  ' if g['ok'] else 'out '}] {key} {g['name']}: {val}{g['unit']} "
-                  f"(target {g['lo']}-{g['hi']}, {g['baseline']})")
-        for key, r in e["reverts"].items():
-            print(f"    [{'FIRED' if r['fired'] else 'clear'}] {key} revert if {r['name']}")
+        _print_era_card(e)
 
+    if args.era == "clear15" or data.get("era15") is not None:
+        hdr("5b. REGISTERED NEXT WINDOW — structstop1.5 (docs/PREREG-2026-10-26-structstop1.5.md §5)")
+        e15 = data.get("era15")
+        if e15 is None:
+            print("  NOT STARTED — no deploy time recorded (strategy_lab.CLEAR15_CUTOVER is None),")
+            print("  so there is nothing to judge and no pre-deploy trade may be counted into it.")
+            print("  The window opens at the host's `autosync: merge upstream` commit time of the A2 deploy.")
+        else:
+            _print_era_card(e15)
+    if not started and args.era == "clear15":
+        print("  (--era clear15: the §6 calibration join fell back to the live era because the new "
+              "window has no trades; §5b says so explicitly.)")
     hdr("6. CALIBRATION — did the composite separate outcomes?")
     if not cal.get("ok"):
         print(f"  unavailable — {cal.get('reason')}")
