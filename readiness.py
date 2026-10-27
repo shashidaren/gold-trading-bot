@@ -77,24 +77,34 @@ MILESTONES = [
     ("2026-10-26", "Full audit + 'Follow execution plan' queue",
      "Tracks A/B/C, two hard approval gates, and a written definition of live-ready.",
      "docs/EXECUTION-PLAN.md"),
+    ("2026-10-27", "Post-DST daily break verified; G1 pack written",
+     "Derived guard schedule (20:58, 22:00) matches the first post-DST break; the owner's "
+     "approve/reject/hold pack for `structstop1.5` is dated and costed.",
+     "docs/BRIEF-2026-10-27-g1-owner-decision.md"),
+    ("2026-10-27", "G1 SIGNED — structstop1.5 registered (not deployed)",
+     "Owner chose branch (A): one more clearance step instead of the literal §7 revert. The "
+     "pre-registration is now the binding bar, A1's tool work is in, and `CLEAR15_CUTOVER` "
+     "stays None until the deploy — so the window has not started and nothing is judged.",
+     "docs/REVIEW-2026-10-27-g1-decision.md"),
 ]
 
 # Blockers that no code commit can clear. `who` is the person/place that must act.
 BLOCKERS = [
-    ("Owner", "G1 — pre-registration sign-off",
-     "Approve the structstop1.5 draft or choose the literal §7 revert. Nothing deploys before this.",
-     "docs/PREREG-2026-10-26-structstop1.5.md"),
+    ("Owner", "A2 — deploy the registered 1.5 ATR clearance",
+     "G1 is SIGNED (2026-10-27), so the one-line change `SL_CLEAR_ATR 0.5 → 1.5` is authorised. "
+     "It goes in only when the host has NO open position, and the deploy's own commit time becomes "
+     "`strategy_lab.CLEAR15_CUTOVER` in the same change. Until then `check_structural_stop.py "
+     "--era clear15` prints NOT STARTED and the window is unjudged.",
+     "docs/REVIEW-2026-10-27-g1-decision.md"),
     ("Host", "Sunday-reopen price-bar hole",
-     "~2 h of open-market M1 bars missing (quotes fresh from 22:00, bars resume 23:59). Verify mt5feed / goldbot.",
+     "~2 h of open-market M1 bars missing on 10-25 (quotes fresh from 22:00, bars resume 23:59). "
+     "Verify mt5feed / goldbot; next chance to observe it is the 10-31/11-01 weekend.",
      "docs/REVIEW-2026-10-26-full-system-audit.md"),
-    ("Host", "First post-DST daily break",
-     "Confirm derive_daily_closure() matches the observed break; it still derives (20:58, 22:00).",
-     "docs/PREREG-2026-10-25-gap-guard-daily-closure.md"),
     ("Host", "DEMO account + 48 h evidence",
      "Track B5 needs a demo account (captured spec says REAL) and a dated demo test report.",
      "docs/EXECUTION-PLAN.md"),
     ("Evidence", "Positive net expectancy",
-     "Whole book net −$669 at the registered $0.40; no independent forward window yet.",
+     "Whole book net −$713 at the registered $0.40; no independent forward window yet.",
      "docs/REVIEW-2026-10-26-full-system-audit.md"),
     ("Owner", "G2 — real-money approval",
      "Never delegated to 'Follow execution plan'. Required even if every check is green.",
@@ -169,11 +179,19 @@ def build_timeline(now, progress, counts):
         _row("dst_us", "US DST discriminating window", "active",
              f"~{_ceil_days(US_DST_END, now)} d left", _date(US_DST_END),
              "Cross-check only: the EU rule is already confirmed on observed offsets (+2h)."),
-        _row("g1", "G1 — pre-registration sign-off", "blocked", "— (owner)",
-             "no date", "Draft written 2026-10-26. No deploy, no new isolation window before sign-off."),
+        _row("g1", "G1 — pre-registration sign-off", "done", "signed", "2026-10-27",
+             "Owner chose branch (A): `structstop1.5` is registered as the binding bar for one "
+             "window. The sign-off preceded any post-change trade (BUY #723 was still open under "
+             "0.5 ATR), which is what §1 of the PREREG required."),
+        _row("a2", "A2 — the deploy commit itself", "pending", "— (host)", "no open trade",
+             "One line, `SL_CLEAR_ATR 0.5 → 1.5`, plus the cutover it writes. Gate: no open "
+             "position on the host. Record the host's `autosync: merge upstream` commit time as "
+             "`CLEAR15_CUTOVER` — never the PR date (10-13 erratum)."),
         _row("window_15", "structstop1.5 window (n=150 or date gate)", "pending",
              f"~{_ceil_days(REGISTERED_END, now)} d left", _date(REGISTERED_END),
-             "Not started (G1). ~15 trading days at 10–13 trades/day once deployed."),
+             "Registered, NOT started — the clock begins at the A2 deploy, not at the sign-off. "
+             "~15 trading days at 10–13 trades/day once deployed; the slack is the whole asset: "
+             "a mid-November deploy closes the window date-first with n<150, i.e. no PASS arm."),
         _row("track_b", "LIVE execution engineering (Track B)", "active",
              f"{counts['todo']} TODO · {counts['manual']} MANUAL", "one check / session",
              "Each step turns one live_readiness.py check green with a hermetic test."),

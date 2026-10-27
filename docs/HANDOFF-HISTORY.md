@@ -14,6 +14,31 @@ block or a REVIEW instead; that is what makes this file trustworthy. (Created 20
 
 ---
 
+## 2026-10-27 12:00 UTC — §1 before the G1 decision pack / collection-359 refresh
+
+**This is the complete HANDOFF §1 block as it stood for collection 349 (709 closed trades, structural-stop era n=212, post-DST offset confirmed, `structstop1.5` drafted but unsigned). Nothing below is current.**
+
+### Replaced §1 block
+
+## 1. Where things stand (as of **2026-10-26 — data collection 349; bar log through 11:59 UTC; full audit `docs/REVIEW-2026-10-26-full-system-audit.md`**)
+
+**Stance:** paper-only. `TRADING_MODE = "FORWARD_TEST"` and no real order is possible without two independent gates (`docs/EXECUTION-PLAN.md`, “What the phrase means”). The **DST gate is MET** — the broker offset moved `+3h → +2h` at `2026-10-25 22:00:30 UTC` (EU rule fits 100% of 24 379 observed rows). The 30-min **entries-only** daily-closure gap guard and the `#697` numbering fix are deployed (`71317da`, 10-25 02:48:12 UTC). Stop geometry is still **`SL_CLEAR_ATR = 0.5`**; `RR_TARGET = 1.5`, `BE_TRIGGER_R = 0.75`, `MAX_HOLD_MINUTES = 240` are frozen — one variable per window.
+
+**The book:** **709 closed** (142W/306L/258BE/3TIME; 31.7% decisive), engine ledger **$131.30**, true equity **$114.34**, net **−$669.26** at the registered $0.40 round trip. No open trade (`next_trade_num: 710`). Log 51 215 bars to `2026-10-26 11:59:07 UTC`; `check_data.py` 0 fail/8 warn; `handoff_check.py` FRESH.
+
+**Open experiment:** struct-stop era **n=212** (57W/95L/58BE/2TIME), decisive **37.5% [30.2–45.4]**, gross **−0.054R/trade**, SCREEN MET on all five checks; geometry guard **PASS** (0 stops inside level, 83.0% level-bound, +0.50 ATR clearance, 3.32 ATR median risk). The **n=150 PASS arm lapsed at the 10-19 time gate** — grown-sample readings are observations, not a re-judgement. **No demonstrated edge after cost.**
+
+**Fired trigger + the decision now in front of the owner:** the §7 closure-gap REVERT trigger fired **3/2** (#595/#610/#687; no gap-through, no worse exit, no weekend ride). With the guard deployed and DST verified, the owner's 10-25 choice is live: **(A)** pre-register `structstop1.5` (`SL_CLEAR_ATR = 1.5`) — refreshed replay **−0.024R/t** at $0.20/side and **−0.047R** at $0.275/side vs live **−0.110 / −0.140**, passing 3 of 4 pre-declared bar points — or **(B)** the literal §7 revert to `2·ATR / 3·ATR` (worst cell at every cost, ~66% of stops back inside the level). Draft: `docs/PREREG-2026-10-26-structstop1.5.md` — **NOT registered; G1 owner sign-off required** because it supersedes the literal revert. **No parameter was changed on 10-26.**
+
+**Cost and clock:** quote logger healthy again — **11/14 complete UTC days, 1/2 weekends**, 35 571 rows, median spread **$0.55** (measured round trip $0.55 on 131 matched trades) vs the registered $0.40. Keep $0.40 until the 14-day/two-weekend target. Spec `filling_mode = 2` = **IOC only**; account kind **REAL** (any live pilot needs a DEMO account + separate data dir). **Host action:** the quote sidecar was fresh from Sunday 22:00 UTC but the **price-bar log resumes only at 23:59:24 UTC** (~2 h of open-market M1 bars missing at the reopen) — verify `mt5feed` / the `goldbot` restart. `derive_daily_closure()` still returns `(20:58, 22:00)` because no post-DST **daily** break is logged yet; verify after tonight's break.
+
+**Engine + live gate:** the paper path is stable (`smoke_test.py` A–Z + **AA** PASSED, 64 `goldbot` tests, 18 `live_readiness` tests, `py_compile` OK). 10-26 **LIVE-only** hardening shipped: `live_armed()` + `LIVE_HALT` kill switch, IOC filling resolved from the symbol spec, closed-bar/dedup `run_live` with its own `live_last_candle_ts` watermark. **Zero paper behaviour change.** `python3 tools/live_readiness.py` = **9 PASS / 8 TODO / 3 MANUAL → LIVE GATE CLOSED**. Track B of the execution plan closes those gaps one check at a time; Track C (go/no-go) needs both tracks plus G2.
+
+**Pressure:** composite still collinear with side (BUY 81 aligned / 6 mixed, SELL 120 / 5) — context, never a signal. The owner's manual pressure/hold hypothesis remains unmeasured; the private observation log template is the “Manual observation record” appendix of `docs/EXECUTION-PLAN.md`.
+
+**One-line prompt:** **“Follow execution plan.”** — `docs/EXECUTION-PLAN.md` (“What the phrase means”) states exactly what it authorizes and the two approval gates.
+
+
 ## 2026-10-26 14:15 UTC — §1 before the full-system audit / LIVE-gate rewrite
 
 **This is the complete HANDOFF §1 block as it stood for collection 335 (697 closed trades, structural-stop era n=200, PR #58 deployed, pre-DST offset verification). Nothing below is current.**

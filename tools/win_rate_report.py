@@ -213,6 +213,12 @@ if SPREAD_GIVEN:
              ("0.75R master (>=09-15)", [t for t in TRADES_L if t["et"] >= BE_075_DEPLOY]),
              (f"struct-stop era (>={_SL.LIVE_CUTOVER:%m-%d %H:%M})",
               [t for t in TRADES_L if t["et"] >= _SL.LIVE_CUTOVER])]
+    # the structstop1.5 window (docs/PREREG-2026-10-26-structstop1.5.md) - a separate book only
+    # once the change is DEPLOYED; the era boundary is the host's deploy time, never the
+    # registration date, so this row stays absent while strategy_lab.CLEAR15_CUTOVER is None.
+    if _SL.CLEAR15_CUTOVER is not None:
+        books.append((f"{_SL.CLEAR15_ERA} (>={_SL.CLEAR15_CUTOVER:%m-%d %H:%M})",
+                      [t for t in TRADES_L if t["et"] >= _SL.CLEAR15_CUTOVER]))
     print(f"  {'book':32s}{'n':>5}{'gross $/t':>10}{'1R $':>7}  " +
           "".join(f"{'net R/t @'+format(c, '.2f'):>16}" for c in costs) + f"{'break-even':>12}")
     for label, ts in books:
@@ -246,6 +252,17 @@ stats([t for t in NEW if BE_075_DEPLOY <= t["et"] < MAXHOLD_DEPLOY],
       "  ... 0.75R pre-maxhold")
 stats(MASTER_075, "0.75R master (>=09-15, bar book)")
 stats(MAXHOLD, "max-hold era (>=09-21, isolated)")
+# structstop1.5 (registered 2026-10-27, PREREG-2026-10-26): its own era split, from the DEPLOY
+# time. Absent until A2 ships - while CLEAR15_CUTOVER is None there is no new window to report,
+# and no pre-deploy trade may ever be counted into it.
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import strategy_lab as _SL2
+except Exception:                                            # noqa: BLE001 - report stays readable
+    _SL2 = None
+if _SL2 is not None and _SL2.CLEAR15_CUTOVER is not None:
+    stats([t for t in TRADES_L if t["et"] >= _SL2.CLEAR15_CUTOVER],
+          f"{_SL2.CLEAR15_ERA} window (>={_SL2.CLEAR15_CUTOVER:%m-%d %H:%M}, isolated)")
 for name, ts in (("pre-ratchet", PRE), ("new regime", NEW)):
     if ts:
         r = statistics.mean(abs(t["entry"] - t["sl"]) for t in ts)

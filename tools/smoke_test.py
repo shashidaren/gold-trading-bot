@@ -3726,6 +3726,147 @@ finally:
         engine.mt5 = _real_mt5_aa
 shutil.rmtree(_tmp_aa, ignore_errors=True)
 
+# --- Scenario AB ---
+# G1 was signed off on 2026-10-27 as branch (A): `structstop1.5` (SL_CLEAR_ATR 0.5 -> 1.5) is
+# PRE-REGISTERED (docs/PREREG-2026-10-26-structstop1.5.md) but deliberately NOT deployed - that is A2,
+# and A2 waits for an open-trade-free window on the host. So A1's tests can only prove two things, and
+# they are the two things the registration is actually worth:
+#   (1) the deploy really is ONE dial on the same machine - clearance - so the risk/TP/ratchet geometry
+#       needs no new code and the pre-registered bar describes what the engine will do; and
+#   (2) every tool that JUDGES refuses to score the unstarted window, instead of quietly reading the
+#       new bar off the old 0.5 ATR era (the failure mode that would have faked a "FAIL" today).
+print("\nScenario AB: structstop1.5 - registered clearance change, unstarted-window guards "
+      "(docs/PREREG-2026-10-26-structstop1.5.md, A1)")
+
+check("AB: registration did NOT deploy - the live engine still uses the 0.5 ATR bar",
+      engine.SL_CLEAR_ATR == 0.5 and SL.SL_CLEAR_ATR == 0.5,
+      f"engine={engine.SL_CLEAR_ATR} strategy_lab={SL.SL_CLEAR_ATR}")
+check("AB: the registered bar is 1.5 ATR and has no cutover yet",
+      SL.CLEAR15_ATR == 1.5 and SL.CLEAR15_CUTOVER is None and P.CLEAR15_CUTOVER is None,
+      f"ATR={SL.CLEAR15_ATR} cutover={SL.CLEAR15_CUTOVER}")
+check("AB: the lab offers the variant by the registered era name",
+      SL.CLEAR15_ERA in SL.VARIANTS and SL.VARIANTS[SL.CLEAR15_ERA][1]["stop_beyond_level"] == 1.5,
+      f"{SL.CLEAR15_ERA}")
+
+# (1) the dial. Patch ONLY the module global structural_risk() reads - exactly the one line the A2
+# commit changes - and re-run Scenario N's tape. Everything else must follow from it.
+tmp_ab = tempfile.mkdtemp(prefix="gold_smoke_ab_")
+engine.LOG_FILE_PATH = os.path.join(tmp_ab, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_ab, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_ab, "trades.csv")
+trade_filter.TRADES_LOG = engine.TRADES_LOG_PATH
+trade_filter.SKIP_LOG = os.path.join(tmp_ab, "skipped_trades.csv")
+trade_filter.is_in_blackout = lambda now=None, side=None: (False, "")
+
+_real_clear_ab = engine.SL_CLEAR_ATR
+try:
+    engine.SL_CLEAR_ATR = SL.CLEAR15_ATR
+    eng_ab = engine.GoldEngine()
+    run_candles(eng_ab, candles_uptrend(240), datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc))
+    floor_ab = min(list(eng_ab.lows)[-engine.LOOKBACK_PERIOD:])
+    p_ab = list(eng_ab.closes)[-1]
+    run_candles(eng_ab, [(p_ab, p_ab + 0.3, floor_ab - 0.1, p_ab - 1.2)],
+                datetime(2026, 6, 1, 4, 0, tzinfo=timezone.utc))
+    check("AB: the same tape that triggers the live rule triggers the 1.5 ATR rule",
+          eng_ab.trade_active and eng_ab.trade_type == "BUY",
+          f"active={eng_ab.trade_active} type={eng_ab.trade_type}")
+
+    entry_ab = eng_ab.entry_price
+    atr_entry_ab = eng_ab.atr              # unchanged until the NEXT bar is evaluated
+    risk_ab = entry_ab - eng_ab.stop_loss
+    check("AB: risk == distance-to-level + 1.5 ATR",
+          abs(risk_ab - ((entry_ab - floor_ab) + 1.5 * atr_entry_ab)) < 1e-6,
+          f"risk={risk_ab:.3f} want={(entry_ab - floor_ab) + 1.5 * atr_entry_ab:.3f}")
+    check("AB: the stop clears the floor by >= 1.5 ATR (the bar the ledger will be judged on)",
+          floor_ab - eng_ab.stop_loss >= 1.5 * atr_entry_ab - 1e-6,
+          f"clearance={floor_ab - eng_ab.stop_loss:.3f} needs {1.5 * atr_entry_ab:.3f}")
+    check("AB: TP keeps the 1:1.5 ratio against the WIDER risk (no new TP code)",
+          abs((eng_ab.take_profit - entry_ab) - engine.RR_TARGET * risk_ab) < 1e-6,
+          f"tp dist={eng_ab.take_profit - entry_ab:.3f} vs {engine.RR_TARGET:.2f}x risk")
+    # The whole registered change, stated as an equation: the 0.5 ATR bar's geometry plus exactly
+    # one ATR. If A2 ever needs a second edit, this check is what fails.
+    exp_half = max(engine.ATR_SL_MULT * atr_entry_ab, (entry_ab - floor_ab) + 0.5 * atr_entry_ab)
+    check("AB: vs the live 0.5 ATR bar the ONLY difference is exactly one extra ATR of risk",
+          abs((risk_ab - exp_half) - 1.0 * atr_entry_ab) < 1e-6,
+          f"risk@1.5={risk_ab:.3f} risk@0.5={exp_half:.3f} delta={risk_ab - exp_half:.3f} ATR={atr_entry_ab:.3f}")
+
+    # A dip deep enough to stop the CURRENT geometry out must leave the 1.5 ATR trade alive: that is
+    # the mechanism the replay credits (+0.099 R/trade over 3,854 trades), tested rather than asserted.
+    stop_half = entry_ab - exp_half
+    dip_ab = (stop_half + eng_ab.stop_loss) / 2.0
+    check("AB: that dip would have hit the 0.5 ATR stop", dip_ab < stop_half,
+          f"dip={dip_ab:.2f} old stop={stop_half:.2f}")
+    run_candles(eng_ab, [(entry_ab, entry_ab + 0.2, dip_ab, entry_ab - 0.2)],
+                datetime(2026, 6, 1, 4, 1, tzinfo=timezone.utc))
+    check("AB: a retest that stops the 0.5 ATR trade out leaves the 1.5 ATR trade alive",
+          eng_ab.trade_active and eng_ab.losses == 0 and eng_ab.stop_loss != stop_half,
+          f"active={eng_ab.trade_active} losses={eng_ab.losses}")
+
+    # The ratchet must arm at 0.75R OF THE NEW RISK, not of the ATR floor (the scratch-rate lesson).
+    be_ab = entry_ab + engine.BE_TRIGGER_R * risk_ab
+    run_candles(eng_ab, [(dip_ab, be_ab + 0.1, dip_ab - 0.1, be_ab)],
+                datetime(2026, 6, 1, 4, 2, tzinfo=timezone.utc))
+    check("AB: the BE ratchet arms at +0.75R of the structural risk",
+          eng_ab.be_armed and eng_ab.stop_loss == round(entry_ab, 2),
+          f"armed={eng_ab.be_armed} sl={eng_ab.stop_loss} entry={entry_ab}")
+finally:
+    engine.SL_CLEAR_ATR = _real_clear_ab
+check("AB: the live constant is restored - the patched run cannot leak into later scenarios",
+      engine.SL_CLEAR_ATR == 0.5, f"engine.SL_CLEAR_ATR={engine.SL_CLEAR_ATR}")
+shutil.rmtree(tmp_ab, ignore_errors=True)
+
+# (2) the guards. All three judging tools must say "not started" and exit 0 on the unstarted window.
+ab_buf = io.StringIO()
+with contextlib.redirect_stdout(ab_buf):
+    rc_ab15 = CSS.main(["--root", ROOT, "--era", "clear15"])
+ab_out = ab_buf.getvalue()
+check("AB: check_structural_stop --era clear15 refuses to judge and exits 0",
+      rc_ab15 == 0 and "NOT STARTED" in ab_out, f"exit={rc_ab15} {ab_out.strip()[:120]}")
+
+import journal as J  # noqa: E402
+ab_buf = io.StringIO()
+with contextlib.redirect_stdout(ab_buf):
+    rc_abj = J.main(["--root", ROOT, "--era", "clear15"])
+ab_out = ab_buf.getvalue()
+check("AB: journal --era clear15 refuses to report a window that has not started",
+      rc_abj == 0 and "NOT STARTED" in ab_out, f"exit={rc_abj} {ab_out.strip()[:120]}")
+
+check("AB: pressure.era_stats(bar=BAR15) returns None, not the 0.5 ATR era read against the new bar",
+      P.era_stats([{"Entry_Time": "2026-10-27 10:00:00", "Exit_Reason": "TP", "Profit": "5.0"}],
+                  bar=P.BAR15) is None)
+check("AB: the 1.5 ATR bar is wired to the registration, not to a copy of the live one",
+      P.BAR15["pass_n"] == 150 and P.BAR15["screen_n"] == 100
+      and abs(P.BAR15["sl_per_day"] - 6.0) < 1e-9 and abs(P.BAR15["sl_share_pct"] - 40.0) < 1e-9
+      and abs(P.BAR15["r_per_trade"] + 0.05) < 1e-9 and abs(P.BAR15["wr_pct"] - 40.0) < 1e-9
+      and abs(P.BAR15["revert_r"] + 0.15) < 1e-9 and abs(P.BAR15["revert_dd"] - 250.0) < 1e-9,
+      f"{ {k: v for k, v in P.BAR15.items() if k in ('sl_per_day','sl_share_pct','r_per_trade','wr_pct','pass_n')} }")
+check("AB: the live 0.5 ATR card still reads the OLD bar (no drift while the new window waits)",
+      abs(P.BAR7["sl_per_day"] - 6.5) < 1e-9 and abs(P.BAR7["sl_share_pct"] - 47.0) < 1e-9
+      and abs(P.BAR7["r_per_trade"] + 0.1) < 1e-9 and P.BAR7["screen_n"] == 100,
+      f"{ {k: v for k, v in P.BAR7.items() if k in ('sl_per_day','sl_share_pct','r_per_trade')} }")
+
+ab_buf = io.StringIO()
+with contextlib.redirect_stdout(ab_buf):
+    rc_abpr = XPR.main(["--root", ROOT, "--era", "clear15"])
+ab_out = ab_buf.getvalue()
+check("AB: pressure_report --era clear15 prints the not-started card and exits 0",
+      rc_abpr == 0 and "5b." in ab_out and "NOT STARTED" in ab_out,
+      f"exit={rc_abpr} {ab_out[-200:] if not rc_abpr else ''}")
+
+# `--table` is a full 13-month replay x four cost levels, so the smoke test pins its era-listing
+# helper instead of running it: the 1.5 ATR row must appear exactly when a deploy time exists.
+check("AB: strategy_lab --table has no 1.5 era row while the window is undeployed",
+      SL.clear15_eras() == [], f"{SL.clear15_eras()}")
+_saved_c15 = SL.CLEAR15_CUTOVER
+SL.CLEAR15_CUTOVER = datetime(2026, 10, 27, 6, 0)          # what A2's host commit time will set
+try:
+    check("AB: a recorded deploy time yields exactly one open-ended 1.5 era row",
+          SL.clear15_eras() == [(SL.CLEAR15_ERA, datetime(2026, 10, 27, 6, 0), None)],
+          f"{SL.clear15_eras()}")
+finally:
+    SL.CLEAR15_CUTOVER = _saved_c15
+check("AB: the simulated deploy time is not left behind", SL.CLEAR15_CUTOVER is None)
+
 
 print()
 if FAILURES:
