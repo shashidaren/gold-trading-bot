@@ -60,7 +60,11 @@ class TimelineTests(unittest.TestCase):
         self.assertEqual(by_id["forward_test"]["state"], "done")
         self.assertEqual(by_id["structstop_era"]["state"], "active")
         self.assertEqual(by_id["dst_us"]["state"], "active")
-        self.assertEqual(by_id["g1"]["state"], "blocked")
+        # G1 was signed on 2026-10-27 (docs/REVIEW-2026-10-27-g1-decision.md): the row goes done and
+        # the owner's remaining action moves to the next row, A2 — the deploy itself.
+        self.assertEqual(by_id["g1"]["state"], "done")
+        self.assertEqual(by_id["a2"]["state"], "pending")
+        self.assertIn("no open position", by_id["a2"]["detail"])
         self.assertEqual(by_id["edge_review"]["state"], "conditional")
         self.assertEqual(by_id["live_review"]["state"], "conditional")
         self.assertIn("d elapsed", by_id["forward_test"]["days_text"])
@@ -165,6 +169,7 @@ class DashboardWiringTests(unittest.TestCase):
         self.assertIn("Completed (", text)
         self.assertIn("owner / host blockers", text)
         self.assertIn("G1 — pre-registration sign-off", text)
+        self.assertIn("A2 — the deploy commit itself", text)
         self.assertIn("LIVE-gate checks (read-only)", text)
         self.assertIn("not deadlines", text)
 

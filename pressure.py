@@ -109,6 +109,34 @@ REVERT_SL_MULTIPLE = 2.2          # avg SL loss vs PRE_CHANGE_AVG_SL_USD
 REVERT_DD_USD = 250.0
 REVIEW_DUE = datetime(2026, 10, 19, 21, 0)   # scheduled judgement (or n=150)
 
+# ── the NEXT registered window: `structstop1.5` ──────────────────────────────────────────────
+# docs/PREREG-2026-10-26-structstop1.5.md §5 (registered by the owner on 2026-10-27, gate G1).
+# The bar below is that section copied, not summarised, because the panel must show the contract
+# the window will actually be judged on. Two things make it different from the §7 card: the
+# expectancy rows are NET of the registered round-trip cost (`cost_rt`), and the era boundary is
+# the DEPLOY time — so while `CLEAR15_CUTOVER` is None there is no window, no card and no reading.
+# Nothing here may be used to re-judge the 0.5 ATR era: that judgement closed on 2026-10-19.
+CLEAR15_CUTOVER = None          # mirror of strategy_lab.CLEAR15_CUTOVER; set it at the A2 deploy
+BAR15 = {
+    "label": "structstop1.5 era",
+    "doc": "docs/PREREG-2026-10-26-structstop1.5.md §5",
+    "cost_rt": 0.40,                    # registered $0.20/side, charged on every trade incl. BE
+    "cost_alt_rt": 0.55,                # the measured median spread (A6 may replace it, once)
+    "sl_per_day": 6.0, "sl_per_day_base": "live era 5.94; replay 1.5 ≈ 3.7",
+    "sl_share_pct": 40.0, "sl_share_base": "live 42.0%; replay 36.8%",
+    "scratch_pct": 35.0, "scratch_base": "live 31%; replay 34%",
+    "r_per_trade": -0.05, "r_base": "net at $0.20/side (replay 1.5 −0.046)",
+    "wr_pct": 40.0, "wr_base": "1:1.5 breakeven",
+    "screen_n": 100, "pass_n": 150, "wilson_lb": 40.0,
+    "pass_r": 0.00, "pass_r_alt": -0.05, "pass_dd": 200.0,
+    "level_bound": (70.0, 90.0), "level_bound_base": "registered at 83.0% (10-27 read 82.2%)",
+    "median_risk_atr": (3.8, 5.0), "median_risk_base": "replay 4.37",
+    "revert_r": -0.15, "revert_dd": 250.0,
+    "revert_sl_multiple": 2.2, "pre_change_avg_sl": 5.88,
+    "revert_sl_text": "avg SL loss > 2.2× pre-change ($5.88 → $12.94)",
+    "review_due": datetime(2026, 12, 1, 21, 0),   # n=150 or this, whichever comes FIRST
+}
+
 # ── journal defaults (display-only; cost is ASSUMED, not measured) ──
 JOURNAL_COST_USD = 0.40        # round trip, same as HANDOFF §1 / OUTLOOK_COST_USD
 JOURNAL_RECENT_N = 30
@@ -738,14 +766,43 @@ def trade_risk(row):
     return abs(tp - entry) / RR_TARGET
 
 
-def era_stats(trades, cutover=STRUCT_STOP_CUTOVER, label="struct-stop era"):
-    """Outcome/P&L/R summary for entries >= cutover, checked against §7's bar.
+# §7's bar, as one dict, so a second registered window can be read by the same code path.
+BAR7 = {
+    "label": "struct-stop era", "doc": "docs/ANALYSIS-2026-10-05-stop-loss-geometry.md §7",
+    "cost_rt": 0.0, "cost_alt_rt": 0.55,
+    "sl_per_day": BAR_SL_PER_DAY, "sl_per_day_base": "8.2/day",
+    "sl_share_pct": BAR_SL_SHARE_PCT, "sl_share_base": "45.4%",
+    "scratch_pct": BAR_SCRATCH_PCT, "scratch_base": "32.8%",
+    "r_per_trade": BAR_R_PER_TRADE, "r_base": "$/trade ÷ mean 1R (win_rate_report scale)",
+    "wr_pct": BAR_WR_PCT, "wr_base": "36%",
+    "screen_n": 100, "pass_n": BAR_PASS_N, "wilson_lb": BREAKEVEN_WR_PCT,
+    "pass_r": None, "pass_r_alt": None, "pass_dd": None,
+    "level_bound": BAR_LEVEL_BOUND, "level_bound_base": "replay 80.2%",
+    "median_risk_atr": BAR_MEDIAN_RISK_ATR, "median_risk_base": "replay 3.07",
+    "revert_r": REVERT_R_PER_TRADE, "revert_dd": REVERT_DD_USD,
+    "revert_sl_multiple": REVERT_SL_MULTIPLE, "pre_change_avg_sl": PRE_CHANGE_AVG_SL_USD,
+    "revert_sl_text": f"avg SL loss > {REVERT_SL_MULTIPLE:.1f}× pre-change (${PRE_CHANGE_AVG_SL_USD:.2f})",
+    "review_due": REVIEW_DUE,
+}
 
-    Every threshold and its baseline text comes from
-    docs/ANALYSIS-2026-10-05-stop-loss-geometry.md §7; the panel shows the same
-    verdicts, so a session reading the dashboard sees exactly the contract the
-    review will be judged on — never a friendlier restatement of it.
+
+def era_stats(trades, cutover=STRUCT_STOP_CUTOVER, label=None, bar=None):
+    """Outcome/P&L/R summary for entries >= cutover, checked against a PRE-REGISTERED bar.
+
+    `bar` is one of the bar dicts above; every threshold and its baseline text comes from the
+    dated registration it mirrors (§7 for the live era, PREREG §5 for a window that has not
+    started yet), so the panel shows the contract the review will actually be judged on — never
+    a friendlier restatement of it. The default (None) is the shipped §7 card, unchanged.
     """
+    bar = bar or BAR7
+    label = label if label is not None else bar["label"]
+    if bar is not BAR7 and cutover == STRUCT_STOP_CUTOVER:
+        # A caller asked for the second window but passed no boundary: use that window's own deploy
+        # time. If it has none there is nothing to judge - and it must never fall back to the
+        # 0.5 ATR era and read the NEW bar off it (that would "fail" a window that has not started).
+        cutover = CLEAR15_CUTOVER
+        if cutover is None:
+            return None
     era = [t for t in trades if (parse_ts(t.get("Entry_Time")) or datetime.min) >= cutover]
     if not era:
         return None
@@ -811,54 +868,82 @@ def era_stats(trades, cutover=STRUCT_STOP_CUTOVER, label="struct-stop era"):
     # the decisive-only mean (per-trade risk) is kept alongside as a secondary read.
     one_r_usd = _median(one_r) if one_r else None
     mean_1r = (sum(one_r) / len(one_r)) if one_r else None
-    r_per_trade = ((gross / n) / mean_1r) if mean_1r else None
+    cost_rt = bar.get("cost_rt") or 0.0
+    net = (gross / n) - cost_rt
+    r_per_trade = (net / mean_1r) if mean_1r else None
+    r_per_trade_alt = ((net + cost_rt - (bar.get("cost_alt_rt") or cost_rt)) / mean_1r) if mean_1r else None
     r_per_trade_decisive = (r_sum / r_n) if r_n else None
     level_bound_pct = 100.0 * level_bound / len(risks_atr) if risks_atr else None
     median_risk_atr = _median(risks_atr)
 
+    cost_tag = "" if not cost_rt else f" (net of ${cost_rt:.2f} round trip)"
     checks = {
-        "B1": {"name": "SL events / day", "value": sl_per_day, "bar": BAR_SL_PER_DAY,
-               "cmp": "≤", "unit": "/day", "ok": sl_per_day <= BAR_SL_PER_DAY, "baseline": "8.2/day"},
-        "B2": {"name": "SL share of closed", "value": sl_share, "bar": BAR_SL_SHARE_PCT,
-               "cmp": "≤", "unit": "%", "ok": sl_share <= BAR_SL_SHARE_PCT, "baseline": "45.4%"},
-        "B3": {"name": "Scratch (BE) share", "value": scratch_pct, "bar": BAR_SCRATCH_PCT,
-               "cmp": "≤", "unit": "%", "ok": scratch_pct <= BAR_SCRATCH_PCT, "baseline": "32.8%"},
-        "C1": {"name": "R/trade (gross)", "value": r_per_trade, "bar": BAR_R_PER_TRADE,
-               "cmp": "≥", "unit": "R", "ok": (r_per_trade is not None and r_per_trade >= BAR_R_PER_TRADE),
-               "baseline": "$/trade ÷ mean 1R (win_rate_report scale)"},
-        "C2": {"name": "Decisive WR", "value": wr, "bar": BAR_WR_PCT,
-               "cmp": "≥", "unit": "%", "ok": wr >= BAR_WR_PCT, "baseline": "36%"},
+        "B1": {"name": "SL events / day", "value": sl_per_day, "bar": bar["sl_per_day"],
+               "cmp": "≤", "unit": "/day", "ok": sl_per_day <= bar["sl_per_day"],
+               "baseline": bar["sl_per_day_base"]},
+        "B2": {"name": "SL share of closed", "value": sl_share, "bar": bar["sl_share_pct"],
+               "cmp": "≤", "unit": "%", "ok": sl_share <= bar["sl_share_pct"],
+               "baseline": bar["sl_share_base"]},
+        "B3": {"name": "Scratch (BE) share", "value": scratch_pct, "bar": bar["scratch_pct"],
+               "cmp": "≤", "unit": "%", "ok": scratch_pct <= bar["scratch_pct"],
+               "baseline": bar["scratch_base"]},
+        "C1": {"name": f"R/trade{' (gross)' if not cost_rt else ''}{cost_tag}", "value": r_per_trade,
+               "bar": bar["r_per_trade"], "cmp": "≥", "unit": "R",
+               "ok": (r_per_trade is not None and r_per_trade >= bar["r_per_trade"]),
+               "baseline": bar["r_base"]},
+        "C2": {"name": "Decisive WR", "value": wr, "bar": bar["wr_pct"],
+               "cmp": "≥", "unit": "%", "ok": wr >= bar["wr_pct"], "baseline": bar["wr_base"]},
     }
+    if bar.get("pass_r") is not None:
+        checks["C3"] = {"name": f"PASS-arm R/trade at ${bar['cost_alt_rt']:.2f} RT",
+                        "value": r_per_trade_alt, "bar": bar["pass_r_alt"], "cmp": "≥", "unit": "R",
+                        "ok": (r_per_trade_alt is not None and r_per_trade_alt >= bar["pass_r_alt"]),
+                        "baseline": "measured spread; only read at n>=150"}
     reverts = {
-        "R4": {"name": "R/trade ≤ −0.20R", "fired": (r_per_trade is not None and r_per_trade <= REVERT_R_PER_TRADE),
+        "R4": {"name": f"R/trade ≤ {bar['revert_r']:.2f}R",
+               "fired": (r_per_trade is not None and r_per_trade <= bar["revert_r"]),
                "value": r_per_trade},
-        "R5": {"name": f"avg SL loss > {REVERT_SL_MULTIPLE:.1f}× pre-change (${PRE_CHANGE_AVG_SL_USD:.2f})",
-               "fired": (avg_sl is not None and avg_sl > REVERT_SL_MULTIPLE * PRE_CHANGE_AVG_SL_USD),
+        "R5": {"name": bar["revert_sl_text"],
+               "fired": (avg_sl is not None and avg_sl > bar["revert_sl_multiple"] * bar["pre_change_avg_sl"]),
                "value": avg_sl},
-        "R7": {"name": f"era drawdown > ${REVERT_DD_USD:.0f}", "fired": max_dd > REVERT_DD_USD,
+        "R7": {"name": f"era drawdown > ${bar['revert_dd']:.0f}", "fired": max_dd > bar["revert_dd"],
                "value": max_dd},
     }
     geometry = {
-        "A4": {"name": "Level-bound share", "value": level_bound_pct, "unit": "%", "lo": BAR_LEVEL_BOUND[0],
-               "hi": BAR_LEVEL_BOUND[1],
-               "ok": (level_bound_pct is not None and BAR_LEVEL_BOUND[0] <= level_bound_pct <= BAR_LEVEL_BOUND[1]),
-               "baseline": "replay 80.2%"},
-        "A5": {"name": "Median risk (ATR)", "value": median_risk_atr, "unit": " ATR", "lo": BAR_MEDIAN_RISK_ATR[0],
-               "hi": BAR_MEDIAN_RISK_ATR[1],
-               "ok": (median_risk_atr is not None and BAR_MEDIAN_RISK_ATR[0] <= median_risk_atr <= BAR_MEDIAN_RISK_ATR[1]),
-               "baseline": "replay 3.07"},
+        "A4": {"name": "Level-bound share", "value": level_bound_pct, "unit": "%", "lo": bar["level_bound"][0],
+               "hi": bar["level_bound"][1],
+               "ok": (level_bound_pct is not None
+                      and bar["level_bound"][0] <= level_bound_pct <= bar["level_bound"][1]),
+               "baseline": bar["level_bound_base"]},
+        "A5": {"name": "Median risk (ATR)", "value": median_risk_atr, "unit": " ATR",
+               "lo": bar["median_risk_atr"][0], "hi": bar["median_risk_atr"][1],
+               "ok": (median_risk_atr is not None
+                      and bar["median_risk_atr"][0] <= median_risk_atr <= bar["median_risk_atr"][1]),
+               "baseline": bar["median_risk_base"]},
     }
+    pass_n = bar["pass_n"]
+    # The B/C rows are the SCREEN's own conditions, exactly as the 2026-10-19 card read them: no
+    # trade-count gate here (that was true then and must stay true now - the §7 judgement closed on
+    # 2026-10-19 and its wording is frozen). The n gates live in `pass_ok` and in `trades_to_pass`;
+    # `screen_n` is reported so a reader can see how far the window is from its first judgement.
     screen_ok = all(c["ok"] for c in checks.values())
-    pass_ok = screen_ok and n >= BAR_PASS_N and lb > BREAKEVEN_WR_PCT
+    extra_pass = True
+    if bar.get("pass_r") is not None:
+        extra_pass = (r_per_trade is not None and r_per_trade >= bar["pass_r"]
+                      and max_dd <= bar["pass_dd"])
+    pass_ok = (all(c["ok"] for c in checks.values()) and n >= pass_n and lb > bar["wilson_lb"]
+               and extra_pass)
     status = ("SCREEN MET" if screen_ok else "SCREEN NOT MET")
     if pass_ok:
-        status = "PASS (n≥150 & Wilson LB > 32.1%)"
-    elif screen_ok and n < BAR_PASS_N:
-        status = f"SCREEN MET — {BAR_PASS_N - n} trades short of PASS"
+        status = f"PASS (n≥{pass_n} & Wilson LB > {bar['wilson_lb']:.1f}%)"
+    elif screen_ok and n < pass_n:
+        status = f"SCREEN MET — {pass_n - n} trades short of PASS"
     if any(r["fired"] for r in reverts.values()):
         status = "REVERT TRIGGER FIRED"
     return {
         "label": label, "n": n, "cutover": cutover, "sessions": days,
+        "bar_doc": bar["doc"], "cost_rt": bar.get("cost_rt") or 0.0,
+        "review_due": bar["review_due"], "pass_n": pass_n, "screen_n": bar["screen_n"],
         "counts": counts, "gross": gross, "gross_per_trade": gross / n,
         "wr": wr, "wr_ci": (lb, ub), "r_per_trade": r_per_trade,
         "r_per_trade_decisive": r_per_trade_decisive, "mean_1r_usd": mean_1r,
@@ -870,7 +955,7 @@ def era_stats(trades, cutover=STRUCT_STOP_CUTOVER, label="struct-stop era"):
         "screen_ok": screen_ok, "pass_ok": pass_ok,
         "revert_fired": any(r["fired"] for r in reverts.values()),
         "status": status,
-        "trades_to_pass": max(0, BAR_PASS_N - n),
+        "trades_to_pass": max(0, pass_n - n),
         "last_entry": max((parse_ts(t.get("Entry_Time")) for t in era if parse_ts(t.get("Entry_Time"))),
                           default=None),
     }
@@ -2797,6 +2882,9 @@ def build(read_tail=True, now=None, log_rows=None, trades=None, skip_rows=None):
         "portfolio": portfolio_read(trades, now, log_rows),
         "skips": skip_summary(skip_rows, now),
         "era": era_stats(trades),
+        # the registered structstop1.5 window: None until the deploy sets CLEAR15_CUTOVER, so the
+        # dashboard/template can render it as "not started" instead of an empty card.
+        "era15": (era_stats(trades, bar=BAR15) if CLEAR15_CUTOVER is not None else None),
         "book": book_read(trades, now),
         "feed": feed_read(log_rows, now),
     }

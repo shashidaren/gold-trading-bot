@@ -497,6 +497,26 @@ PLANNED_CUTOVER = datetime(2026, 10, 5, 21, 0)   # what the docs promised (kept 
 LIVE_CUTOVER = datetime(2026, 10, 6, 3, 0)       # what actually happened (autosync 03:00:04Z)
 SL_CLEAR_ATR, RR_TARGET = 0.5, 1.5
 
+# ── the NEXT registered window: `structstop1.5` ──────────────────────────────────────────────
+# docs/PREREG-2026-10-26-structstop1.5.md — one runtime variable, SL_CLEAR_ATR 0.5 -> 1.5,
+# registered by the owner on 2026-10-27 (gate G1). The window is every entry at/after the moment
+# the HOST engine loaded the new code — NOT the PREREG date, NOT the PR merge (the 2026-10-13
+# erratum, learned the hard way on LIVE_CUTOVER above). The deploy has not happened, so this stays
+# None and every clear15 path in the tool suite is inert: set it from the host's
+# `autosync: merge upstream` commit time for the A2 deploy commit, then confirm it with
+#   python3 tools/check_structural_stop.py --era clear15
+# (it prints the ledger's OLD/NEW bracket and refuses to judge while the constant is None).
+CLEAR15_ATR = 1.5                    # the clearance under test (PREREG §2)
+CLEAR15_CUTOVER = None               # deploy time — unknown until the deploy happens
+CLEAR15_ERA = "structstop1.5"        # the label every tool uses for the new window
+
+
+def clear15_eras():
+    """Extra (label, from, to) era rows for --table, once the window has a deploy time."""
+    if CLEAR15_CUTOVER is None:
+        return []
+    return [(CLEAR15_ERA, CLEAR15_CUTOVER, None)]
+
 VARIANTS = {
     "baseline":      ("live rules as coded (0.2% price buffer on the level test)", {}),
     "structstop":    ("SHIPPED 2026-10-05: stop clears the level by 0.5 ATR, TP = 1.5x risk",
@@ -721,6 +741,7 @@ def main(argv=None):
                 ("max-hold", ERA_MAXHOLD, None),
                 ("075R MASTER", ERA_RATCHET_075, None),
                 ("post-cutover", LIVE_CUTOVER, None)]
+        eras += clear15_eras()      # (label, CLEAR15_CUTOVER, None) once the 1.5 window is deployed
         names = [x.strip() for x in (args.only.split(",") if args.only else []) if x.strip()]
         unknown = [x for x in names if x not in VARIANTS]
         if unknown:
@@ -765,6 +786,10 @@ def main(argv=None):
         print(f"\n  `baseline` = the geometry production used until {LIVE_CUTOVER:%Y-%m-%d %H:%M} UTC (risk = 2xATR,")
         print("  TP = 3xATR). `structstop` = what is live from the cutover. Pre-cutover eras are")
         print("  counterfactuals; the post-cutover row is the real measurement once data exists.")
+        if CLEAR15_CUTOVER is None:
+            print(f"  `{CLEAR15_ERA}` is REGISTERED (2026-10-27) but NOT deployed: CLEAR15_CUTOVER is None, so there is")
+            print(f"  no `{CLEAR15_ERA}` era row and no `{CLEAR15_ERA}`-vs-live comparison on the registered window yet.")
+            print("  Anything printed for that variant is a counterfactual on the post-cutover window, never a judgement.")
         return
 
     # ------------------------------------------------------------- 1. calib

@@ -38,10 +38,11 @@ USAGE
     python3 tools/journal.py --era all               # whole book
     python3 tools/journal.py --era structstop        # live rule only (>=2026-10-06 03:00)
     python3 tools/journal.py --era 075               # 0.75R era (>=2026-09-15 06:00)
+    python3 tools/journal.py --era clear15           # the structstop1.5 window (not started -> it says so)
     python3 tools/journal.py --json /tmp/j.json      # machine-readable for dashboard
     python3 tools/journal.py --csv /tmp/journal.csv  # enriched trade-by-trade export
 
-    --era choices: structstop (default, the live rule), 075, maxhold, all
+    --era choices: structstop (default, the live rule), 075, maxhold, all, clear15
     --cost is round-trip $/trade charged on EVERY trade incl. scratches (assumed, not measured)
     Exit code 0 always (report, not gate).
 
@@ -76,8 +77,25 @@ CUTOVERS = {
     "075":        datetime(2026, 9, 15, 6, 0),
     "maxhold":    datetime(2026, 9, 21, 6, 0),
     "all":        datetime(2020, 1, 1),
+    # the registered structstop1.5 window (docs/PREREG-2026-10-26-structstop1.5.md). Its boundary
+    # is the host DEPLOY time, not the registration date, so it is resolved at run time and is
+    # None until A2 ships: --era clear15 then reports "not started" instead of quietly falling
+    # back to the 0.5 ATR era and mixing the two windows.
+    "clear15":    None,
 }
 DEFAULT_ERA = "structstop"
+
+
+def resolve_cutover(era):
+    """(label, datetime|None) for an --era name; None = that window has not started."""
+    if era != "clear15":
+        return era, CUTOVERS[era]
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import strategy_lab as _sl          # canonical deploy times, same import the other tools use
+    except Exception:                       # noqa: BLE001 - a report must not die on an import
+        return era, None
+    return _sl.CLEAR15_ERA, _sl.CLEAR15_CUTOVER
 RR_TARGET = 1.5
 ATR_SL_MULT = 2.0
 
@@ -438,7 +456,13 @@ def main(argv=None):
     trades=load_trades(trades_path)
     log_rows=load_log(log_path)
     skipped=load_skipped(skip_path)
-    era_label, cutover = args.era, CUTOVERS[args.era]
+    era_label, cutover = resolve_cutover(args.era)
+    if cutover is None:
+        print(f"Journal — `{args.era}` window has NOT STARTED: no deploy time is recorded, and a "
+              f"pre-deploy trade may never be counted into it. Set strategy_lab.CLEAR15_CUTOVER from "
+              f"the host's `autosync: merge upstream` commit time after the A2 deploy "
+              f"(docs/PREREG-2026-10-26-structstop1.5.md). Nothing to report — exiting 0.")
+        return 0
 
     # filter era
     era_trades=[t for t in trades if (t["et"] or datetime.min) >= cutover]
