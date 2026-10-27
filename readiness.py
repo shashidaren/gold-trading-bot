@@ -77,24 +77,27 @@ MILESTONES = [
     ("2026-10-26", "Full audit + 'Follow execution plan' queue",
      "Tracks A/B/C, two hard approval gates, and a written definition of live-ready.",
      "docs/EXECUTION-PLAN.md"),
+    ("2026-10-27", "Post-DST daily break verified; G1 pack written",
+     "Derived guard schedule (20:58, 22:00) matches the first post-DST break; the owner's "
+     "approve/reject/hold pack for `structstop1.5` is dated and costed.",
+     "docs/BRIEF-2026-10-27-g1-owner-decision.md"),
 ]
 
 # Blockers that no code commit can clear. `who` is the person/place that must act.
 BLOCKERS = [
     ("Owner", "G1 — pre-registration sign-off",
-     "Approve the structstop1.5 draft or choose the literal §7 revert. Nothing deploys before this.",
+     "Approve the structstop1.5 draft or choose the literal §7 revert — decision pack: "
+     "docs/BRIEF-2026-10-27-g1-owner-decision.md. Nothing deploys before this.",
      "docs/PREREG-2026-10-26-structstop1.5.md"),
     ("Host", "Sunday-reopen price-bar hole",
-     "~2 h of open-market M1 bars missing (quotes fresh from 22:00, bars resume 23:59). Verify mt5feed / goldbot.",
+     "~2 h of open-market M1 bars missing on 10-25 (quotes fresh from 22:00, bars resume 23:59). "
+     "Verify mt5feed / goldbot; next chance to observe it is the 10-31/11-01 weekend.",
      "docs/REVIEW-2026-10-26-full-system-audit.md"),
-    ("Host", "First post-DST daily break",
-     "Confirm derive_daily_closure() matches the observed break; it still derives (20:58, 22:00).",
-     "docs/PREREG-2026-10-25-gap-guard-daily-closure.md"),
     ("Host", "DEMO account + 48 h evidence",
      "Track B5 needs a demo account (captured spec says REAL) and a dated demo test report.",
      "docs/EXECUTION-PLAN.md"),
     ("Evidence", "Positive net expectancy",
-     "Whole book net −$669 at the registered $0.40; no independent forward window yet.",
+     "Whole book net −$713 at the registered $0.40; no independent forward window yet.",
      "docs/REVIEW-2026-10-26-full-system-audit.md"),
     ("Owner", "G2 — real-money approval",
      "Never delegated to 'Follow execution plan'. Required even if every check is green.",
@@ -170,10 +173,13 @@ def build_timeline(now, progress, counts):
              f"~{_ceil_days(US_DST_END, now)} d left", _date(US_DST_END),
              "Cross-check only: the EU rule is already confirmed on observed offsets (+2h)."),
         _row("g1", "G1 — pre-registration sign-off", "blocked", "— (owner)",
-             "no date", "Draft written 2026-10-26. No deploy, no new isolation window before sign-off."),
+             "no date", "Draft 2026-10-26; owner decision pack 2026-10-27 "
+             "(docs/BRIEF-2026-10-27-g1-owner-decision.md). No deploy, no new isolation window "
+             "before the owner's signed line."),
         _row("window_15", "structstop1.5 window (n=150 or date gate)", "pending",
              f"~{_ceil_days(REGISTERED_END, now)} d left", _date(REGISTERED_END),
-             "Not started (G1). ~15 trading days at 10–13 trades/day once deployed."),
+             "Not started (G1). ~15 trading days at 10–13 trades/day once deployed — the slack is "
+             "the whole asset: a mid-November deploy closes the window date-first with n<150, i.e. no PASS arm."),
         _row("track_b", "LIVE execution engineering (Track B)", "active",
              f"{counts['todo']} TODO · {counts['manual']} MANUAL", "one check / session",
              "Each step turns one live_readiness.py check green with a hermetic test."),
