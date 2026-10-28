@@ -22,6 +22,7 @@ import argparse
 import ast
 import json
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -67,6 +68,59 @@ def _uses_attribute(source, attr):
         return False
     return any(isinstance(n, ast.Attribute) and n.attr == attr
                for n in ast.walk(fn_tree))
+
+
+def _uses_name(source, name):
+    """True when the code uses the NAME `name` (docstrings/comments ignored)."""
+    try:
+        fn_tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    return any(isinstance(n, ast.Name) and n.id == name for n in ast.walk(fn_tree))
+
+
+def _dict_has_key(source, key):
+    """True when the code builds a dict literal with `key` (not a docstring)."""
+    try:
+        fn_tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    return any(isinstance(n, ast.Dict) and any(
+        isinstance(k, ast.Constant) and k.value == key for k in n.keys)
+        for n in ast.walk(fn_tree))
+
+
+def _callable_sources(tree, source):
+    """name -> source text for every function/method in the file (no import)."""
+    out = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            out[node.name] = ast.get_source_segment(source, node) or ""
+    return out
+
+
+def _calls(fn_src, body):
+    """Names from `fn_src` that `body` actually CALLS (`name(`), not mentions."""
+    return {name for name in fn_src
+            if re.search(r"\b%s\s*\(" % re.escape(name), body)}
+
+
+def _reachable(fn_src, root="run_live"):
+    """Every function reachable from the LIVE loop by following calls.
+
+    B2 (2026-10-28): a construct sitting in a helper that `run_live` never calls
+    is not a working LIVE feature, so the two broker-side checks must not PASS on
+    dead code. Text-based and deliberately conservative — it can over-connect but
+    never under-connect, which is the safe direction for a gate that stays CLOSED.
+    """
+    seen, todo = set(), [root]
+    while todo:
+        name = todo.pop()
+        if name in seen or name not in fn_src:
+            continue
+        seen.add(name)
+        todo.extend(n for n in _calls(fn_src, fn_src[name]) if n not in seen)
+    return seen
 
 
 def code_checks(root=ROOT):
@@ -129,19 +183,33 @@ def code_checks(root=ROOT):
         "MIN_SPREAD_POINTS filter is wired into evaluate_candle" if
         "current_spread_points=live_spread_points" in src else "spread never reaches the gate"))
 
+    # B2 (2026-10-28): both broker-side rules are checked through the CALL GRAPH,
+    # not by finding a constant anywhere in the file — a helper the LIVE loop
+    # never reaches is not a working feature.
+    fn_src = _callable_sources(tree, src)
+    reachable = _reachable(fn_src)
+    sltp_senders = {n for n in fn_src if _uses_attribute(fn_src[n], "TRADE_ACTION_SLTP")}
+    be_paths = sorted(n for n in reachable
+                      if n in sltp_senders or _calls(fn_src, fn_src[n]) & sltp_senders)
     out.append(_check(
         "broker_be", "code", "broker-side breakeven ratchet (TRADE_ACTION_SLTP)",
-        PASS if "TRADE_ACTION_SLTP" in src else TODO,
-        "SL modification present" if "TRADE_ACTION_SLTP" in src else
-        "BE_TRIGGER_R is engine-side only; run_live never modifies the broker SL. "
-        "Either implement SLTP or register the divergence explicitly."))
+        PASS if be_paths else TODO,
+        (f"TRADE_ACTION_SLTP modify reachable from run_live ({', '.join(be_paths)})")
+        if be_paths else
+        "BE_TRIGGER_R is engine-side only; nothing reachable from run_live modifies "
+        "the broker SL. Either implement SLTP or register the divergence explicitly."))
 
-    time_stop = "ORDER_TIME_SPECIFIED" in src or "live_time_stop" in src
+    close_senders = {n for n in fn_src
+                     if _uses_attribute(fn_src[n], "TRADE_ACTION_DEAL")
+                     and _dict_has_key(fn_src[n], "position")}
+    time_paths = sorted(n for n in reachable if _uses_name(fn_src[n], "MAX_HOLD_MINUTES")
+                        and _calls(fn_src, fn_src[n]) & close_senders)
     out.append(_check(
         "broker_time_stop", "code", "broker-side 240-min time stop / close",
-        PASS if time_stop else TODO,
-        "broker-side time exit present" if time_stop else
-        "MAX_HOLD_MINUTES cannot fire in LIVE (no check_position on the live loop)"))
+        PASS if time_paths else TODO,
+        (f"MAX_HOLD_MINUTES closes the position from run_live ({', '.join(time_paths)})")
+        if time_paths else
+        "MAX_HOLD_MINUTES cannot fire in LIVE (no close order reachable from run_live)"))
 
     reconcile_fn = any(
         "positions_get" in _function_src(tree, src, n.name)
