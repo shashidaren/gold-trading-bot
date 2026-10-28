@@ -549,6 +549,134 @@ def resolve_order_filling(mt5_mod, symbol_info):
     return None
 
 
+# ── LIVE broker-side position management (B2, 2026-10-28; LIVE path ONLY) ────
+# The paper engine manages exits in-process (ticks for on_event, candles for the
+# MT5 sidecar). In LIVE the broker holds the stop and the target, so two
+# ENGINE-SIDE rules would silently stop existing at the moment of switch-over:
+# the BE ratchet (+BE_TRIGGER_R -> stop to entry) and the MAX_HOLD_MINUTES time
+# stop. Both are mirrored at the broker here so paper and LIVE run the SAME
+# strategy (docs/DECISION-2026-10-28-b2-broker-be-and-time-stop.md; plan B2).
+#
+# Both actions are risk-REDUCING only: the stop is moved to entry and never away
+# from it, and the time stop only closes. They still run while the process is
+# disarmed - a kill switch must stop NEW exposure, not orphan an open position -
+# but nothing in this block can open exposure. No frozen strategy variable and
+# no paper behaviour is touched.
+LIVE_MGMT_ATTEMPTS = 2        # 1 try + 1 retry for a market-moved rejection
+LIVE_MGMT_BACKOFF_S = 1.0     # sleep between attempts (patched out in tests)
+LIVE_MGMT_ALERT_EVERY = 15    # re-alert a still-unresolved reject every N failures
+
+# Retcodes worth a second attempt: the market moved between send and fill, our
+# request did not. Anything else (invalid stops, no money, trade disabled) is a
+# logic/config problem - retrying it would only spam the broker.
+LIVE_RETRY_RETCODES = (10004, 10020, 10021, 10012, 10031)
+#                        REQUOTE, PRICE_CHANGED, PRICE_OFF, TIMEOUT, CONNECTION
+
+LIVE_RETCODE_DONE = 10009
+
+
+def live_mt5_module():
+    """The MetaTrader5 module this process imported, or None.
+
+    A paper build never imports it (no Linux wheels), so every LIVE helper asks
+    for the module instead of assuming the global exists - that keeps the code
+    importable in tests and impossible to trip from the paper path.
+    """
+    return globals().get("mt5")
+
+
+def live_retcode_done(mt5_mod, result) -> bool:
+    """True when `order_send` reported TRADE_RETCODE_DONE (never on a missing result)."""
+    if result is None:
+        return False
+    want = int(getattr(mt5_mod, "TRADE_RETCODE_DONE", LIVE_RETCODE_DONE))
+    try:
+        return int(getattr(result, "retcode", -1)) == want
+    except (TypeError, ValueError):
+        return False
+
+
+def live_retcode_retryable(mt5_mod, retcode) -> bool:
+    """True when a rejection is worth one more attempt (market moved, not logic)."""
+    retry = set(LIVE_RETRY_RETCODES)
+    for name in ("TRADE_RETCODE_REQUOTE", "TRADE_RETCODE_PRICE_CHANGED",
+                 "TRADE_RETCODE_PRICE_OFF", "TRADE_RETCODE_TIMEOUT",
+                 "TRADE_RETCODE_CONNECTION"):
+        value = getattr(mt5_mod, name, None)
+        if value is not None:
+            try:
+                retry.add(int(value))
+            except (TypeError, ValueError):
+                pass
+    try:
+        return int(retcode) in retry
+    except (TypeError, ValueError):
+        return False
+
+
+def live_sltp_request(mt5_mod, ticket, sl, tp, symbol=SYMBOL, magic=MAGIC_NUMBER,
+                      comment="Gold Engine LIVE BE"):
+    """TRADE_ACTION_SLTP body: move one existing position's stop to `sl`.
+
+    `position` is the ticket, not an order - this modifies, never opens. The
+    caller only ever passes entry as `sl` (the paper ratchet), so the broker stop
+    can only tighten.
+    """
+    return {
+        "action": mt5_mod.TRADE_ACTION_SLTP,
+        "symbol": symbol,
+        "position": int(ticket),
+        "sl": float(sl),
+        "tp": float(tp),
+        "magic": magic,
+        "comment": comment,
+    }
+
+
+def live_close_request(mt5_mod, position, price, filling, symbol=SYMBOL,
+                       magic=MAGIC_NUMBER, deviation=20,
+                       comment="Gold Engine LIVE TIME"):
+    """Market-close ONE position (`position=ticket`) with the opposite side.
+
+    Volume comes from the broker position, not from local state: a partial fill
+    or a manual change must never leave a remainder that no rule manages.
+    """
+    is_long = int(getattr(position, "type", 0)) == int(getattr(mt5_mod, "POSITION_TYPE_BUY", 0))
+    return {
+        "action": mt5_mod.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": float(position.volume),
+        "type": (mt5_mod.ORDER_TYPE_SELL if is_long else mt5_mod.ORDER_TYPE_BUY),
+        "position": int(position.ticket),
+        "price": float(price),
+        "deviation": deviation,
+        "magic": magic,
+        "comment": comment,
+        "type_time": getattr(mt5_mod, "ORDER_TIME_GTC", 0),
+        "type_filling": filling,
+    }
+
+
+# Sentinel: the broker QUERY failed (dead terminal / connection drop), which is a
+# different fact from "the position is not there". Treating the two the same would
+# let one transient error permanently block new exposure via the reconcile flag.
+LIVE_POSITION_UNKNOWN = object()
+
+
+def live_position(mt5_mod, ticket):
+    """The broker's position: an object, None when authoritatively absent, or
+    `LIVE_POSITION_UNKNOWN` when the query itself failed."""
+    if ticket is None:
+        return None
+    try:
+        found = mt5_mod.positions_get(ticket=int(ticket))
+    except Exception:
+        return LIVE_POSITION_UNKNOWN
+    if not found:
+        return None
+    return found[0]
+
+
 if TRADING_MODE == "LIVE":
     import MetaTrader5 as mt5
 else:
@@ -596,6 +724,14 @@ class GoldEngine:
         self.structural_stop_bound = False   # True when the 20-bar level (not the ATR floor) set the stop
         self.be_armed = False  # True once the breakeven ratchet (BE_TRIGGER_R) fired
         self.current_trade_num = None
+
+        # LIVE broker-side management state (B2, 2026-10-28). Inert in paper:
+        # live_ticket stays None and nothing reads it unless TRADING_MODE=="LIVE".
+        self.live_ticket = None        # broker ticket the engine is managing
+        self.live_risk = None          # initial risk ($) the position was sized on
+        self.live_reconcile_pending = False  # broker closed it behind us (B3)
+        self._live_mgmt_fail_count = 0
+        self._live_reconcile_alerted = None
 
         self.next_trade_num = 1
         self.wins = 0
@@ -802,6 +938,15 @@ class GoldEngine:
             print(f"Could not read status.json for open-trade restore: {e}")
             return
 
+        # LIVE reconcile gap (B2, 2026-10-28): a position the broker closed while
+        # the engine was not looking must keep NEW LIVE entries blocked until an
+        # operator resolves the missing ledger row (B3 supplies the deal P&L).
+        # Restored before the trade_active early-return because the flag matters
+        # even when no trade is open.
+        self.live_reconcile_pending = bool(data.get("live_reconcile_pending", False))
+        if self.live_reconcile_pending:
+            print("status.json marks an UNRECONCILED LIVE position - new LIVE entries stay blocked")
+
         if not data.get("trade_active"):
             return
 
@@ -839,9 +984,15 @@ class GoldEngine:
         self.entry_wick_ratio = data.get("entry_wick_ratio")
         self.entry_ema_fast = data.get("entry_ema_fast")
         self.entry_ema_slow = data.get("entry_ema_slow")
+        # LIVE: broker ticket + the risk the position was sized on are part of
+        # the position state, so management resumes on the SAME position after a
+        # restart. None in paper - the paper book has no broker ticket.
+        self.live_ticket = data.get("live_ticket")
+        self.live_risk = data.get("live_risk")
 
         print(f"Restored OPEN {self.trade_type} trade #{self.current_trade_num} | "
-              f"Entry=${self.entry_price:.2f} SL=${self.stop_loss:.2f} TP=${self.take_profit:.2f}")
+              f"Entry=${self.entry_price:.2f} SL=${self.stop_loss:.2f} TP=${self.take_profit:.2f}"
+              + (f" | LIVE ticket {self.live_ticket}" if self.live_ticket else ""))
 
     def load_history_from_csv(self):
         if not os.path.isfile(LOG_FILE_PATH):
@@ -972,6 +1123,14 @@ class GoldEngine:
             "be_armed": self.be_armed if active_trade else None,
             "entry_time": self.entry_time if active_trade else None,
             "current_trade_num": self.current_trade_num if active_trade else None,
+            # LIVE management state (B2, 2026-10-28). The ticket and the risk the
+            # position was sized on must survive a restart, otherwise the BE
+            # ratchet and the 240-min time stop forget the position they are
+            # supposed to manage. The reconcile flag is always emitted because it
+            # blocks new LIVE entries even while no trade is active.
+            "live_ticket": self.live_ticket if active_trade else None,
+            "live_risk": round(self.live_risk, 2) if active_trade and self.live_risk else None,
+            "live_reconcile_pending": self.live_reconcile_pending,
             "entry_rsi": round(self.entry_rsi, 1) if active_trade and self.entry_rsi is not None else None,
             "entry_atr": round(self.entry_atr, 2) if active_trade and self.entry_atr is not None else None,
             "entry_wick_ratio": self.entry_wick_ratio if active_trade else None,
@@ -1601,6 +1760,191 @@ class GoldEngine:
         lots = round(lots / VOLUME_STEP) * VOLUME_STEP
         return lots if lots >= VOLUME_MIN else None
 
+    # ── LIVE broker-side management (B2, 2026-10-28; LIVE path only) ─────────
+    # Both rules below are mirrors of engine-side paper behaviour, not new
+    # strategy: the ratchet moves the stop TO entry at +BE_TRIGGER_R and the time
+    # stop closes at MAX_HOLD_MINUTES. See the decision doc linked above the
+    # LIVE_MGMT_* constants. Nothing here opens exposure or changes a parameter.
+
+    def _live_send(self, mt5_mod, request, label: str):
+        """Send one manage request, retrying ONCE on a market-moved rejection.
+
+        Returns (ok, last_result). Never raises and never mutates position state:
+        the caller only books an action after `ok` is True, so a rejection can
+        never look like a filled modify or a closed position.
+        """
+        result = None
+        for attempt in range(1, LIVE_MGMT_ATTEMPTS + 1):
+            try:
+                result = mt5_mod.order_send(request)
+            except Exception as e:  # a dead terminal must not kill the LIVE loop
+                print(f"{label}: order_send raised {type(e).__name__}: {e}")
+                result = None
+            if live_retcode_done(mt5_mod, result):
+                return True, result
+            code = getattr(result, "retcode", None)
+            comment = getattr(result, "comment", "") if result is not None else "no result"
+            print(f"{label}: attempt {attempt}/{LIVE_MGMT_ATTEMPTS} rejected "
+                  f"(retcode={code} {comment})")
+            if attempt >= LIVE_MGMT_ATTEMPTS or not live_retcode_retryable(mt5_mod, code):
+                break
+            time.sleep(LIVE_MGMT_BACKOFF_S)
+        return False, result
+
+    def _live_mgmt_failed(self, what: str, result):
+        """Record + alert an unresolved broker reject, rate-limited.
+
+        A rejected modify/close leaves the position under the broker's own SL/TP
+        and is retried on the next pass; the alert exists so silence is never
+        mistaken for success. Only the first failure and every Nth after it are
+        sent, otherwise a persistent defect would flood Telegram.
+        """
+        self._live_mgmt_fail_count += 1
+        n = self._live_mgmt_fail_count
+        code = getattr(result, "retcode", None)
+        comment = getattr(result, "comment", "") if result is not None else "no result"
+        print(f"LIVE {what} FAILED for #{self.current_trade_num}: "
+              f"retcode={code} {comment} (failure #{n})")
+        if n == 1 or n % LIVE_MGMT_ALERT_EVERY == 0:
+            self.send_telegram(
+                f"⚠️ LIVE {what} FAILED (#{self.current_trade_num})\n"
+                f"retcode: `{code}`\n{comment}\n"
+                f"Position unchanged; retrying next pass (failure #{n}).",
+                kind="risk",
+            )
+
+    def _live_reconcile_required(self):
+        """The broker no longer holds our ticket: say so, book NOTHING.
+
+        SL/TP can fire while the engine is between passes. Inventing an exit
+        price here would fabricate a ledger row; guessing a P&L would corrupt the
+        book. Booking the real outcome needs deal history, which is B3. Until
+        then: stop managing, raise one loud alert, and block new LIVE entries -
+        trading on past an unreconciled position hides the gap.
+        """
+        self.live_reconcile_pending = True
+        if self._live_reconcile_alerted == self.live_ticket:
+            return
+        self._live_reconcile_alerted = self.live_ticket
+        print(f"LIVE RECONCILE REQUIRED: ticket {self.live_ticket} is gone from the broker; "
+              f"realised P&L is NOT booked (B3 deal reconciliation)")
+        self.send_telegram(
+            f"⚠️ LIVE RECONCILE REQUIRED (#{self.current_trade_num})\n"
+            f"Ticket `{self.live_ticket}` is no longer open at the broker.\n"
+            f"The exit was NOT booked - realised P&L needs deal history (B3).\n"
+            f"New LIVE entries are BLOCKED until this is reconciled.",
+            kind="risk",
+        )
+
+    def live_close_price(self, mt5_mod):
+        """The price this position would close at right now (bid long / ask short)."""
+        try:
+            tick = mt5_mod.symbol_info_tick(SYMBOL)
+        except Exception:
+            return None
+        if tick is None:
+            return None
+        return float(tick.bid if self.trade_type == "BUY" else tick.ask)
+
+    def live_manage_open_position(self, price: float = None, now: datetime = None) -> str:
+        """Broker-side BE ratchet + MAX_HOLD_MINUTES time stop. LIVE only.
+
+        Returns a short status string (the tests read it):
+        ``paper`` (not in LIVE mode), ``no-mt5``, ``no-position``, ``gone`` (the
+        broker no longer holds it), ``unknown`` (the query failed - retry, do
+        NOT conclude anything), ``held``, ``be-sent``, ``be-failed``,
+        ``time-closed``, ``time-failed``.
+
+        Runs on every LIVE loop pass, including while disarmed: both actions only
+        reduce risk, and refusing to manage an open position would be worse than
+        the kill switch itself. Callers must not rely on it raising - it is
+        written to be safe to call at any time, from any state.
+        """
+        if TRADING_MODE != "LIVE":
+            return "paper"
+        mt5_mod = live_mt5_module()
+        if mt5_mod is None:
+            return "no-mt5"
+        if not self.trade_active or self.live_ticket is None:
+            return "no-position"
+
+        pos = live_position(mt5_mod, self.live_ticket)
+        if pos is LIVE_POSITION_UNKNOWN:
+            # The query failed - say nothing about the position and change no
+            # state. The broker's own SL/TP still protects it; retry next pass.
+            print("LIVE manage: position query failed (terminal/connection) - "
+                  "no state change, retrying next pass")
+            return "unknown"
+        if pos is None:
+            self._live_reconcile_required()
+            return "gone"
+
+        risk = float(self.live_risk or abs(self.entry_price - self.stop_loss) or 0.0)
+        if risk <= 0:
+            return "held"
+        if price is None:
+            price = self.live_close_price(mt5_mod)
+        if price is None:
+            return "held"
+
+        gain = ((price - self.entry_price) if self.trade_type == "BUY"
+                else (self.entry_price - price))
+
+        # 1) BE ratchet: only once, only to entry, only after the broker confirms.
+        if not self.be_armed and gain >= BE_TRIGGER_R * risk - 1e-9:
+            entry = round(float(self.entry_price), 2)
+            broker_sl = float(getattr(pos, "sl", 0.0) or 0.0)
+            if abs(broker_sl - entry) < 1e-9:
+                # The modify landed before a restart cleared be_armed: adopt it.
+                self._arm_breakeven()
+                print(f"LIVE BE already at the broker for #{self.current_trade_num} - adopted")
+                return "be-sent"
+            request = live_sltp_request(
+                mt5_mod, self.live_ticket, entry, round(float(self.take_profit), 2))
+            ok, result = self._live_send(
+                mt5_mod, request, f"LIVE BE #{self.current_trade_num}")
+            if not ok:
+                self._live_mgmt_failed("BE", result)
+                return "be-failed"
+            # Broker confirmed: book exactly what the paper ratchet books.
+            self._live_mgmt_fail_count = 0
+            self._arm_breakeven()
+            print(f"LIVE BE confirmed by broker for #{self.current_trade_num}")
+            return "be-sent"
+
+        # 2) Time stop: close at market, then reuse the paper booking path.
+        held = self._minutes_in_trade(now=now)
+        if held is not None and held >= MAX_HOLD_MINUTES:
+            info = None
+            try:
+                info = mt5_mod.symbol_info(SYMBOL)
+            except Exception:
+                info = None
+            filling = resolve_order_filling(mt5_mod, info) if info is not None else None
+            if filling is None:
+                self._live_mgmt_failed("TIME", None)
+                return "time-failed"
+            request = live_close_request(mt5_mod, pos, price, filling)
+            ok, result = self._live_send(
+                mt5_mod, request, f"LIVE TIME #{self.current_trade_num}")
+            if not ok:
+                self._live_mgmt_failed("TIME", result)
+                return "time-failed"
+            fill = float(getattr(result, "price", 0.0) or price)
+            if not self._maybe_time_stop(fill, now=now):
+                # Defensive: the same held value was just checked, so this means
+                # the position state changed under us. Do not book a phantom.
+                self._live_mgmt_failed("TIME", result)
+                return "time-failed"
+            self._live_mgmt_fail_count = 0
+            self.live_ticket = None
+            self.live_risk = None
+            self.save_status()
+            print(f"LIVE TIME STOP filled #{self.current_trade_num} @ {fill:.2f}")
+            return "time-closed"
+
+        return "held"
+
     def execute_live_trade(self, direction: str, c: float, wick_ratio: float, ts: str, level=None):
         # LIVE arming / kill switch (2026-10-26): checked AGAIN here, not only in
         # run_live, so no code path can place a real order while disarmed.
@@ -1609,6 +1953,16 @@ class GoldEngine:
             self.send_telegram(
                 f"LIVE ORDER BLOCKED\nLive execution is not armed ({LIVE_ARM_ENV} != 1 "
                 "or kill-switch file present)", kind="risk")
+            return
+        # B2 (2026-10-28): if the broker closed a position behind our back, its
+        # ledger row is missing (deal history is B3). Opening a new trade on top
+        # of that would bury the gap, so refuse new exposure until reconciled.
+        if self.live_reconcile_pending:
+            print("\nLIVE ENTRY BLOCKED -> unreconciled broker position (B3)\n")
+            self.send_telegram(
+                "LIVE ENTRY BLOCKED\nAn earlier position is unreconciled "
+                "(closed at the broker, not in the ledger). Resolve it before "
+                "taking new exposure.", kind="risk")
             return
         # Daily-closure gap guard (registered 2026-10-25) — same rule as the paper path:
         # no NEW entry inside the window before the broker's daily break.
@@ -1703,6 +2057,32 @@ class GoldEngine:
             self.current_trade_num = self.next_trade_num
             self.next_trade_num += 1
             self.be_armed = False
+            # B2 (2026-10-28): record the position the broker now holds. Without
+            # this the engine has no state to manage, so the BE ratchet and the
+            # 240-min time stop could not fire in LIVE at all - they are
+            # engine-side rules and run_live never sees the broker's exits.
+            fill = float(getattr(result, "price", 0.0) or price)
+            self.live_ticket = int(result.order) if getattr(result, "order", None) else None
+            self.live_risk = float(risk)
+            self.live_reconcile_pending = False
+            self._live_mgmt_fail_count = 0
+            self._live_reconcile_alerted = None
+            self.trade_active = True
+            self.trade_type = direction
+            self.entry_price = fill
+            self.stop_loss = sl_price
+            self.take_profit = tp_price
+            self.entry_time = utc_now_str()
+            self.entry_rsi = self.rsi
+            self.entry_atr = self.atr
+            self.entry_wick_ratio = wick_ratio
+            self.entry_ema_fast = self.ema_fast
+            self.entry_ema_slow = self.ema_slow
+            self.pnl_scale = self.trade_lots * CONTRACT_SIZE
+            self.structural_stop_bound = risk > (self.atr or 0.0) * ATR_SL_MULT + 1e-9
+            # Persist BEFORE the next loop pass: a crash here must not lose the
+            # ticket, or the position would be unmanaged until B3 reconciliation.
+            self.save_status()
             print(f"ORDER SUCCESS! Ticket: {result.order} | Trade #{self.current_trade_num}")
             self.send_telegram(
                 f"LIVE GOLD {direction} EXECUTED\n"
@@ -1948,9 +2328,13 @@ class GoldEngine:
             a restart — the same invariant the MT5 paper feed already has.
           * `live_armed()` is checked every loop; a kill-switch file or an
             unarmed process stops NEW exposure (execute_live_trade re-checks).
-          * Known divergence still open: broker-side BE ratchet / TIME stop,
-            deal-level reconciliation and demo-account evidence. See
-            tools/live_readiness.py — this loop is NOT live-ready on its own.
+          * 2026-10-28 (B2): the loop manages the broker position on every pass -
+            the BE ratchet (TRADE_ACTION_SLTP to entry at +BE_TRIGGER_R) and the
+            MAX_HOLD_MINUTES time stop (market close), so paper and LIVE run the
+            same strategy. Both only reduce risk and run while disarmed too.
+          * Known divergence still open: position/deal reconciliation (B3),
+            disconnect/sizing/cost guards (B4) and demo-account evidence (B5).
+            See tools/live_readiness.py — this loop is NOT live-ready on its own.
         """
         print("Gold Engine LIVE starting... (closed M1 bars only)")
         if not live_armed():
@@ -1963,6 +2347,15 @@ class GoldEngine:
         candles_fetched = 0
         while True:
             try:
+                # Broker-side management (B2, 2026-10-28) runs every pass, not
+                # once per bar, so a live position is managed as closely as the
+                # paper tick path manages its own. Harmless when flat; wrapped
+                # so a management bug can never kill the loop (the broker's own
+                # SL/TP stays armed regardless).
+                try:
+                    self.live_manage_open_position()
+                except Exception as e:
+                    print(f"LIVE management error (position left to the broker's SL/TP): {e}")
                 rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_M1, 1, 1)
                 candle = self.mt5_next_candle(rates, last_ts)
                 if candle is None:

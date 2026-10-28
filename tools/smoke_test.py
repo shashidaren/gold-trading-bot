@@ -3868,6 +3868,179 @@ finally:
 check("AB: the simulated deploy time is not left behind", SL.CLEAR15_CUTOVER is None)
 
 
+# --- Scenario AC -----------------------------------------------------------
+# B2 (2026-10-28). The paper engine manages its own exits; in LIVE the broker holds the stop
+# and the target, so the +0.75R BE ratchet and the 240-min time stop would silently stop
+# existing. This scenario drives the REAL methods against a fake broker: fill -> state ->
+# broker-side ratchet -> broker-side time close -> one TIME ledger row. It also pins that the
+# paper mode never enters the manager (docs/DECISION-2026-10-28-b2-broker-be-and-time-stop.md).
+print("\nScenario AC: LIVE broker-side management (B2) — BE ratchet and 240-min time stop "
+      "mirrored at the broker; paper untouched")
+
+tmp_ac = tempfile.mkdtemp(prefix="gold_smoke_ac_")
+_saved_ac = (engine.LOG_FILE_PATH, engine.STATUS_FILE_PATH, engine.TRADES_LOG_PATH,
+             engine.TRADING_MODE, engine.live_armed, engine.LIVE_MGMT_BACKOFF_S)
+engine.LOG_FILE_PATH = os.path.join(tmp_ac, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_ac, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_ac, "trades.csv")
+engine.LIVE_MGMT_BACKOFF_S = 0
+
+
+class _ResAC:
+    def __init__(self, retcode, comment="", order=0, price=0.0):
+        self.retcode, self.comment, self.order, self.price = retcode, comment, order, price
+
+
+class _FakeBrokerAC:
+    """A broker that only knows what the engine asks it."""
+    TRADE_ACTION_DEAL = 1
+    TRADE_ACTION_SLTP = 6
+    TRADE_RETCODE_DONE = 10009
+    TRADE_RETCODE_REQUOTE = 10004
+    TRADE_RETCODE_INVALID_STOPS = 10016
+    ORDER_FILLING_IOC = 2
+    ORDER_TIME_GTC = 0
+    POSITION_TYPE_BUY = 0
+    POSITION_TYPE_SELL = 1
+    ORDER_TYPE_BUY = 0
+    ORDER_TYPE_SELL = 1
+
+    def __init__(self, ticket=9001, bid=4000.0, ask=4000.2):
+        self.ticket, self.bid, self.ask = ticket, bid, ask
+        self.filling_mode, self.point = 2, 0.01
+        self.sent, self.script, self.open = [], [], True
+        self.sl, self.tp = 0.0, 0.0
+
+    def positions_get(self, ticket=None, symbol=None, magic=None):
+        if not self.open:
+            return []
+        pos = types.SimpleNamespace(ticket=self.ticket, type=0, volume=0.01,
+                                    sl=self.sl, tp=self.tp)
+        return [pos]
+
+    def order_send(self, request):
+        self.sent.append(dict(request))
+        if self.script:
+            return self.script.pop(0)
+        if request["action"] == self.TRADE_ACTION_SLTP:
+            self.sl = request["sl"]
+            self.tp = request["tp"]
+        return _ResAC(self.TRADE_RETCODE_DONE, "done",
+                      order=request.get("position") or self.ticket,
+                      price=float(request.get("price") or self.ask))
+
+    def symbol_info(self, symbol):
+        return self
+
+    def symbol_info_tick(self, symbol):
+        return types.SimpleNamespace(bid=self.bid, ask=self.ask)
+
+    def account_info(self):
+        return types.SimpleNamespace(balance=500.0)
+
+
+try:
+    eng_ac = engine.GoldEngine()                    # paper mode: no terminal init
+    broker_ac = _FakeBrokerAC()
+    engine.mt5 = broker_ac
+    engine.TRADING_MODE = "LIVE"
+    engine.live_armed = lambda env=None, halt_path=None: True
+    eng_ac.send_telegram = lambda text, kind="trade": None
+    eng_ac.entry_guard_reason = lambda now=None: None
+    eng_ac.atr, eng_ac.rsi = 2.0, 50.0
+    eng_ac.ema_fast, eng_ac.ema_slow = 4001.0, 3999.0
+
+    # (1) A confirmed fill must record the position the broker now holds - without
+    #     this state neither engine-side rule can fire in LIVE at all.
+    eng_ac.execute_live_trade("BUY", 4000.0, 0.5, "2026-10-28 19:00:00")
+    order_ac = broker_ac.sent[0]
+    with open(engine.STATUS_FILE_PATH) as _f_ac:
+        _status_ac = json.load(_f_ac)
+    check("AC: a confirmed LIVE fill records the position (trade_active + ticket + risk)",
+          eng_ac.trade_active and eng_ac.live_ticket == broker_ac.ticket
+          and eng_ac.live_risk > 0 and _status_ac["live_ticket"] == broker_ac.ticket,
+          f"active={eng_ac.trade_active} ticket={eng_ac.live_ticket} risk={eng_ac.live_risk}")
+    check("AC: the SL/TP attached to the order are the engine's own geometry",
+          order_ac["sl"] == eng_ac.stop_loss and order_ac["tp"] == eng_ac.take_profit
+          and eng_ac.stop_loss < eng_ac.entry_price < eng_ac.take_profit,
+          f"sl={order_ac['sl']} tp={order_ac['tp']} entry={eng_ac.entry_price}")
+    check("AC: the fill is persisted before the next loop pass (restart-safe)",
+          _status_ac["trade_active"] is True and _status_ac["be_armed"] is False)
+
+    # (2) The ratchet: nothing below +0.75R, one modify at +0.75R, stop AT entry.
+    risk_ac = eng_ac.live_risk
+    sent_before = len(broker_ac.sent)
+    st_ac = eng_ac.live_manage_open_position(price=eng_ac.entry_price + 0.70 * risk_ac)
+    check("AC: below +0.75R the LIVE manager sends nothing",
+          st_ac == "held" and len(broker_ac.sent) == sent_before, f"{st_ac}")
+    st_ac = eng_ac.live_manage_open_position(price=eng_ac.entry_price + 0.80 * risk_ac)
+    be_ac = broker_ac.sent[-1]
+    check("AC: at +0.75R the broker stop is moved TO entry (TRADE_ACTION_SLTP)",
+          st_ac == "be-sent" and be_ac["action"] == _FakeBrokerAC.TRADE_ACTION_SLTP
+          and be_ac["position"] == broker_ac.ticket
+          and be_ac["sl"] == round(eng_ac.entry_price, 2) and eng_ac.be_armed,
+          f"{st_ac} sl={be_ac.get('sl')} entry={eng_ac.entry_price}")
+    sent_before = len(broker_ac.sent)
+    check("AC: the ratchet is one-way - a second pass sends no modify",
+          eng_ac.live_manage_open_position(price=eng_ac.entry_price + 2.0 * risk_ac) == "held"
+          and len(broker_ac.sent) == sent_before)
+
+    # (3) The time stop: close at market with position=<ticket>, then book ONE TIME row.
+    eng_ac.entry_time = (datetime.now(timezone.utc)
+                         - timedelta(minutes=engine.MAX_HOLD_MINUTES + 5)
+                         ).strftime("%Y-%m-%d %H:%M:%S")
+    st_ac = eng_ac.live_manage_open_position(price=eng_ac.entry_price + 0.10 * risk_ac)
+    close_ac = broker_ac.sent[-1]
+    check("AC: at 240 min the position is closed at market for the ticket",
+          st_ac == "time-closed"
+          and close_ac["action"] == _FakeBrokerAC.TRADE_ACTION_DEAL
+          and close_ac["position"] == broker_ac.ticket
+          and close_ac["type"] == _FakeBrokerAC.ORDER_TYPE_SELL
+          and not eng_ac.trade_active and eng_ac.live_ticket is None,
+          f"{st_ac} {close_ac}")
+    with open(engine.TRADES_LOG_PATH, newline="") as _f_ac:
+        _rows_ac = [r for r in _f_ac.read().splitlines() if r.strip()]
+    check("AC: the time exit is booked exactly once, as TIME, and the position is flat",
+          len(_rows_ac) == 2 and ",TIME," in _rows_ac[1] and eng_ac.time_exits == 1,
+          f"rows={len(_rows_ac)} {_rows_ac[-1:] }")
+
+    # (4) A gone position must not invent an outcome and must block new entries.
+    eng_ac.trade_active, eng_ac.live_ticket, eng_ac.live_risk = True, 4242, 4.0
+    eng_ac.trade_type, eng_ac.entry_price = "BUY", 4000.0
+    broker_ac.open = False
+    check("AC: a position the broker closed behind us books nothing and says so",
+          eng_ac.live_manage_open_position(price=4000.0) == "gone"
+          and eng_ac.live_reconcile_pending and len(_rows_ac) == 2,
+          f"pending={eng_ac.live_reconcile_pending}")
+    sent_before = len(broker_ac.sent)
+    eng_ac.trade_active = False
+    eng_ac.execute_live_trade("BUY", 4000.0, 0.5, "2026-10-28 19:00:00")
+    check("AC: an unreconciled position blocks NEW LIVE exposure",
+          len(broker_ac.sent) == sent_before)
+
+    # (5) Paper mode must never enter any of it.
+    engine.TRADING_MODE = "FORWARD_TEST"
+    sent_before = len(broker_ac.sent)
+    eng_ac.trade_active, eng_ac.live_ticket = True, 1
+    check("AC: in FORWARD_TEST the LIVE manager is inert (paper path unchanged)",
+          eng_ac.live_manage_open_position(price=9999.0) == "paper"
+          and len(broker_ac.sent) == sent_before)
+
+    _run_live_src_ac = inspect.getsource(engine.GoldEngine.run_live)
+    check("AC: the LIVE loop manages the broker position on every pass",
+          "self.live_manage_open_position()" in _run_live_src_ac)
+finally:
+    (engine.LOG_FILE_PATH, engine.STATUS_FILE_PATH, engine.TRADES_LOG_PATH,
+     engine.TRADING_MODE, engine.live_armed, engine.LIVE_MGMT_BACKOFF_S) = _saved_ac
+    if hasattr(engine, "mt5"):
+        delattr(engine, "mt5")
+    shutil.rmtree(tmp_ac, ignore_errors=True)
+
+check("AC: the LIVE scenario leaves the checkout in paper mode", 
+      engine.TRADING_MODE == "FORWARD_TEST" and engine.SL_CLEAR_ATR == 0.5
+      and engine.BE_TRIGGER_R == 0.75 and engine.MAX_HOLD_MINUTES == 240)
+
+
 print()
 if FAILURES:
     print(f"SMOKE TEST FAILED: {FAILURES}")

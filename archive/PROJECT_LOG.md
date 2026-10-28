@@ -608,3 +608,60 @@ three-line footer stating the 1.5 window is registered but undeployed, and no ce
 **Docs.** `docs/REVIEW-2026-10-27-g1-decision.md` (decision, evidence, and the A2 contract), PREREG status/§1/§2, `docs/EXECUTION-PLAN.md` §1.3 gate + A1 row **DONE** + A2 row rewritten as the next eligible step + §4 history, `docs/HANDOFF.md` §1/era timeline/§5/§6, README PREREG row, `readiness.py` timeline (`g1` → done, new `a2` row, `window_15` clock starts at the deploy) with `tools/test_readiness_tab.py` moved to match (16 OK).
 
 **Open.** **A2**: one line, in a window where the host shows no open position, and the deploy's own `autosync: merge upstream` commit time becomes `CLEAR15_CUTOVER` in the same change — nothing else in Track A can start before it. G2 (cost sample 12/14 days, 1/2 weekends at the time of writing) and the two host items (Sunday-reopen bar hole, DEMO evidence) are unaffected by this decision. `SL_CLEAR_ATR` is still **0.5**, and that is the intended state until A2 lands.
+
+## 2026-10-28 — B2: the LIVE path gets the same exits as paper (broker-side BE ratchet + 240-min time stop)
+
+**Session prompt:** “Follow execution plan.” Ritual run on **collection 370** (737 closes, era n=240):
+`check_data` 0 fail/8 warn, `handoff_check` FRESH(2)→FRESH(0) after the refresh, `check_structural_stop` **PASS**
+(0 stops inside the level, 82.5% level-bound, +0.50 ATR clearance, 3.33 ATR median risk), `check_gap_rides` 3/2
+with 0 gapped through / 0 worse exits / 0 weekend rides, `pressure_report` era **35.5% [28.7–42.9] decisive,
+−0.078R gross** (B1/B2/B3/A4/A5 OK, C1 OK, **C2 FAIL** vs its 36.0% baseline — recorded, never re-judged),
+`xm_quote_report` **13/14 complete days + 1/2 weekends** at a $0.55 median round trip, `live_readiness`
+**9 PASS / 8 TODO / 3 MANUAL**.
+
+**A2 was correctly not run.** Its only remaining condition is a host action: the one line
+`SL_CLEAR_ATR 0.5 → 1.5` must land while the host has **no open position**, and the era boundary is the host's own
+`autosync: merge upstream` commit time. The 18:54:49 UTC snapshot is flat, but the deploy fires from the host's
+`0 */3 * * *` cron, which this session can neither see at that minute, push `main` for, nor restart. Reported as a
+blocker instead of faked; `SL_CLEAR_ATR` is still **0.5** and `CLEAR15_CUTOVER` is still `None`.
+
+**B2 (Track B, explicitly parallel): decision recorded before coding.** `docs/DECISION-2026-10-28-b2-broker-be-and-time-stop.md`
+applies the plan's default — implement the broker-side mirror rather than register a divergence, because
+`BE_TRIGGER_R = 0.75` and `MAX_HOLD_MINUTES = 240` are frozen variables of the open experiment and a LIVE book
+without them is a *different* strategy whose evidence can never transfer.
+
+**What the gap actually was.** Both rules lived only in engine state: `_arm_breakeven()` mutated `self.stop_loss`
+and sent a message but never touched the broker; `_maybe_time_stop()` was reachable only from `check_position()`
+(ticks) and `resolve_open_trade_on_candle()` (MT5 paper feed), and `run_live()` calls neither. Worse, a confirmed
+LIVE fill recorded only the trade number — not `trade_active`, entry, stop, target or time — so even a reachable
+rule had no position to act on.
+
+**Shipped (LIVE path only; paper byte-identical).** `execute_live_trade` now records the filled position (ticket,
+sizing risk, entry/SL/TP, entry time and context) and persists it before the next loop pass; `run_live` calls
+`live_manage_open_position()` on every 5-second pass, which (a) sends `TRADE_ACTION_SLTP` to move the stop **to
+entry** once the trade is +0.75R ahead and (b) closes at market by ticket once it is 240 minutes old, booking the
+exit through the **same** `_maybe_time_stop()` the paper path uses — one ledger row, one counter, one message.
+Booked only after `TRADE_RETCODE_DONE`; one retry only for market-moved rejects (requote / price changed / price
+off / timeout / connection), never for logic rejects; the stop can only tighten and only arms once; if the broker
+already holds `sl == entry` after a restart it is adopted rather than re-sent; management still runs while the
+process is **disarmed** (both actions reduce risk — a kill switch must not orphan a position); if the broker no
+longer holds the ticket, **nothing is invented** (no exit price, no P&L — that is B3), one loud alert fires and
+`live_reconcile_pending` blocks new LIVE entries until it is reconciled.
+
+**The scorecard was also made honest.** `broker_be` / `broker_time_stop` were substring checks — a docstring could
+have turned them green, and a helper `run_live` never calls would have passed. They are now **call-graph** checks
+(`_reachable`, `_calls`, `_uses_attribute`, `_uses_name`, `_dict_has_key`): evidence must be real AST usage on the
+LIVE path. A unit test pins both failure modes.
+
+**Verification.** `smoke_test.py` **PASSED** (A–AB unchanged, new **Scenario AC** 12/12 driving the real fill →
+ratchet → 240-min close against a fake broker); `tools/test_live_manage.py` **19 OK** (new); `test_live_readiness.py`
+**20 OK**; `goldbot/tests` **64 OK**; `test_readiness_tab.py` **16 OK**; `py_compile` OK; `check_data` 0 fail/8 warn;
+`handoff_check` **FRESH (0 advisory drift)**; `live_readiness` **11 PASS / 6 TODO / 3 MANUAL, gate CLOSED**.
+
+**What it does not prove.** No demo-account evidence (B5) — every check is source inspection plus hermetic fakes;
+no deal-level reconciliation (B3) — a broker SL/TP exit is still not booked, the new flag only makes that loud and
+blocks new exposure; single position only; and if the process is down when +0.75R or 240 min is crossed, only the
+broker's own SL/TP protects the trade. The gate stays CLOSED.
+
+**Next.** A2 (owner/host: deploy at a flat moment, then record the cutover), then **B3** — reconciliation, which
+closes the one gap B2 deliberately left open.

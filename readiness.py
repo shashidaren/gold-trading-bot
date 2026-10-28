@@ -86,6 +86,10 @@ MILESTONES = [
      "pre-registration is now the binding bar, A1's tool work is in, and `CLEAR15_CUTOVER` "
      "stays None until the deploy — so the window has not started and nothing is judged.",
      "docs/REVIEW-2026-10-27-g1-decision.md"),
+    ("2026-10-28", "B2 — broker-side BE ratchet + 240-min time stop",
+     "LIVE mirrors the paper exits at the broker (SLTP to entry at +0.75R, market close at 240 min), so "
+     "paper and LIVE are one strategy; gate still CLOSED at 11 PASS / 6 TODO / 3 MANUAL.",
+     "docs/REVIEW-2026-10-28-b2-broker-be-time-stop.md"),
 ]
 
 # Blockers that no code commit can clear. `who` is the person/place that must act.
@@ -192,6 +196,10 @@ def build_timeline(now, progress, counts):
              "Registered, NOT started — the clock begins at the A2 deploy, not at the sign-off. "
              "~15 trading days at 10–13 trades/day once deployed; the slack is the whole asset: "
              "a mid-November deploy closes the window date-first with n<150, i.e. no PASS arm."),
+        _row("b2", "B2 — broker-side BE ratchet + 240-min time stop", "done", "done", "2026-10-28",
+             "The broker now holds both engine-side exit rules (SLTP to entry at +0.75R, market close at "
+             "240 min, booked through the same TIME path). Call-graph checks, 18 fake-MT5 tests, smoke "
+             "Scenario AC. Gate still CLOSED — this is code/evidence, not demo evidence."),
         _row("track_b", "LIVE execution engineering (Track B)", "active",
              f"{counts['todo']} TODO · {counts['manual']} MANUAL", "one check / session",
              "Each step turns one live_readiness.py check green with a hermetic test."),
