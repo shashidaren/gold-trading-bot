@@ -13,6 +13,7 @@ Pins three things:
 
 No network, no /opt/gold, no real orders, no wall clock.
 """
+import ast
 import contextlib
 import io
 import json
@@ -136,13 +137,14 @@ class TestChecker(unittest.TestCase):
     def test_hardened_checks_pass(self):
         for cid in ("mode_paper", "arm_gate", "filling_spec", "closed_bars",
                     "bar_dedup", "spread_filter", "dst_offsets",
-                    "spec_filling", "no_account_ids"):
+                    "spec_filling", "no_account_ids",
+                    # B2 (2026-10-28): broker-side BE ratchet + time stop.
+                    "broker_be", "broker_time_stop"):
             self.assertEqual(self.by_id[cid]["status"], LR.PASS, cid)
 
     def test_open_gaps_are_visible(self):
-        for cid in ("broker_be", "broker_time_stop", "position_reconcile",
-                    "deal_reconcile", "disconnect_safety", "sizing_limits",
-                    "cost_guard"):
+        for cid in ("position_reconcile", "deal_reconcile", "disconnect_safety",
+                    "sizing_limits", "cost_guard"):
             self.assertEqual(self.by_id[cid]["status"], LR.TODO, cid)
 
     def test_operator_items_are_manual(self):
@@ -167,6 +169,56 @@ class TestChecker(unittest.TestCase):
         self.assertFalse(LR._uses_attribute(src, "ORDER_FILLING_FOK"))
         self.assertTrue(LR._uses_attribute("def f(): return mt5.ORDER_FILLING_FOK",
                                            "ORDER_FILLING_FOK"))
+
+    def test_broker_side_checks_follow_the_call_graph(self):
+        """B2: a helper the LIVE loop never calls must NOT turn a check green."""
+        # The evidence must name the manager, not the docstrings.
+        self.assertIn("live_manage_open_position", self.by_id["broker_be"]["evidence"])
+        self.assertIn("live_manage_open_position",
+                      self.by_id["broker_time_stop"]["evidence"])
+
+        src = (
+            "class GoldEngine:\n"
+            "    def run_live(self):\n"
+            "        self.evaluate_candle(1, 2, 0.5, 1.5, 10)\n"
+            "    def evaluate_candle(self, o, h, l, c, v):\n"
+            "        pass\n"
+            "    def mod(self, ticket):\n"
+            "        return mt5.order_send({'action': mt5.TRADE_ACTION_SLTP})\n"
+            "    def close(self, p):\n"
+            "        return mt5.order_send({'action': mt5.TRADE_ACTION_DEAL,\n"
+            "                              'position': p.ticket})\n"
+            "    def manage(self, price=None):\n"
+            "        if held >= MAX_HOLD_MINUTES:\n"
+            "            self.close(p)\n"
+            "        self.mod(1)\n"
+        )
+        tree = ast.parse(src)
+        fn_src = LR._callable_sources(tree, src)
+        reachable = LR._reachable(fn_src)
+        self.assertEqual(reachable, {"run_live", "evaluate_candle"})
+        self.assertNotIn("manage", reachable)       # never called from run_live
+        # ... so nothing is credited to the LIVE path, even though the code exists.
+        sltp = {n for n in fn_src if LR._uses_attribute(fn_src[n], "TRADE_ACTION_SLTP")}
+        self.assertTrue(sltp)                        # the construct does exist
+        self.assertFalse(reachable & sltp)           # but the loop cannot reach it
+        close = {n for n in fn_src if LR._uses_attribute(fn_src[n], "TRADE_ACTION_DEAL")
+                 and LR._dict_has_key(fn_src[n], "position")}
+        self.assertTrue(close)
+        self.assertFalse(reachable & close)
+
+    def test_docstrings_and_comments_never_satisfy_a_check(self):
+        """A comment claiming a feature is not the feature (B2 lesson)."""
+        doc = ('def f():\n    """Uses TRADE_ACTION_SLTP and MAX_HOLD_MINUTES, '
+               'with a "position" key."""\n    return 1\n')
+        self.assertFalse(LR._uses_attribute(doc, "TRADE_ACTION_SLTP"))
+        self.assertFalse(LR._uses_name(doc, "MAX_HOLD_MINUTES"))
+        self.assertFalse(LR._dict_has_key(doc, "position"))
+        self.assertTrue(LR._uses_attribute("def f(): return mt5.TRADE_ACTION_SLTP",
+                                           "TRADE_ACTION_SLTP"))
+        self.assertTrue(LR._uses_name("def f(): return MAX_HOLD_MINUTES",
+                                      "MAX_HOLD_MINUTES"))
+        self.assertTrue(LR._dict_has_key("def f(): return {'position': 1}", "position"))
 
     def test_json_shape(self):
         payload = json.loads(json.dumps(dict(checks=self.checks,
