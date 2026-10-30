@@ -14,7 +14,7 @@
     "trade_expert": true,
     "trade_mode": 2
   },
-  "captured_utc": "2026-10-29 17:42:20",
+  "captured_utc": "2026-10-29 23:42:21",
   "decoded": {
     "account_kind": "REAL",
     "calc_mode": "CFD_LEVERAGE",
@@ -47,7 +47,7 @@
   "probes": {
     "calc_margin_usd_0.01lot": 4.01,
     "calc_profit_usd_0.01lot_plus_1usd": 1.0,
-    "price_used": 4012.77
+    "price_used": 4012.11
   },
   "schema": 1,
   "spread_points_now": 55,
