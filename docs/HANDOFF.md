@@ -20,22 +20,22 @@ from the first commit.
 <!-- HANDOFF-SNAPSHOT machine-checked by tools/handoff_check.py; refresh with --update -->
 | key | value |
 |---|---|
-| as_of_utc | 2026-10-28 17:59 |
-| data_collection | 370 |
-| closed_trades | 737 |
-| outcomes | 146W/322L/266BE/3TIME |
-| decisive_wr_pct | 31.2 |
-| engine_ledger_usd | 89.04 |
-| true_equity_usd | 72.11 |
+| as_of_utc | 2026-10-30 02:59 |
+| data_collection | unknown |
+| closed_trades | 758 |
+| outcomes | 150W/334L/271BE/3TIME |
+| decisive_wr_pct | 31.0 |
+| engine_ledger_usd | 52.98 |
+| true_equity_usd | 36.05 |
 | cost_usd_per_side | 0.20 |
-| net_pnl_usd_at_cost | -722.69 |
+| net_pnl_usd_at_cost | -767.15 |
 | cutover_utc | 2026-10-06 03:00 |
-| structstop_era_trades | 240 |
-| structstop_era_outcomes | 61W/111L/66BE/2TIME |
-| log_bars | 54333 |
-| log_last_bar_utc | 2026-10-28 17:59 |
-| skip_rows | 1747 |
-| open_trade | none |
+| structstop_era_trades | 261 |
+| structstop_era_outcomes | 65W/123L/71BE/2TIME |
+| log_bars | 56190 |
+| log_last_bar_utc | 2026-10-30 02:59 |
+| skip_rows | 1793 |
+| open_trade | SELL #759 @ 4001.31 |
 <!-- /HANDOFF-SNAPSHOT -->
 
 This block is the **only machine-checked part of the file**: `python3 tools/handoff_check.py`
@@ -121,6 +121,7 @@ ritual before drawing any conclusion. The list below is the detailed version.
 | Stop-vs-level invariant (+ deploy-boundary evidence) | `python3 tools/check_structural_stop.py` |
 | **§7 closure-gap revert trigger (count + damage)** | `python3 tools/check_gap_rides.py` (`--root DIR`, `--since`, `--json`, `--strict` → exit 1 at the trigger) |
 | **Is this handoff stale?** | `python3 tools/handoff_check.py` (`--update` rewrites only the snapshot block) |
+| **How much paper runway is left?** | `python3 tools/equity_runway.py` (`--cost 0.275`, `--json`, `--strict` = exit 1 at/under $0, **alert only**) — read-only; ledger vs true equity vs drift, era $ burn, runway + bootstrap, and the owner's **never-rebaseline** policy state. `docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md` §8 |
 | Net-of-cost view of the ledger | `python3 tools/win_rate_report.py --spread 0.40` (round-trip $; the default output is unchanged without it) |
 | **Measured spreads / cost / server clock / contract spec** (once `mt5quotes-gold` runs) | `python3 tools/xm_quote_report.py` (`--quiet` = the digest line) |
 | **Large-N replay over broker M1 history** | `python3 tools/history_to_log.py mt5_history.csv --out history_utc.csv`, then `python3 tools/strategy_lab.py --bars history_utc.csv` |
@@ -218,23 +219,25 @@ ritual before drawing any conclusion. The list below is the detailed version.
 | 2026-10-23 11:59 UTC (journal + indicator audit, **display-only; no runtime change**) | **695 closed** (140W/300L/253BE/2TIME, 31.8% dec [27.6–36.3], net −$649.24 at $0.40), **198 in struct-stop era** (55W/89L/53BE/1TIME, 38.2% [30.7–46.3], net −$131.63), BUY #697 open @ $4 027.91. `check_data` 0 fail/8 warn, `handoff_check` FRESH, `check_structural_stop` PASS (0 inside), `check_gap_rides` **3/2 REACHED** (+#687 SELL 2026-10-22, no gap-through). New `tools/journal.py` self-journal (BUY vs SELL, ATR/session/hour buckets, 11 lab indicators with Fisher p) + `docs/INDICATOR-AUDIT-2026-10-23.md` — no extra indicator clears the 5 pp + side-split bar; strongest hints ATR-percentile quiet 55.6% vs volatile 31.5% (p=0.014) and volume spike 45% vs thin 20.5% (p=0.031 whole book) are context only. Dashboard Journal tab added (`pressure.journal_read` + `_extra_indicators_series`, `?tab=journal`), like Simple/Boxes/Chart it restarts the dashboard only (`docs/AUTOSYNC.md`). No engine/filter/gate/exit/sizing change; gap-guard blocker unchanged. |
 | 2026-10-23 14:59 UTC (Manual Scalping workspace + refresh, **dashboard/journal-only; no runtime change**) | Owner approved a separate manual page. Built `/scalp` with the shared M1/M5/M15 chart, health context, costed risk/size calculator and a separate atomic self-reported JSON journal (`manual_scalp_journal.json`, git-ignored); no order route and no bot-ledger/state writes. Added `manual_scalp.py`, `scalp_template.py`, routes, operating guide and pure/Flask tests; autosync now restarts the dashboard for its helper modules too, never the engine. Snapshot refreshed to **696 closed**, **199 struct-stop-era trades** (55W/90L/53BE/1TIME), no open trade; guard PASS (0 inside), gap count **3/2**, handoff FRESH. Recorded n=139 judgement and gap-guard blocker unchanged. Pure calculator/journal, chart, existing-dashboard and route tests pass; full `tools/smoke_test.py` PASSED. |
 
-## 1. Where things stand (as of **2026-10-28 — data collection 370; bar log through 17:59 UTC; B2 DONE in Track B, A2 (`structstop1.5` deploy) still the next Track-A step**)
+## 1. Where things stand (as of **2026-10-30 — data collection 381; bar log through 02:59 UTC; sim ledger $52.98 / true equity $36.05 with ≈38 trades of runway, no top-up — see `docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md`**)
 
 **Stance:** paper-only. `TRADING_MODE = "FORWARD_TEST"` and no real order is possible without two independent gates (`docs/EXECUTION-PLAN.md`, “What the phrase means”). Stop geometry is still **`SL_CLEAR_ATR = 0.5`** — registered on 2026-10-27, **not yet deployed**; `RR_TARGET = 1.5`, `BE_TRIGGER_R = 0.75`, `MAX_HOLD_MINUTES = 240`, the 30-min entries-only closure guard (`71317da`) and the 10-26 LIVE-path hardening are frozen — one variable per window. **B2 (2026-10-28) touched the LIVE path only:** the broker now holds the +0.75R ratchet and the 240-min time stop, so paper and LIVE are the *same* strategy; the paper engine, its ledger and every frozen constant are unchanged.
 
-**The book:** **737 closed** (146W/322L/266BE/3TIME; **31.2%** decisive [27.2–35.5]), engine ledger **$89.04**, true equity **$72.11**, net **−$722.69** at the registered $0.40 round trip. Log 54 333 bars to `2026-10-28 17:59:05 UTC`; `check_data.py` 0 fail/8 warn; `handoff_check.py` FRESH (2 advisory); no open trade (`next_trade_num: 738`).
+**The book:** **758 closed** (150W/334L/271BE/3TIME; **31.0%** decisive [27.0–35.2]), engine ledger **$52.98**, true equity **$36.05**, net **−$767.15** at the registered $0.40 round trip. Log 56 190 bars to `2026-10-30 02:59:04 UTC`; `check_data.py` 0 fail/8 warn; `handoff_check.py` FRESH (2 advisory); **SELL #759 open** (`next_trade_num: 760`).
 
-**Open experiment:** struct-stop era **n=240** (61W/111L/66BE/2TIME), decisive **35.5% [28.7–42.9]**, gross **−0.078R/trade** ($−109.08; decisive-only denominator −0.113R), SL/day 6.17, SL share 46.2%, scratch 27.5%, avg SL $5.73, era DD $154.98; geometry guard **PASS** (0 stops inside the level, 82.5% level-bound, +0.50 ATR clearance, 3.33 ATR median risk). The bar card reads **B1/B2/B3/A4/A5 OK, C1 OK, C2 FAIL** (decisive WR 35.47% vs the 36.0% baseline). The **10-19 judgement is closed** (SCREEN MET at n=139, n=150 PASS arm lapsed with its time gate) — the numbers above are grown-sample observations, never a re-judgement. **No demonstrated edge after cost.**
+**Open experiment:** struct-stop era **n=261** (65W/123L/71BE/2TIME), decisive **34.6% [28.1–41.6]**, gross **−0.098R/trade** ($−145.14; decisive-only denominator −0.136R), SL/day 6.15, SL share **47.1%**, scratch 27.2%, avg SL $5.80, era DD **$191.04**; geometry guard **PASS** (0 stops inside the level, 82.4% level-bound, +0.50 ATR clearance, 3.32 ATR median risk). The bar card reads **B1/B2/B3/A4/A5**, with **B2 a fresh FAIL** (SL share 47.13% vs the 47.0% bar) and C2 still FAIL. The **10-19 judgement is closed** (SCREEN MET at n=139, n=150 PASS arm lapsed with its time gate) — the numbers above are grown-sample observations, never a re-judgement. **No demonstrated edge after cost.**
 
-**G1 is SIGNED (2026-10-27, branch A) — `structstop1.5` is the registered window and A2 (the deploy) is still next:** the §7 closure-gap REVERT trigger had fired (3 rides vs threshold 2, 0 gap-through, 0 worse exits, 0 weekend rides) and its literal response was a revert to `2·ATR / 3·ATR`; the owner chose the pack's option **(A)** instead — one further step, `SL_CLEAR_ATR 0.5 → 1.5`, so `docs/PREREG-2026-10-26-structstop1.5.md` is the binding bar for one window (**registered, not deployed**; its §3–§7 numbers may not be edited after outcomes are seen). The registered eligibility bar is **3/4** (trade count −21.6%), the costed replay puts `1.5` at **−0.046R/t** at $0.20/side vs live **−0.141** and the literal revert **−0.155**, and PASS needs ≈**48%** decisive WR at n=150 against a 35.8% reading — **KEEP-with-no-edge or REVERT remain the likely readings**: this is a stop-hunt defect fix, not a claim of edge. **A2's only remaining condition is a host action**: the one line must land while no position is open (true at the 18:54:49 UTC snapshot, but the host deploys from its own `0 */3 * * *` cron, which this repo session cannot see or drive), and the cutover is the host's `autosync: merge upstream` commit time. Decision records: `docs/REVIEW-2026-10-27-g1-decision.md`, `docs/BRIEF-2026-10-27-g1-owner-decision.md`.
+**The paper ledger is a counter, not capital — and it is running out (2026-10-30 answer: no top-up).** Paper always trades `LOT_SIZE` (0.01): `size_lots()` returns it whenever there is no broker account, by the 10-17 correction that stopped the paper book being sized off its own balance. So the ledger number moves no entry, exit, lot, parameter, R/trade, era DD or registered bar — only `engine_ledger_usd`, i.e. a **ledger edit**, which is what `handoff_check`'s money rule calls tampering and what erased $24.74 of real losses on 2026-09-09 (the $16.93 drift still in these numbers is its signature). What is real is the **runway**: **−$0.94/closed trade** net (era, $0.40 RT) at **13.1 trades/active day** against $36.05 is **≈38 closed trades ≈ 2.9 trading days** to zero, bootstrap 90% **33–336 trades** (6% of draws have no burn at all — n=261 cannot separate the era from break-even), and there is **no balance floor** (a negative ledger is a supported, tested state). **OWNER DECISION (2026-10-30, signed): "no rebaseline ever — let it go negative."** No top-up, no reset, no edit to `trades.csv` or `status.json` — ever. The book is *expected* to cross zero and keep trading on a negative ledger (a supported, tested state), and nothing is ever rebased. The **rebaseline-at-zero proposal** that was written first (`docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md` §5) is **declined, unsigned and unadopted** — it stays on the record and may never be cited as policy; the decision is §8 of the same doc. Two consequences were written down with it: a negative `equity` on the dashboard will *look* like the 2026-10-19 phantom incident and is not it (a real book loses ~$1/trade, not $4,000), and `handoff_check`'s money rule stays armed against exactly this — a ledger that moves with no trades behind it. Check the policy state, the burn and the runway with `python3 tools/equity_runway.py` (`--strict` = exit 1 at/under $0, an **alert only**; it authorises nothing).
+
+**G1 is SIGNED (2026-10-27, branch A) — `structstop1.5` is the registered window and A2 (the deploy) is still next:** the §7 closure-gap REVERT trigger had fired (3 rides vs threshold 2, 0 gap-through, 0 worse exits, 0 weekend rides) and its literal response was a revert to `2·ATR / 3·ATR`; the owner chose the pack's option **(A)** instead — one further step, `SL_CLEAR_ATR 0.5 → 1.5`, so `docs/PREREG-2026-10-26-structstop1.5.md` is the binding bar for one window (**registered, not deployed**; its §3–§7 numbers may not be edited after outcomes are seen). The registered eligibility bar is **3/4** (trade count −21.9%), the costed replay puts `1.5` at **−0.046R/t** at $0.20/side vs live **−0.141** and the literal revert **−0.155**, and PASS needs ≈**48%** decisive WR at n=150 against a 34.6% reading — **KEEP-with-no-edge or REVERT remain the likely readings**: this is a stop-hunt defect fix, not a claim of edge. **A2's only remaining condition is a host action**: the one line must land while no position is open — **it is blocked right now by open SELL #759** (and the host deploys from its own `0 */3 * * *` cron, which this repo session cannot see or drive); the cutover is the host's `autosync: merge upstream` commit time. Decision records: `docs/REVIEW-2026-10-27-g1-decision.md`, `docs/BRIEF-2026-10-27-g1-owner-decision.md`.
 
 **B2 DONE (2026-10-28) — the LIVE path now runs the same exits as paper:** `execute_live_trade` records the position the broker holds (ticket, sizing risk, entry/SL/TP/time, entry context) and persists it; `run_live` calls `live_manage_open_position()` every 5 s pass, which sends `TRADE_ACTION_SLTP` to move the stop **to entry** at +0.75R and a market close by ticket at 240 min, booking the exit through the **same** `_maybe_time_stop()` the paper path uses (one ledger row, one counter). Rejections are retried once only when the *market* moved (requote/price changed/off/timeout/connection), never on a logic reject; an action is booked only after `TRADE_RETCODE_DONE`; the stop can only tighten and only fires once; management still runs while the process is **disarmed** because both actions reduce risk; a position the broker closed behind the engine books **nothing** (no invented exit price — that is B3), raises one loud alert and **blocks new LIVE entries** until reconciled. Scorecard **11 PASS / 6 TODO / 3 MANUAL, gate CLOSED**; the two checks were made **call-graph** checks (a helper `run_live` cannot reach no longer passes, and no comment/docstring can satisfy a check). Evidence: `docs/DECISION-2026-10-28-b2-broker-be-and-time-stop.md`, `docs/REVIEW-2026-10-28-b2-broker-be-time-stop.md`. **What it does not prove:** no demo-account evidence (B5), no deal-level reconciliation (B3), single position only, and if the process is down when +0.75R or 240 min is crossed only the broker's own SL/TP protects the trade.
 
-**Cost and clock:** quote logger **13/14 complete UTC days, 1/2 weekends** (159 matched trades, measured round trip mean/median **$0.55**, p90 $0.56, max $0.68) vs the registered $0.40 — $0.40 stays registered until 14 days + 2 weekends (`tools/xm_quote_report.py`, A6). Broker offset **+2h** since `2026-10-25 22:00:30 UTC`, EU rule fits 100% of 30 621 rows; the first post-DST daily break `2026-10-26 20:58:09 → 22:00:04` matches `derive_daily_closure()` exactly. Spec `filling_mode = 2` = **IOC only**; account kind **REAL** (a live pilot needs a DEMO account + separate data dir).
+**Cost and clock:** quote logger **15/14 complete UTC days, 1/2 weekends** (measured round trip mean/median **$0.55**, p90 $0.56, max $0.68) vs the registered $0.40 — $0.40 stays registered until 14 days **and two weekends** (`tools/xm_quote_report.py`, A6). Broker offset **+2h** since `2026-10-25 22:00:30 UTC`, EU rule fits 100% of 34 343 observed rows; the first post-DST daily break `2026-10-26 20:58:09 → 22:00:04` matches `derive_daily_closure()` exactly. Spec `filling_mode = 2` = **IOC only**; account kind **REAL** (a live pilot needs a DEMO account + separate data dir).
 
-**Engine + live gate:** the paper path is stable (`smoke_test.py` A–Z + **AA** + **AB** + **AC** PASSED, **19** new `tools/test_live_manage.py` tests, **20** `live_readiness` tests, 64 `goldbot` tests, 16 readiness-tab tests, `py_compile` OK). `python3 tools/live_readiness.py` = **11 PASS / 6 TODO / 3 MANUAL → LIVE GATE CLOSED**; the six TODOs are exactly Track B3 (reconciliation: 2 checks) and B4 (disconnect, sizing, cost: 3 checks) plus `quote_sample` (data, waiting on the logger), and the three MANUAL items are operator/evidence items. None of them is permission to trade.
+**Engine + live gate:** the paper path is stable (`smoke_test.py` A–Z + **AA** + **AB** + **AC** PASSED, 19 `test_live_manage` tests, 20 `live_readiness` tests, 64 `goldbot` tests, 16 readiness-tab tests, 18 new `test_equity_runway` tests, `py_compile` OK). `python3 tools/live_readiness.py` = **11 PASS / 6 TODO / 3 MANUAL → LIVE GATE CLOSED**; the six TODOs are exactly Track B3 (reconciliation: 2 checks) and B4 (disconnect, sizing, cost: 3 checks) plus `quote_sample` (data, waiting on the logger), and the three MANUAL items are operator/evidence items. None of them is permission to trade.
 
-**Pressure:** composite still collinear with side (BUY 95 aligned / 6 mixed, SELL 134 / 5 on the current era) — context, never a signal or a gate. The owner's manual pressure/hold hypothesis remains unmeasured; the private observation-log template is the “Manual observation record” appendix of `docs/EXECUTION-PLAN.md`.
+**Pressure:** composite still collinear with side — context, never a signal or a gate. The owner's manual pressure/hold hypothesis remains unmeasured; the private observation-log template is the “Manual observation record” appendix of `docs/EXECUTION-PLAN.md`.
 
 **One-line prompt:** **“Follow execution plan.”** — `docs/EXECUTION-PLAN.md` (“What the phrase means”) states exactly what it authorizes and the two approval gates.
 
@@ -579,15 +582,21 @@ that doc):
 
 ## 6. Next steps (in order)
 
-**2026-10-28 — canonical queue is `docs/EXECUTION-PLAN.md`; this section is the evidence/backlog.**
+**2026-10-30 — canonical queue is `docs/EXECUTION-PLAN.md`; this section is the evidence/backlog.**
+**New on 10-30, CLOSED by owner decision: the paper-ledger question (no top-up, and never a rebaseline)**
+(`docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md` §8, `tools/equity_runway.py`). It changes no
+parameter and adds no queue step: the ledger stays unbroken for the rest of its life and everything keeps being
+judged in **R**. Re-check it with `python3 tools/equity_runway.py` (≈38 trades / ≈2.9 trading days at the point
+estimate, bootstrap 90% 33–336; `--strict` exits 1 at/under $0 as an **alert only**). **Do not "helpfully" top up
+or reset the balance — the owner ruled that out explicitly; a negative ledger is the chosen policy.** See §1.
 The owner's prompt is **“Follow execution plan.”** — lowest-numbered eligible step only.
 **A2 is still the next Track-A step and it is blocked on the host, not on the repo:** G1 is SIGNED and A1 is DONE,
 so the one line `SL_CLEAR_ATR = 0.5 → 1.5` may land — but only in a moment when the host has **no open position**,
 with `strategy_lab.CLEAR15_CUTOVER` (and `pressure.CLEAR15_CUTOVER`) set to that deploy's
 `autosync: merge upstream` commit time, then confirmed by `check_structural_stop.py --era clear15` (it prints
-`NOT STARTED` until then, and the OLD/NEW bracket after). The 18:54:49 UTC snapshot is flat, but the host deploys
-from its own `0 */3 * * *` cron and this session cannot see it at that moment, cannot push `main`, and cannot
-restart the engine — so the step is reported blocked, never faked. Nothing in Track A (A3–A5) may be judged
+`NOT STARTED` until then, and the OLD/NEW bracket after). As of 2026-10-30 02:59 UTC the host is **not** flat
+(**SELL #759 open**), and the host deploys from its own `0 */3 * * *` cron, so this session cannot see the next
+flat moment, cannot push `main`, and cannot restart the engine — the step is reported blocked, never faked. Nothing in Track A (A3–A5) may be judged
 before that boundary exists.
 **Track B is now the runnable track, and (B3) is next:** adoption of an existing broker position on startup,
 duplicate-order refusal, realised P&L from `history_deals_get`, and ticket↔trade-number persistence — it closes the
@@ -966,6 +975,8 @@ tools/pressure_report.py  what the dashboard shows, printed (--root/--era/--json
                    portfolio, §7 verdict, CALIBRATION (does the pressure composite separate outcomes?)
 tools/mt5_quotes.py     read-only Wine sidecar: 30 s XM quotes + contract spec -> xm_data/ (deploy/mt5quotes.service)
 tools/xm_quote_report.py  what the logger measured: spreads, cost vs the assumed $0.40, server clock, spec (digest: 📡)
+tools/equity_runway.py  paper-ledger runway: ledger vs true equity vs drift, era $ burn, trades/days to $0, and the
+                   owner's never-rebaseline policy state (read-only; no engine import, writes nothing)
 tools/broker_time.py    the EU/US DST rule for XM's server clock (verified only by observed offsets)
 tools/box_report.py   live boxes + the measured box verdict, the chop/retest read and `--alert-scan`
                    (how many Telegram notices the current rule would have sent)

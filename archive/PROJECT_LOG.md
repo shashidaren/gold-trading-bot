@@ -665,3 +665,62 @@ broker's own SL/TP protects the trade. The gate stays CLOSED.
 
 **Next.** A2 (owner/host: deploy at a flat moment, then record the cutover), then **B3** — reconciliation, which
 closes the one gap B2 deliberately left open.
+
+---
+
+## 2026-10-30 ~03:00 UTC — "should we increase the simulated equity?" (docs + one read-only tool; NO ledger edit, NO strategy change)
+
+Owner asked, in a "follow execution plan" session, whether the simulated equity should be raised now that
+`status.json` reads **$52.98** (true equity **$36.05**). Ritual ran on collection **381** (758 closed,
+era n=261, SELL #759 open): `check_data` 0 fail/8 warn, `handoff_check` FRESH, `check_structural_stop` PASS,
+`check_gap_rides` 3/2 (0 damage), `live_readiness` 11 PASS / 6 TODO / 3 MANUAL CLOSED.
+
+**Answer: no top-up.** The paper book trades a fixed 0.01 lot (`size_lots()` returns `LOT_SIZE` with no broker
+account), so the ledger number cannot move an entry, an exit, a lot, a parameter, R/trade, era DD or any
+registered bar — only `engine_ledger_usd`, which `handoff_check`'s money rule correctly treats as a ledger edit
+(the 2026-09-09 reset erased $24.74 of real losses and left the $16.93 drift still visible today). Increasing it
+buys no statistical power and hides the one number that is honest about a −0.170R/trade net era.
+
+**What the question did expose:** there is **no balance floor** and, at −$0.94/closed trade and 13.1 trades per
+active day, **≈38 trades ≈ 2.9 trading days** of runway (bootstrap 90%: 33–336 trades; 6% of draws have no burn
+at all). Registered — before the event, so it cannot rescue a bar — a **rebaseline-at-zero** rule: no edit while
+true equity > $0; at the first trade that leaves it ≤ $0, archive the book, keep every row and trade number,
+rebase the ledger to $500, publish one marker + a dated REVIEW, and change **nothing** else (R/trade, era DD and
+the PASS/REVERT bars are computed from per-trade P&L and are untouched; it is not a new era and must never be
+called a fresh $500 test).
+
+**Shipped:** `tools/equity_runway.py` (read-only: ledger vs true equity vs drift, era R/trade and $ burn,
+runway + bootstrap, policy state; `--json`, `--strict`) and `tools/test_equity_runway.py` (**18 OK**, hermetic,
+pins reward-leg risk recovery, drift reporting, no-write side effects and the exact fire point); decision doc
+`docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md`; plan §1 guardrail + §2d; handoff §1/§6 + snapshot.
+
+**Unchanged:** `SL_CLEAR_ATR = 0.5`, every frozen constant, `TRADING_MODE = "FORWARD_TEST"`, the ledger, every
+row of `trades.csv`, the deploy and the host. **No order, gate CLOSED.** **A2 remains the next eligible step and
+is blocked right now by open SELL #759** (it needs a flat host); Track B is at **B3** (reconciliation).
+
+---
+
+## 2026-10-30 — owner sign-off recorded: **the paper ledger is never rebaselined** ("no rebaseline ever — let it go negative")
+
+New session off `main` @ `acd9624` (PR #65 merged). The owner answered the §7 choice with the second option, so
+the **rebaseline-at-zero rule proposed in §5 is DECLINED** and the ledger is now permanently unedited.
+
+**Recorded (append-only, §5's rule text untouched):** `docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md`
+**§8** — the verbatim line, what it authorises (nothing on the ledger, ever) and what it does not (no new era, no
+reset of `n`, no re-judging of `structstop1.5`, no LIVE action), plus the two consequences written down in
+advance: a negative `equity` will *look* like the 2026-10-19 phantom incident and is not it (a real book loses
+~$1/trade; thousands in one bar is the incident signature), and `handoff_check`'s money rule stays armed against a
+ledger that moves with no trades behind it. The doc's header now says §8 is the decision and §5 is declined;
+`EXECUTION-PLAN.md` §1 guardrail + §2d and `HANDOFF.md` §1/§6/cheat-sheet/architecture map were corrected to match.
+
+**Tool follows the decision:** `tools/equity_runway.py` reports `mode: never_rebaseline`,
+`rebaseline_permitted: false` at every equity level, keeps printing the burn/runway, shows the §5 numbers as
+**"registered 2026-10-30, DECLINED by owner"**, and demotes `--strict` to an **accounting alert** (exit 1 at/under
+$0; it triggers nothing). `tools/test_equity_runway.py` **21 OK** — three new tests, including the one that
+matters: crossing zero must **not** flip `rebaseline_permitted` to True in the JSON or the printed report.
+
+**State at this session (unchanged by it):** 758 closed, era n=261, engine ledger **$52.98**, true equity
+**$36.05**, runway ≈38 trades / ≈2.9 trading days (bootstrap 90% 33–336, 6% of draws with no burn), **SELL #759
+open**. `check_data` 0 fail/8 warn, `handoff_check` FRESH, `live_readiness` 11 PASS / 6 TODO / 3 MANUAL CLOSED.
+**No parameter, no ledger row, no `status.json`, no deploy, no host action, no order.** Next eligible step is
+still **A2** (`SL_CLEAR_ATR 0.5 → 1.5`) and it is still blocked on a flat host; Track B is at **B3**.
