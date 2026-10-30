@@ -1,10 +1,12 @@
 # ANALYSIS — the simulated balance is a counter, not capital: should it be increased? (2026-10-30)
 
 **Question asked (owner, 2026-10-30):** *"Follow execution plan, simulated equity is down to 52 usd, should we increase it?"*
-**Short answer:** **No — not now, and not as a top-up.** Increase it only through the pre-registered
-rebaseline rule in §5, which fires at **true equity ≤ $0** and has **not** fired ($36.05 left). Until then
-nothing changes. §3 shows exactly what a top-up would and would not buy: it buys **nothing** the
-experiment needs, and it destroys the one number that is currently telling the truth.
+**Short answer:** **No — not now, not ever.** The owner signed **"no rebaseline ever — let it go negative"**
+on 2026-10-30 (**§8 = the decision; it supersedes §5, which is the rebaseline-at-zero proposal he declined and
+which stays on the record unsigned**). So: no top-up, no reset, no ledger edit — the book is expected to cross
+zero and keep trading on a negative balance. §3 shows exactly what a top-up would and would not buy: it buys
+**nothing** the experiment needs, and it destroys the one number that is currently telling the truth.
+**Read §8 first if you are only reading one section.**
 **Verdict type:** accounting/process decision — **no parameter, no code, no deploy, no order, no ledger row touched.**
 Re-run the numbers any time: `python3 tools/equity_runway.py` (read-only; 18 tests in `tools/test_equity_runway.py`).
 
@@ -190,5 +192,70 @@ balance is **still $52.98** — this document is a decision about *if and when* 
   evidence for another few months"* — it will, unchanged, on a negative or rebaselined ledger; the number
   is not what is running out, the **edge** is, and that is what the next 150 trades are for.
 
-**Owner sign-off line (one of):**
-`rebaseline rule approved` · `no rebaseline ever — let it go negative` · `stop the paper book at the fire point`
+**Owner sign-off — GIVEN 2026-10-30: `no rebaseline ever — let it go negative` → see §8** (this line used to
+offer three options; the owner chose the second, so `rebaseline rule approved` and `stop the paper book at the
+fire point` are both **not** the decision and must not be recorded as if they were).
+
+---
+
+## 8. OWNER SIGN-OFF (2026-10-30, recorded by an agent session at the owner's direction)
+
+**The owner's answer, verbatim:**
+
+> **"no rebaseline ever — let it go negative"**
+
+Given after the question was put as a four-way choice (§7's three lines plus "record nothing yet"), so this
+is a decision among stated options, not an inferred one. **§5 above is now history: its rule is NOT adopted.**
+Nothing in §5 is edited, deleted or re-tuned — it stays exactly as it was written on 2026-10-30, unsigned,
+because an unsigned proposal that was declined is part of the record. **This section overrides it in effect,
+and this section may not itself be widened later.**
+
+### 8.1 What this authorises
+
+- **Nothing on the ledger, ever.** No top-up, no rebaseline, no reset, no edit to `status.json.equity`, no edit
+  to any row of `trades.csv`. The paper book runs as one continuous, unbroken record from trade **#1** onward
+  for the rest of its life.
+- The paper book is expected to cross zero and keep trading on a **negative balance**. That is the chosen
+  policy, not a failure mode: startup already preserves a finite ledger balance even when it is zero or
+  negative (`docs/REVIEW-2026-10-19-negative-balance.md`), and the restart path is covered by the smoke suite.
+- Everything continues to be judged in **R** (`Profit ÷ actual risk`), never as a % of the starting balance.
+  `true_equity` (= $500 + summed `Profit`) remains a **reporting** number only; it is not a gate and no longer
+  has a declared consequence attached to it.
+
+### 8.2 What it explicitly does NOT authorise
+
+- It is **not** permission to stop, pause, restart or re-scope the forward test, and it resets no `n`, no era,
+  and no bar. The `structstop1.5` window (`docs/PREREG-2026-10-26-structstop1.5.md`) is untouched.
+- It is not permission to hide the number: a negative `equity` field will appear on the dashboard with no
+  explanation unless §8.3's marker is kept current.
+- It authorises no LIVE action, no `TRADING_MODE` change, no arming, no order. `SL_CLEAR_ATR` stays **0.5**.
+
+### 8.3 The two consequences the owner should expect, written down now
+
+1. **A negative `equity` on the dashboard will look exactly like the 2026-10-19 phantom-ledger incident**
+   (`Balance_After` collapsing, negative equity, panicky readings). It is not that. The difference is checkable
+   in one command: `python3 tools/equity_runway.py` prints the ledger, true equity, the drift and the burn, and
+   `python3 tools/check_data.py` / `handoff_check.py` stay green throughout the decline. Anyone reading the
+   dashboard in 2026-11 or later should run those first. If a *sudden* collapse appears (thousands of dollars in
+   one bar, `Take_Profit == 0`, blank `Entry_Time`), that IS the incident signature — a real book loses
+   ~$1/trade, not $4,000/trade.
+2. **`tools/handoff_check.py`'s money rule will keep flagging the drift.** It allows money to move only as far
+   as the closed-trade count explains, so a negative ledger is fine *while trades are closing*; it goes STALE if
+   the ledger moves with no trades behind it — which is precisely the thing the owner has now ruled out. That
+   check stays armed as the guard for exactly this decision.
+
+### 8.4 The tool was changed to match the decision
+
+`tools/equity_runway.py` no longer describes a rebaseline as the pending policy. It now reports the owner's
+decision (`mode: never_rebaseline`, `rebaseline_permitted: false`), keeps printing the runway and the burn, and
+keeps `--strict` as an **accounting alert** — exit 1 once `true equity ≤ $0` — with no implied action attached,
+so a monitoring loop can shout without anyone reading it as "time to top up". The registered-but-declined
+proposal's numbers are still shown, labelled **not adopted**, so the record of what was considered survives.
+Pinned by `tools/test_equity_runway.py` (**21 tests**, 3 new for this decision).
+
+### 8.5 Status of this document
+
+**Closed.** The question that opened it ("should we increase the simulated equity?") has an owner answer —
+**no, now or ever** — and the ledger is not a decision surface again. Nothing here reopens: a future session
+that wants to raise or reset the balance needs a **new dated pre-registration plus a new explicit owner
+sign-off**, and may not cite §5 as if it were live.

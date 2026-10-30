@@ -12,12 +12,18 @@ What is pinned here, and why each one matters:
     was ratcheted to entry - risk must never come out as 0 on a BE row;
   * the runway is arithmetic on the era's net $-per-trade, and it is None rather
     than a divide-by-zero when the book is flat or the ledger is already spent;
-  * the rebaseline policy fires at exactly true equity <= 0 and at nothing else
-    (a floor that fires early would let a bar be rescued before the outcome);
+  * the OWNER DECISION of 2026-10-30 is what the tool reports: the ledger is never
+    rebaselined ("no rebaseline ever - let it go negative"), so `rebaseline_permitted`
+    stays False at every equity level - in particular it must NOT flip to True when
+    the book crosses zero, because that would read as permission to edit the ledger;
+  * the zero crossing is an ALERT at exactly true equity <= 0 and at nothing else
+    (an early alert trains people to ignore it; a missing one hides the decline);
   * malformed rows with no Entry_Time are skipped, not crashed on;
   * the tool never writes: the temp root's file bytes and mtimes are unchanged.
 """
+import contextlib
 import csv
+import io
 import json
 import os
 import shutil
@@ -148,7 +154,8 @@ class TestRunway(Base):
         self.write(rows, self.status(equity=-100.0, total_trades=10))
         d = er.build(self.root, 0.20)
         self.assertIsNone(d["runway"]["trades"])
-        self.assertTrue(d["policy"]["fired"])
+        self.assertTrue(d["policy"]["at_or_below_zero"])
+        self.assertFalse(d["policy"]["rebaseline_permitted"])   # owner decision: never
 
     def test_bootstrap_range_brackets_point_estimate(self):
         rows = self.era_rows(40, -1.0)
@@ -164,21 +171,46 @@ class TestPolicy(Base):
                         profit, balance)], self.status(equity=balance, total_trades=1))
         return er.build(self.root, 0.20)
 
-    def test_does_not_fire_with_money_left(self):
+    def test_no_alert_with_money_left(self):
         d = self._d(51.0, -449.0)                            # true equity $51
-        self.assertFalse(d["policy"]["fired"])
+        self.assertFalse(d["policy"]["at_or_below_zero"])
         self.assertAlmostEqual(d["policy"]["to_go_usd"], 51.0)
 
-    def test_fires_at_exactly_zero(self):
+    def test_alerts_at_exactly_zero(self):
         d = self._d(0.0, -500.0)
-        self.assertTrue(d["policy"]["fired"])
+        self.assertTrue(d["policy"]["at_or_below_zero"])
         self.assertAlmostEqual(d["policy"]["to_go_usd"], 0.0)
 
-    def test_fires_below_zero(self):
-        self.assertTrue(self._d(-40.0, -540.0)["policy"]["fired"])
+    def test_alerts_below_zero(self):
+        self.assertTrue(self._d(-40.0, -540.0)["policy"]["at_or_below_zero"])
 
-    def test_rebase_target_is_the_start_balance(self):
-        self.assertEqual(self._d(-40.0, -540.0)["policy"]["rebase_to_usd"], 500.0)
+    def test_declined_proposal_is_still_reported(self):
+        """The §5 numbers stay on the record, labelled as declined - they are not policy."""
+        prop = self._d(51.0, -449.0)["policy"]["declined_proposal_usd"]
+        self.assertEqual(prop["rebase_to_usd"], 500.0)
+        self.assertEqual(prop["floor_usd"], 0.0)
+        self.assertIn("DECLINED", prop["status"])
+
+    # ---- the owner decision (2026-10-30): no rebaseline, ever -------------------
+    def test_mode_is_never_rebaseline(self):
+        self.assertEqual(self._d(51.0, -449.0)["policy"]["mode"], "never_rebaseline")
+
+    def test_rebaseline_is_never_permitted_above_zero(self):
+        self.assertFalse(self._d(51.0, -449.0)["policy"]["rebaseline_permitted"])
+
+    def test_rebaseline_is_never_permitted_after_the_zero_crossing(self):
+        """The one test that decides whether this file honours the sign-off: crossing
+        zero must NOT unlock an edit path, in the JSON or in the printed report."""
+        d = self._d(-120.0, -620.0)
+        self.assertFalse(d["policy"]["rebaseline_permitted"])
+        self.assertEqual(d["policy"]["mode"], "never_rebaseline")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            er.report(d)
+        text = buf.getvalue()
+        self.assertIn("NO REBASELINE", text)
+        self.assertIn("Edit nothing", text)              # the alert says what NOT to do
+        self.assertNotIn("No top-up is permitted before it fires", text)
 
 
 class TestNoSideEffects(Base):
