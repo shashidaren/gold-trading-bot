@@ -1,7 +1,8 @@
 # Gold bot execution plan — “follow execution plan”
 
 **Status:** living session queue — re-based **2026-10-26 ~14:15 UTC** on collection 349 (data through `2026-10-26 11:59:07 UTC`);
-§2/§2b refreshed **2026-10-27 ~12:00 UTC** on collection 359, §2c **2026-10-28 ~19:00 UTC** on collection 370.
+§2/§2b refreshed **2026-10-27 ~12:00 UTC** on collection 359, §2c **2026-10-28 ~19:00 UTC** on collection 370,
+§2d **2026-10-30 ~03:00 UTC** on collection 381 (incl. the paper-ledger runway answer: **no top-up**).
 **G1 is SIGNED (2026-10-27, branch A):** `docs/PREREG-2026-10-26-structstop1.5.md` is the registered bar for one
 window, step **A1 is DONE**, and **A2 — the deploy itself** is still the next eligible Track-A step; it waits for a
 moment with no open position on the host. **B2 is DONE (2026-10-28)** in the parallel Track B
@@ -54,6 +55,13 @@ If the owner wants per-change sign-off instead of the phrase acting as sign-off 
 - Cutover dates come from the host's `autosync: merge upstream` commit time, confirmed from the ledger — never from the plan or the PR merge.
 - No account identifiers, credentials, personal balances or unredacted manual journals in Git.
 - **`TRADING_MODE` stays `FORWARD_TEST`** until G2. `python3 tools/live_readiness.py --strict` must be green before G2 is even discussed, and a green scorecard is **not** itself permission.
+- **The simulated balance is a counter, not capital.** Paper always trades `LOT_SIZE` (0.01) — `size_lots()`
+  returns it whenever there is no broker account — so the ledger number changes no trade, no R/trade, no era
+  DD and no registered bar. Editing it mid-window is a **ledger edit**, not a risk decision: it is exactly
+  what `tools/handoff_check.py`'s money rule calls tampering, and what erased $24.74 of real losses on
+  2026-09-09. Any change to it must follow the pre-registered rebaseline rule in
+  `docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md` §5 (fires at **true equity ≤ $0**, never
+  before) and be checked with `python3 tools/equity_runway.py`.
 
 ---
 
@@ -117,6 +125,33 @@ Read with §2 and §2b; nothing below re-opens a closed judgement.
 - **LIVE gate CLOSED: 11 PASS / 6 TODO / 3 MANUAL** after B2 (was 9/8/3). Remaining TODOs are exactly
   B3 (position/deal reconciliation) and B4 (disconnect safety, sizing limits, cost guard); the three MANUAL
   items are unchanged (cost model, demo evidence, edge evidence).
+- **Verdict unchanged: no demonstrated edge after costs.** Nothing in this refresh is permission to trade.
+
+### 2d. Refresh 2026-10-30 ~03:00 UTC (collection 381, log through `2026-10-30 02:59:04 UTC`)
+
+Read with §2/§2b/§2c; nothing below re-opens a closed judgement.
+
+- **758 closed** (150W/334L/271BE/3TIME, decisive **31.0% [27.0–35.2]**), engine ledger **$52.98**,
+  true equity **$36.05**, net **−$767.15** at the registered $0.40 round trip. **SELL #759 open** at the
+  snapshot (`next_trade_num: 760`) — which is why **A2 is blocked again**: it needs a flat host.
+  `check_data` 0 fail/8 warn, `handoff_check` FRESH (2 advisory), `check_structural_stop` PASS
+  (0 inside level, 82.4% level-bound, +0.50 ATR, 3.32 ATR median risk), `check_gap_rides` 3/2 with 0 damage.
+- **Era n=261** (65W/123L/71BE/2TIME): decisive **34.6% [28.1–41.6]**, gross **−0.098R/trade**
+  ($−145.14; decisive-only −0.136R), SL/day **6.15**, SL share **47.1%**, scratch 27.2%, avg SL **$5.80**,
+  era DD **$191.04**. Bar card now reads **B1/B2*/B3/A4/A5** with **B2 a fresh FAIL** (SL share 47.13% vs the
+  47.0% bar) and C2 still FAIL; the 10-19 judgement stays closed and the lapsed n=150 arm stays lapsed.
+- **Cost sample 15/14 complete UTC days, 1/2 weekends** (still short of *two weekends*), measured round trip
+  mean/median **$0.55**, p90 $0.56, max $0.68 — **$0.40 stays registered**.
+- **Paper ledger runway (NEW, `python3 tools/equity_runway.py`):** true equity $36.05 against a net burn of
+  **−$0.94/closed trade** (era, $0.40 RT) at **13.1 trades/active day** is **≈38 closed trades ≈ 2.9 trading
+  days** to zero, bootstrap 90% range **33–336 trades** (6% of draws have no burn at all — n=261 cannot
+  separate the era from break-even). The engine has **no balance floor** and keeps trading on a negative
+  ledger (a supported, tested state). **The simulated balance is a counter, not capital**: paper always
+  trades 0.01 lot (`size_lots()` returns `LOT_SIZE` with no broker account), so a top-up moves no trade, no
+  R/trade, no era DD and no registered bar — only `engine_ledger_usd`, which is exactly what
+  `handoff_check`'s money rule treats as a ledger edit. **Owner question answered NO to a top-up**, with a
+  pre-registered **rebaseline-at-zero** rule instead: `docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md` §5.
+- **LIVE gate CLOSED: 11 PASS / 6 TODO / 3 MANUAL** (unchanged since B2). Next Track-B step **B3** (reconciliation).
 - **Verdict unchanged: no demonstrated edge after costs.** Nothing in this refresh is permission to trade.
 
 ---
