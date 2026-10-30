@@ -21,7 +21,7 @@ from the first commit.
 | key | value |
 |---|---|
 | as_of_utc | 2026-10-30 02:59 |
-| data_collection | 381 |
+| data_collection | unknown |
 | closed_trades | 758 |
 | outcomes | 150W/334L/271BE/3TIME |
 | decisive_wr_pct | 31.0 |
@@ -121,7 +121,7 @@ ritual before drawing any conclusion. The list below is the detailed version.
 | Stop-vs-level invariant (+ deploy-boundary evidence) | `python3 tools/check_structural_stop.py` |
 | **§7 closure-gap revert trigger (count + damage)** | `python3 tools/check_gap_rides.py` (`--root DIR`, `--since`, `--json`, `--strict` → exit 1 at the trigger) |
 | **Is this handoff stale?** | `python3 tools/handoff_check.py` (`--update` rewrites only the snapshot block) |
-| **How much paper runway is left?** | `python3 tools/equity_runway.py` (`--cost 0.275`, `--json`, `--strict` = exit 1 at the rebaseline floor) — read-only; ledger vs true equity vs drift, era $ burn, runway + bootstrap. `docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md` |
+| **How much paper runway is left?** | `python3 tools/equity_runway.py` (`--cost 0.275`, `--json`, `--strict` = exit 1 at/under $0, **alert only**) — read-only; ledger vs true equity vs drift, era $ burn, runway + bootstrap, and the owner's **never-rebaseline** policy state. `docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md` §8 |
 | Net-of-cost view of the ledger | `python3 tools/win_rate_report.py --spread 0.40` (round-trip $; the default output is unchanged without it) |
 | **Measured spreads / cost / server clock / contract spec** (once `mt5quotes-gold` runs) | `python3 tools/xm_quote_report.py` (`--quiet` = the digest line) |
 | **Large-N replay over broker M1 history** | `python3 tools/history_to_log.py mt5_history.csv --out history_utc.csv`, then `python3 tools/strategy_lab.py --bars history_utc.csv` |
@@ -227,7 +227,7 @@ ritual before drawing any conclusion. The list below is the detailed version.
 
 **Open experiment:** struct-stop era **n=261** (65W/123L/71BE/2TIME), decisive **34.6% [28.1–41.6]**, gross **−0.098R/trade** ($−145.14; decisive-only denominator −0.136R), SL/day 6.15, SL share **47.1%**, scratch 27.2%, avg SL $5.80, era DD **$191.04**; geometry guard **PASS** (0 stops inside the level, 82.4% level-bound, +0.50 ATR clearance, 3.32 ATR median risk). The bar card reads **B1/B2/B3/A4/A5**, with **B2 a fresh FAIL** (SL share 47.13% vs the 47.0% bar) and C2 still FAIL. The **10-19 judgement is closed** (SCREEN MET at n=139, n=150 PASS arm lapsed with its time gate) — the numbers above are grown-sample observations, never a re-judgement. **No demonstrated edge after cost.**
 
-**The paper ledger is a counter, not capital — and it is running out (2026-10-30 answer: no top-up).** Paper always trades `LOT_SIZE` (0.01): `size_lots()` returns it whenever there is no broker account, by the 10-17 correction that stopped the paper book being sized off its own balance. So the ledger number moves no entry, exit, lot, parameter, R/trade, era DD or registered bar — only `engine_ledger_usd`, i.e. a **ledger edit**, which is what `handoff_check`'s money rule calls tampering and what erased $24.74 of real losses on 2026-09-09 (the $16.93 drift still in these numbers is its signature). What is real is the **runway**: **−$0.94/closed trade** net (era, $0.40 RT) at **13.1 trades/active day** against $36.05 is **≈38 closed trades ≈ 2.9 trading days** to zero, bootstrap 90% **33–336 trades** (6% of draws have no burn at all — n=261 cannot separate the era from break-even), and there is **no balance floor** (a negative ledger is a supported, tested state). **Registered instead of a top-up — a rebaseline-at-zero rule** (`docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md` §5): no edit while true equity > $0; at the first trade leaving it ≤ $0, archive the book, keep every row and trade number, rebase to $500 with one published marker + a dated REVIEW, and change nothing else — it is **not** a new era and must never be described as a fresh $500 test. Check with `python3 tools/equity_runway.py` (`--strict` exits 1 at the fire point).
+**The paper ledger is a counter, not capital — and it is running out (2026-10-30 answer: no top-up).** Paper always trades `LOT_SIZE` (0.01): `size_lots()` returns it whenever there is no broker account, by the 10-17 correction that stopped the paper book being sized off its own balance. So the ledger number moves no entry, exit, lot, parameter, R/trade, era DD or registered bar — only `engine_ledger_usd`, i.e. a **ledger edit**, which is what `handoff_check`'s money rule calls tampering and what erased $24.74 of real losses on 2026-09-09 (the $16.93 drift still in these numbers is its signature). What is real is the **runway**: **−$0.94/closed trade** net (era, $0.40 RT) at **13.1 trades/active day** against $36.05 is **≈38 closed trades ≈ 2.9 trading days** to zero, bootstrap 90% **33–336 trades** (6% of draws have no burn at all — n=261 cannot separate the era from break-even), and there is **no balance floor** (a negative ledger is a supported, tested state). **OWNER DECISION (2026-10-30, signed): "no rebaseline ever — let it go negative."** No top-up, no reset, no edit to `trades.csv` or `status.json` — ever. The book is *expected* to cross zero and keep trading on a negative ledger (a supported, tested state), and nothing is ever rebased. The **rebaseline-at-zero proposal** that was written first (`docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md` §5) is **declined, unsigned and unadopted** — it stays on the record and may never be cited as policy; the decision is §8 of the same doc. Two consequences were written down with it: a negative `equity` on the dashboard will *look* like the 2026-10-19 phantom incident and is not it (a real book loses ~$1/trade, not $4,000), and `handoff_check`'s money rule stays armed against exactly this — a ledger that moves with no trades behind it. Check the policy state, the burn and the runway with `python3 tools/equity_runway.py` (`--strict` = exit 1 at/under $0, an **alert only**; it authorises nothing).
 
 **G1 is SIGNED (2026-10-27, branch A) — `structstop1.5` is the registered window and A2 (the deploy) is still next:** the §7 closure-gap REVERT trigger had fired (3 rides vs threshold 2, 0 gap-through, 0 worse exits, 0 weekend rides) and its literal response was a revert to `2·ATR / 3·ATR`; the owner chose the pack's option **(A)** instead — one further step, `SL_CLEAR_ATR 0.5 → 1.5`, so `docs/PREREG-2026-10-26-structstop1.5.md` is the binding bar for one window (**registered, not deployed**; its §3–§7 numbers may not be edited after outcomes are seen). The registered eligibility bar is **3/4** (trade count −21.9%), the costed replay puts `1.5` at **−0.046R/t** at $0.20/side vs live **−0.141** and the literal revert **−0.155**, and PASS needs ≈**48%** decisive WR at n=150 against a 34.6% reading — **KEEP-with-no-edge or REVERT remain the likely readings**: this is a stop-hunt defect fix, not a claim of edge. **A2's only remaining condition is a host action**: the one line must land while no position is open — **it is blocked right now by open SELL #759** (and the host deploys from its own `0 */3 * * *` cron, which this repo session cannot see or drive); the cutover is the host's `autosync: merge upstream` commit time. Decision records: `docs/REVIEW-2026-10-27-g1-decision.md`, `docs/BRIEF-2026-10-27-g1-owner-decision.md`.
 
@@ -583,11 +583,12 @@ that doc):
 ## 6. Next steps (in order)
 
 **2026-10-30 — canonical queue is `docs/EXECUTION-PLAN.md`; this section is the evidence/backlog.**
-**New this session: the paper-ledger runway decision (no top-up) + a registered rebaseline-at-zero rule**
-(`docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md`, `tools/equity_runway.py`). It changes no
-parameter and adds no queue step: the ledger stays unbroken and everything keeps being judged in **R**. Re-check
-it with `python3 tools/equity_runway.py` (≈38 trades / ≈2.9 trading days at the point estimate, bootstrap 90%
-33–336; `--strict` exits 1 at the fire point). **Do not "helpfully" top up the balance** — see §1.
+**New on 10-30, CLOSED by owner decision: the paper-ledger question (no top-up, and never a rebaseline)**
+(`docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md` §8, `tools/equity_runway.py`). It changes no
+parameter and adds no queue step: the ledger stays unbroken for the rest of its life and everything keeps being
+judged in **R**. Re-check it with `python3 tools/equity_runway.py` (≈38 trades / ≈2.9 trading days at the point
+estimate, bootstrap 90% 33–336; `--strict` exits 1 at/under $0 as an **alert only**). **Do not "helpfully" top up
+or reset the balance — the owner ruled that out explicitly; a negative ledger is the chosen policy.** See §1.
 The owner's prompt is **“Follow execution plan.”** — lowest-numbered eligible step only.
 **A2 is still the next Track-A step and it is blocked on the host, not on the repo:** G1 is SIGNED and A1 is DONE,
 so the one line `SL_CLEAR_ATR = 0.5 → 1.5` may land — but only in a moment when the host has **no open position**,
@@ -975,7 +976,7 @@ tools/pressure_report.py  what the dashboard shows, printed (--root/--era/--json
 tools/mt5_quotes.py     read-only Wine sidecar: 30 s XM quotes + contract spec -> xm_data/ (deploy/mt5quotes.service)
 tools/xm_quote_report.py  what the logger measured: spreads, cost vs the assumed $0.40, server clock, spec (digest: 📡)
 tools/equity_runway.py  paper-ledger runway: ledger vs true equity vs drift, era $ burn, trades/days to $0, and the
-                   registered rebaseline-at-zero state (read-only; no engine import)
+                   owner's never-rebaseline policy state (read-only; no engine import, writes nothing)
 tools/broker_time.py    the EU/US DST rule for XM's server clock (verified only by observed offsets)
 tools/box_report.py   live boxes + the measured box verdict, the chop/retest read and `--alert-scan`
                    (how many Telegram notices the current rule would have sent)

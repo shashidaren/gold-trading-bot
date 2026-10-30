@@ -55,13 +55,15 @@ If the owner wants per-change sign-off instead of the phrase acting as sign-off 
 - Cutover dates come from the host's `autosync: merge upstream` commit time, confirmed from the ledger — never from the plan or the PR merge.
 - No account identifiers, credentials, personal balances or unredacted manual journals in Git.
 - **`TRADING_MODE` stays `FORWARD_TEST`** until G2. `python3 tools/live_readiness.py --strict` must be green before G2 is even discussed, and a green scorecard is **not** itself permission.
-- **The simulated balance is a counter, not capital.** Paper always trades `LOT_SIZE` (0.01) — `size_lots()`
-  returns it whenever there is no broker account — so the ledger number changes no trade, no R/trade, no era
-  DD and no registered bar. Editing it mid-window is a **ledger edit**, not a risk decision: it is exactly
-  what `tools/handoff_check.py`'s money rule calls tampering, and what erased $24.74 of real losses on
-  2026-09-09. Any change to it must follow the pre-registered rebaseline rule in
-  `docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md` §5 (fires at **true equity ≤ $0**, never
-  before) and be checked with `python3 tools/equity_runway.py`.
+- **The simulated balance is a counter, not capital, and it is NEVER rebaselined (owner decision
+  2026-10-30).** Paper always trades `LOT_SIZE` (0.01) — `size_lots()` returns it whenever there is no broker
+  account — so the ledger number changes no trade, no R/trade, no era DD and no registered bar. Editing it
+  mid-window is a **ledger edit**, not a risk decision: it is exactly what `tools/handoff_check.py`'s money
+  rule calls tampering, and what erased $24.74 of real losses on 2026-09-09. The owner's signed answer is
+  **"no rebaseline ever — let it go negative"**: no top-up, no reset, no edit to `trades.csv`/`status.json`,
+  and the book is *expected* to trade through zero. The rebaseline-at-zero proposal it declined is preserved
+  unsigned in `docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md` (§5 declined, §8 the decision)
+  and may not be cited as live policy. Check the decline with `python3 tools/equity_runway.py`.
 
 ---
 
@@ -149,8 +151,12 @@ Read with §2/§2b/§2c; nothing below re-opens a closed judgement.
   ledger (a supported, tested state). **The simulated balance is a counter, not capital**: paper always
   trades 0.01 lot (`size_lots()` returns `LOT_SIZE` with no broker account), so a top-up moves no trade, no
   R/trade, no era DD and no registered bar — only `engine_ledger_usd`, which is exactly what
-  `handoff_check`'s money rule treats as a ledger edit. **Owner question answered NO to a top-up**, with a
-  pre-registered **rebaseline-at-zero** rule instead: `docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md` §5.
+  `handoff_check`'s money rule treats as a ledger edit. **Owner question answered NO to a top-up**, and then
+  **NO to ever rebaselining either** — signed **"no rebaseline ever — let it go negative"** (§8 of
+  `docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md`), which declines the §5 rebaseline-at-zero
+  proposal; it stays on the record, unsigned and unadopted. Expectations written down with the decision: a
+  negative `equity` on the dashboard will *look* like the 2026-10-19 phantom incident and is not it (a real book
+  loses ~$1/trade), and `handoff_check`'s money rule stays armed against a silent ledger edit.
 - **LIVE gate CLOSED: 11 PASS / 6 TODO / 3 MANUAL** (unchanged since B2). Next Track-B step **B3** (reconciliation).
 - **Verdict unchanged: no demonstrated edge after costs.** Nothing in this refresh is permission to trade.
 

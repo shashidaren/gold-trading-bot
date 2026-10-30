@@ -8,7 +8,7 @@ module, so it can be run at any time, from anywhere, without touching the bot.
     python3 tools/equity_runway.py                 # repo root
     python3 tools/equity_runway.py --root /opt/gold
     python3 tools/equity_runway.py --json
-    python3 tools/equity_runway.py --strict        # exit 1 once the rebaseline floor is hit
+    python3 tools/equity_runway.py --strict        # exit 1 once true equity is at/below $0 (alert only)
 
 Why this exists (docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md)
 -----------------------------------------------------------------------------
@@ -19,9 +19,15 @@ parameter. What it *can* do is run out: the engine books every loss against it a
 has no floor, so it will cross zero and keep trading on a negative balance.
 
 The number the owner actually needs is the **runway** — how many closed trades of
-burn are left before that happens — because a rebaseline decided *before* it fires
-cannot be mistaken for a bar rescued *after* the outcome. That is the whole purpose
-of this tool: make the runway a printed number rather than a surprise.
+burn are left before that happens. This tool prints it so the decline is a forecast
+rather than a surprise.
+
+**Policy (owner decision 2026-10-30):** the ledger is **never** rebaselined —
+"no rebaseline ever — let it go negative". The book is expected to cross zero and
+keep trading on a negative balance; that is deliberate, and it is the reason this
+tool only ever READS. `--strict` is an accounting alert (exit 1 at/under $0), not a
+trigger for an edit. The §5 rebaseline proposal is printed as **not adopted** so the
+record of what was considered survives; see the doc's §8.
 
 Definitions (same as every other tool in this repo)
 --------------------------------------------------
@@ -59,13 +65,18 @@ ATR_SL_MULT = 2.0            # fallback geometry only (engine.ATR_SL_MULT)
 STRUCT_ERA = "struct-stop era"
 
 # --------------------------------------------------------------------------- #
-# The pre-registered rebaseline policy this tool checks (see the analysis doc).
-# It is a POLICY for an accounting event, not a strategy setting: nothing here
-# changes a trade. Fires only at or below zero so the decision is always made
-# before the event, never after a result.
+# OWNER DECISION (2026-10-30): the ledger is NEVER rebaselined.
+#   verbatim: "no rebaseline ever - let it go negative"
+# recorded in the analysis doc below, §8 (it declines the §5 proposal that this
+# tool used to describe). Nothing in this file may be read as permission to edit
+# trades.csv or status.json: the tool is read-only and the policy forbids the edit.
+# The §5 numbers are kept only so the declined proposal stays on the record.
 # --------------------------------------------------------------------------- #
-RESET_FLOOR_USD = 0.0        # true equity at/under which a rebaseline is eligible
-RESET_TO_USD = START_BALANCE  # what the ledger is rebased to when it fires
+POLICY_MODE = "never_rebaseline"      # owner decision; see the doc's §8.1/§8.2
+REBASELINE_PERMITTED = False          # no top-up, no reset, no ledger edit - ever
+RESET_FLOOR_USD = 0.0                 # the level at which the DECLINED §5 rule would have fired;
+                                      # kept as an ALERT threshold only (negative-ledger warning)
+RESET_TO_USD = START_BALANCE          # what the DECLINED §5 rule would have rebased to
 POLICY_DOC = "docs/ANALYSIS-2026-10-30-simulated-equity-and-paper-runway.md"
 
 
@@ -235,9 +246,14 @@ def build(root, cost_per_side):
                  usd_per_trade=era_usd),
         runway=dict(usd_per_trade=era_usd, trades=runway, trading_days=days,
                     trades_p05=lo, trades_p95=hi, p_no_burn=p_no_burn),
-        policy=dict(doc=POLICY_DOC, floor_usd=RESET_FLOOR_USD, rebase_to_usd=RESET_TO_USD,
-                    fired=(true_equity <= RESET_FLOOR_USD),
-                    to_go_usd=(true_equity - RESET_FLOOR_USD)),
+        policy=dict(doc=POLICY_DOC, mode=POLICY_MODE,
+                    rebaseline_permitted=REBASELINE_PERMITTED,
+                    alert_floor_usd=RESET_FLOOR_USD,
+                    at_or_below_zero=(true_equity <= RESET_FLOOR_USD),
+                    to_go_usd=(true_equity - RESET_FLOOR_USD),
+                    declined_proposal_usd=dict(floor_usd=RESET_FLOOR_USD,
+                                               rebase_to_usd=RESET_TO_USD,
+                                               status="registered 2026-10-30, DECLINED by owner")),
     )
 
 
@@ -274,15 +290,19 @@ def report(d):
     else:
         print("  RUNWAY      no burn in the era sample (or the ledger is already at/below the floor)")
     p = d["policy"]
-    print(f"\n  pre-registered rebaseline rule  ({p['doc']})")
-    print(f"    fires at true equity <= ${p['floor_usd']:.2f}, rebases the ledger to "
-          f"${p['rebase_to_usd']:.0f}, archives the old book, keeps numbering, changes no parameter")
-    if p["fired"]:
-        print(f"    STATUS: FIRED — true equity ${fmt(d['true_equity'])} is at/below the floor.")
+    print(f"\n  owner decision (2026-10-30)  NO REBASELINE - the ledger is never edited  ({p['doc']} §8)")
+    print("    \"no rebaseline ever - let it go negative\"")
+    print("    -> no top-up, no reset, no edit to trades.csv or status.json; a negative balance is expected")
+    prop = p["declined_proposal_usd"]
+    print(f"    declined proposal (NOT adopted): rebaseline at true equity <= ${prop['floor_usd']:.2f} "
+          f"to ${prop['rebase_to_usd']:.0f}")
+    if p["at_or_below_zero"]:
+        print(f"    ALERT: true equity ${fmt(d['true_equity'])} is at/below $0 - the book is now trading "
+              f"on a negative ledger.\n           That is the owner's chosen policy. Edit nothing.")
     else:
-        print(f"    STATUS: not fired — ${fmt(p['to_go_usd'])} of true equity left. "
-              f"No top-up is permitted before it fires.")
-    print("\n  A rebaseline moves no trade, no bar and no era: era DD, R/trade and the")
+        print(f"    state: ${fmt(p['to_go_usd'])} of true equity left before the zero crossing (no action "
+              f"attached)")
+    print("\n  The balance moves no trade, no bar and no era: era DD, R/trade and the")
     print("  registered PASS/REVERT thresholds are all computed from the ledger's P&L,")
     print("  never from the starting balance. Judge the strategy in R, never in %.")
 
@@ -296,7 +316,8 @@ def main(argv=None):
                          "0.275 is the measured spread-only figure)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--strict", action="store_true",
-                    help="exit 1 once true equity is at/below the rebaseline floor")
+                    help="exit 1 once true equity is at/below $0 (an accounting alert; the owner's "
+                         "2026-10-30 decision is that nothing is ever rebaselined)")
     a = ap.parse_args(argv)
     if a.cost < 0:
         raise SystemExit("--cost must be >= 0")
@@ -305,7 +326,7 @@ def main(argv=None):
         print(json.dumps(d, indent=2, default=str))
     else:
         report(d)
-    if a.strict and d["policy"]["fired"]:
+    if a.strict and d["policy"]["at_or_below_zero"]:
         return 1
     return 0
 
