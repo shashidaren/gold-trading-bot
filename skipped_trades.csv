@@ -1874,3 +1874,19 @@ Timestamp,Reason,Price,ATR
 2026-11-04 06:34:05,ATR too high - News volatility (4.86 > 4.5),4013.90,4.86
 2026-11-05 01:32:05,ATR too high - News volatility (5.09 > 4.5),4102.96,5.09
 2026-11-05 01:34:01,ATR too high - News volatility (5.14 > 4.5),4110.53,5.14
+2026-11-05 07:42:04,SL Cooldown: 43 min remaining (2 consecutive SLs -> 60m cooldown),4120.68,1.94
+2026-11-05 07:44:05,SL Cooldown: 41 min remaining (2 consecutive SLs -> 60m cooldown),4119.90,1.94
+2026-11-05 07:47:01,SL Cooldown: 39 min remaining (2 consecutive SLs -> 60m cooldown),4119.57,1.96
+2026-11-05 07:48:02,SL Cooldown: 38 min remaining (2 consecutive SLs -> 60m cooldown),4120.60,2.02
+2026-11-05 07:50:03,SL Cooldown: 35 min remaining (2 consecutive SLs -> 60m cooldown),4121.07,2.06
+2026-11-05 08:04:04,SL Cooldown: 21 min remaining (2 consecutive SLs -> 60m cooldown),4120.74,2.01
+2026-11-05 08:23:05,Blackout: London Open & Early Session Kill-Zone,4126.98,2.54
+2026-11-05 08:26:06,Blackout: London Open & Early Session Kill-Zone,4124.56,2.47
+2026-11-05 08:28:07,Blackout: London Open & Early Session Kill-Zone,4124.18,2.27
+2026-11-05 08:29:03,Blackout: London Open & Early Session Kill-Zone,4124.17,2.19
+2026-11-05 08:35:04,Blackout: London Open & Early Session Kill-Zone,4123.93,2.04
+2026-11-05 08:45:05,Blackout: London Open & Early Session Kill-Zone,4125.00,1.81
+2026-11-05 08:46:06,Blackout: London Open & Early Session Kill-Zone,4125.03,1.86
+2026-11-05 08:49:07,Blackout: London Open & Early Session Kill-Zone,4125.44,1.66
+2026-11-05 08:55:08,Blackout: London Open & Early Session Kill-Zone,4126.74,1.67
+2026-11-05 08:59:04,Blackout: London Open & Early Session Kill-Zone,4126.36,1.45
