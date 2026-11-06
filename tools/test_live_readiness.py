@@ -142,9 +142,14 @@ class TestChecker(unittest.TestCase):
                     "broker_be", "broker_time_stop"):
             self.assertEqual(self.by_id[cid]["status"], LR.PASS, cid)
 
+    def test_b3_reconciliation_checks_pass_and_other_gaps_remain(self):
+        for cid in ("position_reconcile", "deal_reconcile"):
+            self.assertEqual(self.by_id[cid]["status"], LR.PASS, cid)
+        self.assertIn("persisted ticket", self.by_id["position_reconcile"]["evidence"])
+        self.assertIn("commission", self.by_id["deal_reconcile"]["evidence"])
+
     def test_open_gaps_are_visible(self):
-        for cid in ("position_reconcile", "deal_reconcile", "disconnect_safety",
-                    "sizing_limits", "cost_guard"):
+        for cid in ("disconnect_safety", "sizing_limits", "cost_guard"):
             self.assertEqual(self.by_id[cid]["status"], LR.TODO, cid)
 
     def test_operator_items_are_manual(self):
@@ -206,6 +211,20 @@ class TestChecker(unittest.TestCase):
                  and LR._dict_has_key(fn_src[n], "position")}
         self.assertTrue(close)
         self.assertFalse(reachable & close)
+
+    def test_b3_helpers_must_be_reachable_from_live_loop_and_order_path(self):
+        self.assertEqual(self.by_id["position_reconcile"]["status"], LR.PASS)
+        self.assertEqual(self.by_id["deal_reconcile"]["status"], LR.PASS)
+        with tempfile.TemporaryDirectory() as root:
+            with open(os.path.join(ROOT, "engine.py"), encoding="utf-8") as fh:
+                source = fh.read()
+            # Keep helper implementations present but disconnect them from run_live.
+            source = source.replace("self.reconcile_live_positions()", "None")
+            with open(os.path.join(root, "engine.py"), "w", encoding="utf-8") as fh:
+                fh.write(source)
+            checks = {c["id"]: c for c in LR.code_checks(root)}
+            self.assertEqual(checks["position_reconcile"]["status"], LR.TODO)
+            self.assertEqual(checks["deal_reconcile"]["status"], LR.TODO)
 
     def test_docstrings_and_comments_never_satisfy_a_check(self):
         """A comment claiming a feature is not the feature (B2 lesson)."""

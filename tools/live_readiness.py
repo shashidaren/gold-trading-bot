@@ -211,25 +211,37 @@ def code_checks(root=ROOT):
         if time_paths else
         "MAX_HOLD_MINUTES cannot fire in LIVE (no close order reachable from run_live)"))
 
-    reconcile_fn = any(
-        "positions_get" in _function_src(tree, src, n.name)
-        for n in ast.walk(tree)
-        if isinstance(n, ast.FunctionDef) and n.name not in ("evaluate_candle", "run_live")
+    reconcile_src = fn_src.get("reconcile_live_positions", "")
+    order_calls = _calls(fn_src, order)
+    reconcile_live = (
+        "reconcile_live_positions" in reachable
+        and "reconcile_live_positions" in order_calls
+        and "positions_get" in reconcile_src
+        and "MAGIC_NUMBER" in reconcile_src
+        and "live_ticket" in status and "current_trade_num" in status
     )
-    reconciled = bool(reconcile_fn) and "history_deals_get" in src
     out.append(_check(
-        "position_reconcile", "code", "startup position/deal reconciliation",
-        PASS if reconciled else TODO,
-        "startup adoption + deal history present" if reconciled else
-        "positions_get used only as an in-trade flag; no adoption of an existing "
-        "broker position, no duplicate-order check on restart",
-    ))
+        "position_reconcile", "code", "startup adoption + duplicate-order protection",
+        PASS if reconcile_live else TODO,
+        "reachable startup/order reconciliation; magic-filtered position adoption; "
+        "persisted ticket↔trade number" if reconcile_live else
+        "LIVE startup/order path does not safely reconcile and persist strategy positions"))
 
+    deal_sources = [fn_src.get(name, "") for name in reachable]
+    deal_reconcile = (
+        "reconcile_live_positions" in reachable
+        and any("history_deals_get" in body for body in deal_sources)
+        and "_live_book_deals" in _calls(fn_src, reconcile_src)
+        and "profit" in fn_src.get("_live_book_deals", "")
+        and "commission" in fn_src.get("_live_book_deals", "")
+        and "swap" in fn_src.get("_live_book_deals", "")
+    )
     out.append(_check(
         "deal_reconcile", "code", "realized P&L from broker deals",
-        PASS if "history_deals_get" in src else TODO,
-        "history_deals_get present" if "history_deals_get" in src else
-        "no deal-level P&L; the daily-loss breaker and ledger cannot be trusted in LIVE"))
+        PASS if deal_reconcile else TODO,
+        "reachable history_deals_get sums broker profit, commission and swap "
+        "before idempotent ledger booking" if deal_reconcile else
+        "no reachable, idempotent deal-level P&L reconciliation"))
 
     out.append(_check(
         "disconnect_safety", "code", "terminal connection checked before orders",

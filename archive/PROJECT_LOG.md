@@ -724,3 +724,15 @@ matters: crossing zero must **not** flip `rebaseline_permitted` to True in the J
 open**. `check_data` 0 fail/8 warn, `handoff_check` FRESH, `live_readiness` 11 PASS / 6 TODO / 3 MANUAL CLOSED.
 **No parameter, no ledger row, no `status.json`, no deploy, no host action, no order.** Next eligible step is
 still **A2** (`SL_CLEAR_ATR 0.5 → 1.5`) and it is still blocked on a flat host; Track B is at **B3**.
+
+---
+
+## 2026-11-06 — B3 position/deal reconciliation completed (paper-only)
+
+Followed `docs/EXECUTION-PLAN.md` after the ritual on collection 435 (840 closed; local book flat). A2 remains blocked on a host flat-position check; the host cannot be reached from this checkout. Completed the next runnable Track-B item, B3: startup adopts one valid magic-filtered broker position, position ticket↔trade number persists across restart, every order path reconciles to prevent duplicate exposure, and closed trades are booked from broker deal history (profit + commission + swap + fee), idempotently. Unknown/multiple/ambiguous broker states remain fail-closed; no estimated outcome is booked. Broker time-stop ledger booking now uses actual deals.
+
+`live_readiness.py`: 12→14 PASS, 5→3 TODO, 3 MANUAL; gate remains CLOSED. Verification: 25 fake-MT5 tests; 22 readiness tests; smoke A–AC PASSED; 64 `goldbot` tests; `check_data` 0 fail / 9 documented warnings; structural-stop guard PASS. Updated `docs/REVIEW-2026-11-06-b3-position-deal-reconciliation.md`, `docs/EXECUTION-PLAN.md`, `docs/HANDOFF.md` and `docs/HANDOFF-HISTORY.md`.
+
+Unchanged: `SL_CLEAR_ATR=0.5`, registered `$0.40` cost assumption, all paper trades and ledger rows, `TRADING_MODE="FORWARD_TEST"`. No broker connection, host action, deploy, arming, or real order. Next: B4; A2 still awaits host confirmation, and A6 follows B4 under the plan precedence.
+
+**End-of-session precedence alert:** final `xm_quote_report.py --quiet` says `mt5quotes-gold` **STALE** (newest quote row about 0.6 h old while market-open). Per execution-plan §6, verify/recover this host-side feed before starting further queue work. Host is unavailable from this checkout; the A2 flat-position check is also still pending. B4 remains the next repo-code task once feed health is confirmed.

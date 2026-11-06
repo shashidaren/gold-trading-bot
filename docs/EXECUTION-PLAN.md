@@ -1,14 +1,15 @@
 # Gold bot execution plan — “follow execution plan”
 
-**Status:** living session queue — re-based **2026-10-26 ~14:15 UTC** on collection 349 (data through `2026-10-26 11:59:07 UTC`);
-§2/§2b refreshed **2026-10-27 ~12:00 UTC** on collection 359, §2c **2026-10-28 ~19:00 UTC** on collection 370,
-§2d **2026-10-30 ~03:00 UTC** on collection 381 (incl. the paper-ledger runway answer: **no top-up**).
-**G1 is SIGNED (2026-10-27, branch A):** `docs/PREREG-2026-10-26-structstop1.5.md` is the registered bar for one
-window, step **A1 is DONE**, and **A2 — the deploy itself** is still the next eligible Track-A step; it waits for a
-moment with no open position on the host. **B2 is DONE (2026-10-28)** in the parallel Track B
-(`docs/REVIEW-2026-10-28-b2-broker-be-time-stop.md`): the broker now holds the BE ratchet and the 240-min time stop,
-and `live_readiness` is **11 PASS / 6 TODO / 3 MANUAL**, gate still CLOSED. Decisions and evidence:
-`docs/REVIEW-2026-10-27-g1-decision.md`, `docs/DECISION-2026-10-28-b2-broker-be-and-time-stop.md`.
+**Status:** living session queue — re-based **2026-11-06** on collection 435 (data through `2026-11-06 08:59:02 UTC`);
+§2/§2b refreshed 2026-10-27, §2c 2026-10-28, §2d 2026-10-30 (paper-ledger decision: **no top-up / no rebaseline**),
+and §2e refreshed **2026-11-06**. **G1 is SIGNED (2026-10-27, branch A):** A1 is DONE; **A2 remains blocked on a
+production-host flat-position check at deploy time**. This checkout's current ledger is flat, but it is not evidence
+about the inaccessible host. **B2 is DONE (2026-10-28) and B3 is DONE (2026-11-06)** in Track B; `live_readiness`
+is **14 PASS / 3 TODO / 3 MANUAL**, gate still CLOSED. The end-of-session quote digest reports the logger **STALE
+(newest row ≈0.6 h old)**; under §6 precedence, **first verify/recover `mt5quotes-gold` on the host**. This host
+check cannot be performed from the checkout. Once feed health is confirmed, **B4** is next repo-code step; A6's
+sample gate is met and follows the preceding Track-B queue step. Evidence: `docs/REVIEW-2026-10-27-g1-decision.md`, `docs/REVIEW-2026-10-28-b2-broker-be-time-stop.md`,
+`docs/REVIEW-2026-11-06-b3-position-deal-reconciliation.md`.
 **Purpose:** make progress consistent across sessions while the bot stays in paper/forward-test mode, until there is — or is not — something genuinely workable for live trade.
 **Canonical prompt:** **“Follow execution plan.”** (The older “Execute the plan.” remains an exact alias; README/HANDOFF point here.)
 
@@ -160,6 +161,38 @@ Read with §2/§2b/§2c; nothing below re-opens a closed judgement.
 - **LIVE gate CLOSED: 11 PASS / 6 TODO / 3 MANUAL** (unchanged since B2). Next Track-B step **B3** (reconciliation).
 - **Verdict unchanged: no demonstrated edge after costs.** Nothing in this refresh is permission to trade.
 
+### 2e. Refresh 2026-11-06 (collection 435, log through `2026-11-06 08:59:02 UTC`)
+
+Read with §2/§2b/§2c/§2d; this is a current-state refresh, not a re-judgement of any closed experiment.
+
+- **840 closed** (175W/370L/292BE/3TIME, decisive **32.1% [28.3–36.1]**), engine ledger **$73.70**, true equity
+  **$56.75**, net **−$779.25** at the registered $0.40 round trip. No open trade (`next_trade_num: 841`).
+  `check_data`: 0 fail / 9 documented warnings; `handoff_check` snapshot refreshed; `check_structural_stop` PASS
+  (0 inside level, 82.5% level-bound, +0.50 ATR median clearance, 3.27 ATR median risk).
+- **Structural-stop era n=343** (90W/159L/92BE/2TIME), decisive **36.1% [30.4–42.3]**, gross **−0.060R/trade**
+  on the pressure-report reward-risk scale, SL/day **6.12**, SL share **46.36%**, scratch **26.82%**, average SL
+  **$6.01**, era DD **$200.06**. These are grown-sample observations only; the 10-19 judgement is closed and the
+  lapsed n=150 arm is not reopened. **No demonstrated edge after costs.**
+- **Gap rides:** 5 post-cutover scheduled-closure rides vs the registered threshold 2; 1 reopened through the stop,
+  0 exits worse than the stop, 0 weekend rides. Record the count and damage separately; this refresh does not reopen
+  the old judgement or alter the entries-only gap guard.
+- **Quotes:** 21 complete UTC days / 2 weekends; target met. Spread-only median **$0.55**, p90 **$0.57**;
+  measured round trip on 262 matched trades mean/median **$0.55**, p90 **$0.57**. This is not the all-in cost
+  model (slippage/commission/swap still need evidence), so `$0.40` remains registered until the dated A6 analysis.
+  The final digest reports the logger **STALE** (newest row ≈0.6 h old, market open); verify `mt5quotes-gold` on
+  the host before using the sample further. Broker offsets +2h/+3h remain EU-rule consistent; captured spec is REAL, IOC-only.
+- **Paper runway:** true equity **$56.75**, net era burn **−$0.80/closed trade** at the registered $0.40 RT and
+  13.2 trades/active day: ≈**71 trades / 5.4 trading days** to zero; bootstrap 90% **60–834 trades** (10% of draws
+  do not show burn). Owner's never-rebaseline decision is unchanged; this is a counter, not capital.
+- **B3 DONE:** startup adopts one magic-filtered position only when entry/SL/TP are valid; ticket↔trade number is
+  persisted; order attempts reconcile first; broker closing deals book actual profit + commission + swap + fee and
+  are idempotent across a crash. Ambiguous/multiple positions and unrecognized close reasons remain blocked for
+  operator review. Fake-MT5 restart tests and call-graph readiness checks pass. **14 PASS / 3 TODO / 3 MANUAL**;
+  B4's disconnect/sizing/cost guards are the remaining code TODOs. No broker connection or order was used here.
+- **A2 remains host-blocked:** the local paper ledger is flat, but no host position check or autosync cutover can be
+  verified from this checkout. Do not infer host flatness from the local ledger.
+- **Verdict:** paper-only; no strategy or cost assumption change, no real order, no live authorization.
+
 ---
 
 ## 3. The queue
@@ -179,11 +212,11 @@ Read with §2/§2b/§2c; nothing below re-opens a closed judgement.
 | ID | Gate / when | Work | Completion test | Blocker |
 |---|---|---|---|---|
 | **A1** | **DONE 2026-10-27** | Owner signed branch (A); the draft was registered verbatim (`docs/PREREG-2026-10-26-structstop1.5.md`, status line + dated sign-off only — §3–§7 untouched), and its three pre-deploy tool tasks were completed: era plumbing in `strategy_lab` (`CLEAR15_ATR/CUTOVER/ERA`), `check_structural_stop.py --era clear15` (clearance-aware classification, `NOT STARTED` while the cutover is None), `win_rate_report.py` era rows, `pressure.py BAR15` + `pressure_report.py --era clear15` (§5b card), `journal.py --era clear15`, and **smoke Scenario AB** (one-dial geometry proof + the refusal guards). `docs/REVIEW-2026-10-27-g1-decision.md` records the decision and every verification. | signed + dated PREREG; `strategy_lab.CLEAR15_CUTOVER` **exists and is `None`** by design (the deploy date is unknowable until the deploy); 154 tool tests OK; smoke A–AB PASSED; live-era tool output byte-identical. | — (closed; **A2 still gated on no open trade**) |
-| **A2** | **next eligible step** — A1 is done; the only condition left is **no open position on the host** | Exactly one line in `engine.py`: `SL_CLEAR_ATR = 0.5 → 1.5`. Nothing else (PREREG §2 freeze). In the same change, set `strategy_lab.CLEAR15_CUTOVER` (and `pressure.CLEAR15_CUTOVER`) to the host's `autosync: merge upstream` commit **time** for the deploy, refresh `docs/HANDOFF.md` + `handoff_check.py --update`. | one-line diff; `smoke_test.py` PASSED (Scenario AB asserts the geometry from both sides of the constant); `python3 tools/check_structural_stop.py --era clear15` prints the OLD/NEW bracket around the recorded cutover and stops refusing with `NOT STARTED`; dated REVIEW with the cutover time. | Host autosync (3 h cycle); never hand-edit `/opt/gold`. Last host check (2026-10-27 06:02 UTC) showed **BUY #723 open** under the 0.5 ATR rule, and the host is not reachable from this sandbox now — re-confirm at deploy time. |
+| **A2** | A1 done; deploy only in a verified **flat-host** window (not eligible from this checkout alone) | Exactly one line in `engine.py`: `SL_CLEAR_ATR = 0.5 → 1.5`. Nothing else (PREREG §2 freeze). Set `strategy_lab.CLEAR15_CUTOVER` (and `pressure.CLEAR15_CUTOVER`) to the host's `autosync: merge upstream` commit **time** for the deploy. | one-line diff; smoke Scenario AB; `check_structural_stop.py --era clear15` prints the OLD/NEW bracket; dated REVIEW with cutover. | **Host unavailable.** Repository has no open trade on 2026-11-06; that does not prove the host is flat. Re-confirm host position at deploy time; never hand-edit `/opt/gold`. |
 | **A3** | A2 + 10–20 new-era trades | Judge **A1–A5** of the registered bar (geometry + calibration). | dated REVIEW: 0 stops inside level, ≥1.5 ATR clearance, recall 99.6–100%, level-bound 70–90%, median risk 3.8–5.0 ATR. A failure = REVERT, no P&L reading. | none |
 | **A4** | n=100 in the new era | **SCREEN** judgement (net R/trade ≥ −0.05R at $0.20/side, decisive WR ≥ 40%, B1–B3, A still passes). | dated REVIEW with Wilson CIs, per-day columns, cost sensitivity. | none |
 | **A5** | n=150 or 2026-12-01 21:00 UTC, whichever comes first | **PASS/FAIL/REVERT** judgement exactly as registered. | dated REVIEW; PASS requires Wilson LB > 40%, net ≥ 0.00R at $0.20/side, ≥ −0.05R at $0.275/side, era DD ≤ $200. | none |
-| **A6** | in parallel, when the quote logger reaches **14 complete days + 2 weekends** (~end of October) | Complete the cost model: measured all-in round trip (spread + slippage + commission + swap), re-cost the ledger and canonical replay with a sensitivity range, write a dated cost doc. Keep $0.40 registered until then. | `xm_quote_report.py` target met; `live_readiness.py` `quote_sample` + `cost_model` turn PASS; dated `ANALYSIS` doc. | logger uptime (host). |
+| **A6** | quote sample gate **MET 2026-11-06** (proceed after the preceding Track-B queue step B4) | Complete the cost model: measured all-in round trip (spread + slippage + commission + swap), re-cost the ledger and canonical replay with a sensitivity range, write a dated cost doc. Keep $0.40 registered until that analysis is complete. | `xm_quote_report.py` target met; `live_readiness.py` `quote_sample` PASS; `cost_model` evidence resolved by dated `ANALYSIS` doc. | Spread-only evidence is complete; slippage/commission/swap all-in evidence still needed. |
 | **A7** | after A5, only if PASS | **Independent** forward window on the **same unchanged strategy** — 2–4 months, multiple regimes, chronological holdout. This, not a replay, is the edge test. | dated pre-registration before the window; positive net expectancy after measured cost with acceptable drawdown and uncertainty. | time; a FAIL/REVERT ends this track. |
 | **A8** | research only, parallel | Private manual observation log (§7) for the owner's pressure/hold hypothesis. No bot behaviour change. ≥100 matched post-stop observations before any exploratory screen; then a new dated pre-registration, never an engine gate. | private log (outside Git) + optional dated ANALYSIS. | the manual rule is still undefined — ask the owner for the definition before coding it. |
 
@@ -194,8 +227,8 @@ Every step must move at least one `live_readiness.py` check from TODO to PASS **
 | ID | Gate / when | Work | Completion test | Blocker |
 |---|---|---|---|---|
 | **B1** | DONE 10-26 | `tools/live_readiness.py` scorecard + arm/filling/closed-bar hardening. | 9 PASS / 8 TODO / 3 MANUAL. | — |
-| **B2** | **DONE 2026-10-28** | Choice recorded first (**implement, no divergence**): `docs/DECISION-2026-10-28-b2-broker-be-and-time-stop.md`. Broker-side **BE ratchet** (`TRADE_ACTION_SLTP` at +0.75R, stop to entry, only after `DONE`) **and** the 240-min **time stop** (market close by ticket, booked through the paper `TIME` path), plus the LIVE fill state both rules need, restart persistence and a reconcile-pending block on new exposure. | **MET:** `live_readiness.py` `broker_be` + `broker_time_stop` PASS (now call-graph checks, not substring checks); **19** fake-MT5 tests in `tools/test_live_manage.py`; **Scenario AC** (12 checks) in `smoke_test.py`; smoke A–AB unchanged; scorecard **11 PASS / 6 TODO / 3 MANUAL**, gate CLOSED. Evidence: `docs/REVIEW-2026-10-28-b2-broker-be-time-stop.md`. | — (closed; **B3 is next**) |
-| **B3** | any session | **Reconciliation:** adopt an existing broker position on startup (magic filter), refuse a duplicate order, read realised P&L from `history_deals_get`, persist ticket↔trade number, and prove restart recovery. | `position_reconcile` + `deal_reconcile` PASS; fake-MT5 restart tests. | none |
+| **B2** | **DONE 2026-10-28** | Choice recorded first (**implement, no divergence**): `docs/DECISION-2026-10-28-b2-broker-be-and-time-stop.md`. Broker-side **BE ratchet** (`TRADE_ACTION_SLTP` at +0.75R, stop to entry, only after `DONE`) **and** the 240-min **time stop** (market close by ticket), plus the LIVE fill state both rules need, restart persistence and a reconcile-pending block on new exposure. B3 later replaced quote-based time-stop booking with actual deal-history accounting. | **MET:** `live_readiness.py` `broker_be` + `broker_time_stop` PASS (now call-graph checks, not substring checks); **19** fake-MT5 tests in `tools/test_live_manage.py`; **Scenario AC** (12 checks) in `smoke_test.py`; smoke A–AB unchanged; scorecard **11 PASS / 6 TODO / 3 MANUAL**, gate CLOSED. Evidence: `docs/REVIEW-2026-10-28-b2-broker-be-time-stop.md`. | — (closed; followed by B3, now done) |
+| **B3** | **DONE 2026-11-06** | Startup adopts one valid strategy position by magic; order path reconciles before exposure; realized P&L comes from broker `history_deals_get`; ticket↔trade number persists; ambiguous states fail closed. | **MET:** `position_reconcile` + `deal_reconcile` PASS through the LIVE call graph; 25 fake-MT5 tests (including query-failure, restart, and idempotency); smoke Scenario AC uses actual deal accounting. | — |
 | **B4** | any session | **Pre-order safety:** `terminal_info().connected`, `volume_max`/step/stops/freeze levels from the live spec, and a **spread-as-%-of-R** veto (measured $0.55 is ~10% of 1R; `MIN_SPREAD_POINTS=60` is too loose). | `disconnect_safety`, `sizing_limits`, `cost_guard` PASS; unit tests with a fake spec. | none |
 | **B5** | B2–B4 done | **DEMO-account** evidence on the host: fill (IOC), SL/TP, BE/time management, rejection handling, disconnect, restart, reconciliation, kill switch, and 48 h of stable running. Use a DEMO account and a separate data dir — the captured spec says REAL. | `docs/DEMO-EVIDENCE.md` (**new file to be created**, redacted) exists; `live_readiness.py` `demo_evidence` PASS. | **HOST/operator action** — cannot be done from the repo checkout. |
 | **B6** | B5 done | Ops runbook: `GOLD_LIVE_ARMED=1`, `LIVE_HALT` kill-switch drill, service/user separation, monitoring/alerts, rollback, and a written “who can arm it” rule. | dated `docs/RUNBOOK-LIVE.md` (**new file to be created**) + a drill log; no credential in Git. | none |
@@ -222,6 +255,7 @@ Every step must move at least one `live_readiness.py` check from TODO to PASS **
 | 2026-10-26 | Full audit, DST gate verified, LIVE-path hardening + readiness scorecard, pre-registration draft, this rewritten queue. `docs/REVIEW-2026-10-26-full-system-audit.md`. |
 | 2026-10-27 (later) | **G1 SIGNED (branch A) → A1 DONE. No deploy, no engine change.** `docs/PREREG-2026-10-26-structstop1.5.md` registered verbatim with the dated owner sign-off; the §2 pre-deploy tool work landed (strategy_lab / check_structural_stop / win_rate_report / pressure + pressure_report / journal all era-aware, `CLEAR15_CUTOVER = None` so every clear15 path is inert); new **smoke Scenario AB** pins the one-dial geometry and the "refuse to judge an unstarted window" guards; readiness timeline moved G1 → done and added the A2 row. Evidence: `docs/REVIEW-2026-10-27-g1-decision.md`. **A2 is the next step and it is gated on there being no open trade.** |
 | 2026-10-28 | **B2 DONE (Track B, parallel to the blocked A2).** Decision recorded before coding (implement, no divergence); the LIVE path now mirrors the +0.75R BE ratchet (`TRADE_ACTION_SLTP`) and the 240-min time stop (market close), records the fill state both rules need, persists ticket/risk across restarts, refuses new exposure while a broker-closed position is unreconciled, and runs management even while disarmed (risk-reducing only). Scorecard **9→11 PASS, 8→6 TODO, gate CLOSED**; the two checks were also made semantic (call-graph + AST, no docstring credit). Tests: 19 new fake-MT5, Scenario AC (12 checks), smoke A–AB unchanged, 20 + 64 existing green. **No order, no arming, no strategy change.** `docs/REVIEW-2026-10-28-b2-broker-be-time-stop.md`. |
+| 2026-11-06 | **B3 DONE (Track B; A2 remains host-blocked).** LIVE startup/order attempts reconcile magic-filtered broker positions, adopt one valid orphan, persist ticket↔trade number, and book actual realized deal P&L (profit/commission/swap/fee) idempotently. Ambiguous position/deal state stays fail-closed. Readiness **12→14 PASS, 5→3 TODO, gate CLOSED**; 25 fake-MT5 tests + Scenario AC's broker-deal time-stop accounting; no broker connection/order, no strategy change. `docs/REVIEW-2026-11-06-b3-position-deal-reconciliation.md`. |
 | 2026-10-27 | **G1 made answerable + ritual refresh (no strategy step run).** Wrote the owner decision pack `docs/BRIEF-2026-10-27-g1-owner-decision.md`; refreshed §2/§2b on collection 359 (era 212→225, gross −0.054R→−0.081R); re-ran the costed replay for 0.5/1.0/1.5/revert at $0.20/$0.275/$0.35; **verified the post-DST daily break against `derive_daily_closure()`** (PREREG §2.3 done, host blocker closed). No parameter change, no registration, no deploy, no order — **A1 is still waiting on the owner's line.** |
 
 ---
