@@ -3674,6 +3674,12 @@ class _LiveStubAA:
         self._live_last_bar_ts = watermark
         self.evals = []
 
+    def reconcile_live_positions(self):
+        return "flat"
+
+    def live_manage_open_position(self):
+        return "no-position"
+
     def evaluate_candle(self, o, h, l, c, tick_count):
         self.evals.append((o, h, l, c, tick_count))
 
@@ -3869,13 +3875,13 @@ check("AB: the simulated deploy time is not left behind", SL.CLEAR15_CUTOVER is 
 
 
 # --- Scenario AC -----------------------------------------------------------
-# B2 (2026-10-28). The paper engine manages its own exits; in LIVE the broker holds the stop
-# and the target, so the +0.75R BE ratchet and the 240-min time stop would silently stop
-# existing. This scenario drives the REAL methods against a fake broker: fill -> state ->
-# broker-side ratchet -> broker-side time close -> one TIME ledger row. It also pins that the
-# paper mode never enters the manager (docs/DECISION-2026-10-28-b2-broker-be-and-time-stop.md).
-print("\nScenario AC: LIVE broker-side management (B2) — BE ratchet and 240-min time stop "
-      "mirrored at the broker; paper untouched")
+# B2/B3 (2026-10-28 / 2026-11-06). The paper engine manages its own exits; in LIVE the broker
+# holds the stop and target, so the +0.75R ratchet and 240-min time stop must be mirrored. This
+# scenario drives the REAL methods against a fake broker: fill -> persisted state -> broker-side
+# ratchet -> time close -> actual-deal TIME row. It also pins paper-mode inertness and blocks an
+# unreconciled exposure (docs/REVIEW-2026-11-06-b3-position-deal-reconciliation.md).
+print("\nScenario AC: LIVE broker-side management + B3 deal reconciliation — BE ratchet, "
+      "240-min time stop, actual deal booking; paper untouched")
 
 tmp_ac = tempfile.mkdtemp(prefix="gold_smoke_ac_")
 _saved_ac = (engine.LOG_FILE_PATH, engine.STATUS_FILE_PATH, engine.TRADES_LOG_PATH,
@@ -3904,19 +3910,31 @@ class _FakeBrokerAC:
     POSITION_TYPE_SELL = 1
     ORDER_TYPE_BUY = 0
     ORDER_TYPE_SELL = 1
+    DEAL_ENTRY_IN = 0
+    DEAL_ENTRY_OUT = 1
+    DEAL_ENTRY_INOUT = 2
+    DEAL_ENTRY_OUT_BY = 3
+    DEAL_REASON_EXPERT = 3
+    DEAL_REASON_SL = 4
+    DEAL_REASON_TP = 5
 
     def __init__(self, ticket=9001, bid=4000.0, ask=4000.2):
         self.ticket, self.bid, self.ask = ticket, bid, ask
         self.filling_mode, self.point = 2, 0.01
-        self.sent, self.script, self.open = [], [], True
-        self.sl, self.tp = 0.0, 0.0
+        self.sent, self.script, self.open = [], [], False
+        self.sl, self.tp, self.entry, self.deals = 0.0, 0.0, 0.0, []
 
     def positions_get(self, ticket=None, symbol=None, magic=None):
         if not self.open:
             return []
         pos = types.SimpleNamespace(ticket=self.ticket, type=0, volume=0.01,
-                                    sl=self.sl, tp=self.tp)
+                                    sl=self.sl, tp=self.tp, magic=engine.MAGIC_NUMBER,
+                                    symbol=engine.SYMBOL, price_open=self.entry,
+                                    time=int(datetime.now(timezone.utc).timestamp()))
         return [pos]
+
+    def history_deals_get(self, start, end):
+        return list(self.deals)
 
     def order_send(self, request):
         self.sent.append(dict(request))
@@ -3925,6 +3943,20 @@ class _FakeBrokerAC:
         if request["action"] == self.TRADE_ACTION_SLTP:
             self.sl = request["sl"]
             self.tp = request["tp"]
+        elif request["action"] == self.TRADE_ACTION_DEAL:
+            if request.get("position"):
+                self.open = False
+                price = float(request.get("price") or self.bid)
+                self.deals.append(types.SimpleNamespace(
+                    position_id=self.ticket, entry=self.DEAL_ENTRY_OUT,
+                    reason=self.DEAL_REASON_EXPERT, comment="Gold Engine LIVE TIME",
+                    profit=(price - self.entry), commission=-0.01, swap=0.0, fee=0.0,
+                    price=price, volume=0.01,
+                    time=int(datetime.now(timezone.utc).timestamp())))
+            else:
+                self.open = True
+                self.entry = float(request["price"])
+                self.sl, self.tp = float(request["sl"]), float(request["tp"])
         return _ResAC(self.TRADE_RETCODE_DONE, "done",
                       order=request.get("position") or self.ticket,
                       price=float(request.get("price") or self.ask))

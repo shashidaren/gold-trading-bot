@@ -938,11 +938,10 @@ class GoldEngine:
             print(f"Could not read status.json for open-trade restore: {e}")
             return
 
-        # LIVE reconcile gap (B2, 2026-10-28): a position the broker closed while
-        # the engine was not looking must keep NEW LIVE entries blocked until an
-        # operator resolves the missing ledger row (B3 supplies the deal P&L).
-        # Restored before the trade_active early-return because the flag matters
-        # even when no trade is open.
+        # LIVE reconciliation state (B2/B3): an unresolved broker close or
+        # ambiguous history keeps NEW exposure blocked across restart. Restore
+        # before the trade_active early-return because the flag matters even
+        # when no position is locally active.
         self.live_reconcile_pending = bool(data.get("live_reconcile_pending", False))
         if self.live_reconcile_pending:
             print("status.json marks an UNRECONCILED LIVE position - new LIVE entries stay blocked")
@@ -1329,7 +1328,7 @@ class GoldEngine:
                 "ATR": f"{atr_val:.2f}" if atr_val else "Calculating",
             })
 
-    def log_trade(self, exit_price, exit_reason, profit):
+    def log_trade(self, exit_price, exit_reason, profit, exit_time=None):
         file_exists = os.path.isfile(TRADES_LOG_PATH)
         if file_exists:
             # Never append new-schema rows under an old-schema header
@@ -1351,7 +1350,7 @@ class GoldEngine:
                 "Trade_Num": self.current_trade_num,
                 "Trade_Type": self.trade_type,
                 "Entry_Time": self.entry_time,
-                "Exit_Time": utc_now_str(),
+                "Exit_Time": exit_time or utc_now_str(),
                 "Entry_Price": f"{self.entry_price:.2f}",
                 "Stop_Loss": f"{self.stop_loss:.2f}",
                 "Take_Profit": f"{self.take_profit:.2f}",
@@ -1813,28 +1812,217 @@ class GoldEngine:
                 kind="risk",
             )
 
-    def _live_reconcile_required(self):
-        """The broker no longer holds our ticket: say so, book NOTHING.
-
-        SL/TP can fire while the engine is between passes. Inventing an exit
-        price here would fabricate a ledger row; guessing a P&L would corrupt the
-        book. Booking the real outcome needs deal history, which is B3. Until
-        then: stop managing, raise one loud alert, and block new LIVE entries -
-        trading on past an unreconciled position hides the gap.
-        """
+    def _live_reconcile_required(self, detail="broker position/deal state is ambiguous"):
+        """Fail closed and alert once while broker state cannot be reconciled."""
         self.live_reconcile_pending = True
-        if self._live_reconcile_alerted == self.live_ticket:
+        ticket = self.live_ticket
+        alert_key = ticket if ticket is not None else "unknown"
+        if self._live_reconcile_alerted == alert_key:
             return
-        self._live_reconcile_alerted = self.live_ticket
-        print(f"LIVE RECONCILE REQUIRED: ticket {self.live_ticket} is gone from the broker; "
-              f"realised P&L is NOT booked (B3 deal reconciliation)")
+        self._live_reconcile_alerted = alert_key
+        print(f"LIVE RECONCILE REQUIRED: ticket {ticket}: {detail}")
         self.send_telegram(
             f"⚠️ LIVE RECONCILE REQUIRED (#{self.current_trade_num})\n"
-            f"Ticket `{self.live_ticket}` is no longer open at the broker.\n"
-            f"The exit was NOT booked - realised P&L needs deal history (B3).\n"
-            f"New LIVE entries are BLOCKED until this is reconciled.",
-            kind="risk",
-        )
+            f"Ticket `{ticket}`: {detail}.\n"
+            "No estimated outcome was booked. New LIVE entries are BLOCKED until "
+            "broker state and realized deals reconcile.", kind="risk")
+        self.save_status()
+
+    def _live_trade_num_logged(self, trade_num):
+        """Idempotency guard for a crash after CSV append but before status save."""
+        if trade_num is None or not os.path.isfile(TRADES_LOG_PATH):
+            return False
+        try:
+            with open(TRADES_LOG_PATH, newline="") as fh:
+                return any(str(row.get("Trade_Num")) == str(trade_num)
+                           for row in csv.DictReader(fh))
+        except (OSError, csv.Error):
+            return False
+
+    def _live_book_deals(self, deals):
+        """Book one closed LIVE position from broker history, never a quote estimate."""
+        mt5_mod = live_mt5_module()
+        ticket = self.live_ticket
+        trade_num = self.current_trade_num
+        if not deals or ticket is None or trade_num is None:
+            self._live_reconcile_required("closed position has no deal history or ticket mapping")
+            return False
+        try:
+            net = sum(float(getattr(d, "profit", 0.0) or 0.0)
+                      + float(getattr(d, "commission", 0.0) or 0.0)
+                      + float(getattr(d, "swap", 0.0) or 0.0)
+                      + float(getattr(d, "fee", 0.0) or 0.0) for d in deals)
+            if not math.isfinite(net):
+                raise ValueError("non-finite realized P&L")
+            exit_values = [d for d in deals if int(getattr(d, "entry", -1)) in
+                           (getattr(mt5_mod, "DEAL_ENTRY_OUT", 1),
+                            getattr(mt5_mod, "DEAL_ENTRY_OUT_BY", 3),
+                            getattr(mt5_mod, "DEAL_ENTRY_INOUT", 2))]
+            if not exit_values:
+                raise ValueError("history has no closing deal")
+            volume = sum(float(getattr(d, "volume", 0.0) or 0.0) for d in exit_values)
+            exit_price = (sum(float(d.price) * float(d.volume) for d in exit_values) / volume
+                          if volume > 0 else float(exit_values[-1].price))
+            exit_time = max(int(getattr(d, "time", 0) or 0) for d in exit_values)
+            if not math.isfinite(exit_price) or exit_price <= 0:
+                raise ValueError("invalid closing price")
+            reason_ids = {int(getattr(d, "reason", -1)) for d in exit_values}
+            comments = " ".join(str(getattr(d, "comment", "") or "") for d in exit_values).lower()
+            sl_id = getattr(mt5_mod, "DEAL_REASON_SL", 4)
+            tp_id = getattr(mt5_mod, "DEAL_REASON_TP", 5)
+            exp_id = getattr(mt5_mod, "DEAL_REASON_EXPERT", 3)
+            if reason_ids == {tp_id}:
+                reason = "TP"
+            elif reason_ids == {sl_id}:
+                reason = "BE" if (self.be_armed or abs(self.stop_loss-self.entry_price) <= 0.02
+                                   or abs(exit_price-self.entry_price) <= 0.02) else "SL"
+            elif "gold engine live time" in comments:
+                reason = "TIME"
+            elif reason_ids == {exp_id} and "time" in comments:
+                reason = "TIME"
+            else:
+                raise ValueError("closing deal reason is not a registered TP/SL/BE/TIME outcome")
+        except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+            self._live_reconcile_required(f"deal history is incomplete/ambiguous ({exc})")
+            return False
+
+        already_logged = self._live_trade_num_logged(trade_num)
+        if not already_logged:
+            self.balance += net
+            if reason == "TP":
+                self.wins += 1
+            elif reason == "SL":
+                self.losses += 1
+            elif reason == "BE":
+                self.be_exits += 1
+            else:
+                self.time_exits += 1
+            self.log_trade(exit_price, reason, net,
+                           exit_time=(datetime.fromtimestamp(exit_time, timezone.utc)
+                                      .strftime("%Y-%m-%d %H:%M:%S") if exit_time else None))
+        print(f"LIVE deal reconciled #{trade_num} ticket {ticket}: {reason} ${net:+.2f}"
+              + (" (ledger row already existed)" if already_logged else ""))
+        self.trade_active = False
+        self.be_armed = False
+        self.live_ticket = None
+        self.live_risk = None
+        self.live_reconcile_pending = False
+        self._live_reconcile_alerted = None
+        self.save_status()
+        return True
+
+    def reconcile_live_positions(self, mt5_mod=None):
+        """Adopt/reconcile this strategy's positions and realized deals.
+
+        Called at LIVE startup and before every possible new order. Ambiguous,
+        multiple, missing-SL/TP, or unavailable broker state blocks exposure.
+        The mapping (position ticket, trade number) is persisted in status.json.
+        """
+        if TRADING_MODE != "LIVE":
+            return "paper"
+        mt5_mod = mt5_mod or live_mt5_module()
+        if mt5_mod is None:
+            self._live_reconcile_required("MetaTrader5 module unavailable")
+            return "unknown"
+        try:
+            positions = mt5_mod.positions_get(symbol=SYMBOL)
+        except Exception as exc:
+            positions = None
+            detail = f"positions_get failed ({type(exc).__name__}: {exc})"
+        else:
+            detail = "positions_get returned no authoritative result"
+        if positions is None:
+            self._live_reconcile_required(detail)
+            return "unknown"
+        ours = [p for p in positions
+                if int(getattr(p, "magic", -1)) == int(MAGIC_NUMBER)
+                and str(getattr(p, "symbol", SYMBOL)) == SYMBOL]
+        if len(ours) > 1:
+            self._live_reconcile_required("multiple strategy positions found; manual review required")
+            return "ambiguous"
+        if self.trade_active:
+            if self.live_ticket is not None:
+                match = next((p for p in ours if int(getattr(p, "ticket", -1)) ==
+                              int(self.live_ticket)), None)
+                if match is not None:
+                    if self.live_reconcile_pending:
+                        self.live_reconcile_pending = False
+                        self.save_status()
+                    return "open"
+                if ours:
+                    self._live_reconcile_required("stored ticket does not match the open strategy position")
+                    return "ambiguous"
+                deals = self._live_history_for_ticket(mt5_mod, self.live_ticket)
+                if deals is None:
+                    self._live_reconcile_required("history_deals_get failed for the closed position")
+                    return "unknown"
+                if self._live_book_deals(deals):
+                    return "closed"
+                return "pending"
+            self._live_reconcile_required(
+                "local open-trade state has no broker ticket; automatic remapping is unsafe")
+            return "ambiguous"
+        if ours:
+            return self._adopt_live_position(ours[0])
+        if self.live_reconcile_pending:
+            return "pending"
+        return "flat"
+
+    def _adopt_live_position(self, pos):
+        """Recover an orphaned single broker position with verifiable geometry."""
+        try:
+            entry = float(pos.price_open)
+            sl = float(pos.sl)
+            tp = float(pos.tp)
+            ticket = int(pos.ticket)
+            kind = int(pos.type)
+            mt5_mod = live_mt5_module()
+            buy_id = int(getattr(mt5_mod, "POSITION_TYPE_BUY", 0))
+            sell_id = int(getattr(mt5_mod, "POSITION_TYPE_SELL", 1))
+            if kind not in (buy_id, sell_id):
+                raise ValueError("unknown broker position side")
+            buy = kind == buy_id
+            if (not all(math.isfinite(v) for v in (entry, sl, tp))
+                    or entry <= 0 or sl <= 0 or tp <= 0 or ticket <= 0
+                    or (buy and not sl < entry < tp) or (not buy and not tp < entry < sl)):
+                raise ValueError("position lacks valid entry/SL/TP geometry")
+            opened = int(getattr(pos, "time", 0) or 0)
+        except (AttributeError, TypeError, ValueError) as exc:
+            self.live_ticket = int(getattr(pos, "ticket", 0) or 0) or None
+            self._live_reconcile_required(f"orphan position cannot be safely adopted ({exc})")
+            return "ambiguous"
+        self.trade_active = True
+        self.trade_type = "BUY" if buy else "SELL"
+        self.entry_price, self.stop_loss, self.take_profit = entry, sl, tp
+        self.current_trade_num = self.next_trade_num
+        self.next_trade_num += 1
+        self.live_ticket = ticket
+        self.live_risk = abs(entry - sl)
+        self.trade_lots = float(getattr(pos, "volume", LOT_SIZE) or LOT_SIZE)
+        self.pnl_scale = self.trade_lots * CONTRACT_SIZE
+        self.be_armed = abs(sl - entry) <= 0.02
+        self.entry_time = (datetime.fromtimestamp(opened, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                           if opened else utc_now_str())
+        self.entry_rsi = self.entry_atr = self.entry_wick_ratio = None
+        self.entry_ema_fast = self.entry_ema_slow = None
+        self.live_reconcile_pending = False
+        self._live_reconcile_alerted = None
+        self.save_status()
+        print(f"LIVE adopted broker position {ticket} as trade #{self.current_trade_num}")
+        return "adopted"
+
+    def _live_history_for_ticket(self, mt5_mod, ticket):
+        """Return all deals belonging to the persisted position identifier, or None on error."""
+        try:
+            start = datetime.strptime(self.entry_time, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            end = datetime.now(timezone.utc) + timedelta(minutes=1)
+            deals = mt5_mod.history_deals_get(start, end)
+            if deals is None:
+                return None
+            matching = [d for d in deals if int(getattr(d, "position_id", -1)) == int(ticket)]
+            return matching
+        except Exception:
+            return None
 
     def live_close_price(self, mt5_mod):
         """The price this position would close at right now (bid long / ask short)."""
@@ -1931,16 +2119,16 @@ class GoldEngine:
                 self._live_mgmt_failed("TIME", result)
                 return "time-failed"
             fill = float(getattr(result, "price", 0.0) or price)
-            if not self._maybe_time_stop(fill, now=now):
-                # Defensive: the same held value was just checked, so this means
-                # the position state changed under us. Do not book a phantom.
-                self._live_mgmt_failed("TIME", result)
-                return "time-failed"
+            # Do not infer realized P&L from the requested close price/result.
+            # The broker may report a different fill and charge commission/swap;
+            # reconcile the actual position deals before clearing this mapping.
+            self.live_reconcile_pending = True
+            deals = self._live_history_for_ticket(mt5_mod, self.live_ticket)
+            if deals is None or not self._live_book_deals(deals):
+                self._live_reconcile_required("time-stop close sent; waiting for broker closing deals")
+                return "time-reconcile-pending"
             self._live_mgmt_fail_count = 0
-            self.live_ticket = None
-            self.live_risk = None
-            self.save_status()
-            print(f"LIVE TIME STOP filled #{self.current_trade_num} @ {fill:.2f}")
+            print(f"LIVE TIME STOP reconciled #{self.current_trade_num} @ {fill:.2f}")
             return "time-closed"
 
         return "held"
@@ -1954,9 +2142,17 @@ class GoldEngine:
                 f"LIVE ORDER BLOCKED\nLive execution is not armed ({LIVE_ARM_ENV} != 1 "
                 "or kill-switch file present)", kind="risk")
             return
-        # B2 (2026-10-28): if the broker closed a position behind our back, its
-        # ledger row is missing (deal history is B3). Opening a new trade on top
-        # of that would bury the gap, so refuse new exposure until reconciled.
+        # B3: reconcile before every possible order. A failed query, an orphan
+        # position, an existing position, or an unresolved close all fail closed.
+        reconcile = self.reconcile_live_positions()
+        if reconcile != "flat" or self.trade_active:
+            print(f"\nLIVE ENTRY BLOCKED -> broker reconciliation state: {reconcile}\n")
+            self.send_telegram(
+                f"LIVE ENTRY BLOCKED\nBroker position reconciliation is `{reconcile}`; "
+                "no duplicate exposure will be opened.", kind="risk")
+            return
+        # Defensive persisted gate, including legacy pending states without a
+        # trustworthy ticket mapping.
         if self.live_reconcile_pending:
             print("\nLIVE ENTRY BLOCKED -> unreconciled broker position (B3)\n")
             self.send_telegram(
@@ -2332,11 +2528,14 @@ class GoldEngine:
             the BE ratchet (TRADE_ACTION_SLTP to entry at +BE_TRIGGER_R) and the
             MAX_HOLD_MINUTES time stop (market close), so paper and LIVE run the
             same strategy. Both only reduce risk and run while disarmed too.
-          * Known divergence still open: position/deal reconciliation (B3),
-            disconnect/sizing/cost guards (B4) and demo-account evidence (B5).
-            See tools/live_readiness.py — this loop is NOT live-ready on its own.
+          * B3 now reconciles strategy positions and realized deals, fail-closed.
+            Known gaps remain: disconnect/sizing/cost guards (B4) and demo-account
+            evidence (B5). See tools/live_readiness.py — this loop is NOT live-ready.
         """
         print("Gold Engine LIVE starting... (closed M1 bars only)")
+        # Reconcile persisted tickets and adopt a single orphaned strategy
+        # position before any bar can be evaluated or another order considered.
+        self.reconcile_live_positions()
         if not live_armed():
             print(f"LIVE NOT ARMED: {LIVE_ARM_ENV} != 1 or {LIVE_HALT_FILE} exists. "
                   "Bars will be read but NO real order can be placed.")
@@ -2347,11 +2546,15 @@ class GoldEngine:
         candles_fetched = 0
         while True:
             try:
+                # Reconcile broker state first; when a stop/target fired while
+                # between passes, this books only the actual deals and clears
+                # the persisted ticket before any management/new entry.
+                try:
+                    self.reconcile_live_positions()
+                except Exception as e:
+                    self._live_reconcile_required(f"reconciliation error ({type(e).__name__}: {e})")
                 # Broker-side management (B2, 2026-10-28) runs every pass, not
-                # once per bar, so a live position is managed as closely as the
-                # paper tick path manages its own. Harmless when flat; wrapped
-                # so a management bug can never kill the loop (the broker's own
-                # SL/TP stays armed regardless).
+                # once per bar. It remains risk-reducing and harmless when flat.
                 try:
                     self.live_manage_open_position()
                 except Exception as e:
