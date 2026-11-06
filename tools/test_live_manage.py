@@ -59,12 +59,17 @@ class _Result:
 
 
 class _Pos:
-    def __init__(self, ticket=555, type=0, volume=0.01, sl=0.0, tp=0.0):
+    def __init__(self, ticket=555, type=0, volume=0.01, sl=0.0, tp=0.0,
+                 magic=None, price_open=4000.0, time=None, symbol="GOLD"):
         self.ticket = ticket
         self.type = type
         self.volume = volume
         self.sl = sl
         self.tp = tp
+        self.magic = engine.MAGIC_NUMBER if magic is None else magic
+        self.price_open = price_open
+        self.time = time or int(datetime.now(timezone.utc).timestamp())
+        self.symbol = symbol
 
 
 class _Tick:
@@ -84,6 +89,22 @@ class _Account:
         self.balance = balance
 
 
+class _Deal:
+    def __init__(self, position_id, price, profit=0.0, commission=0.0, swap=0.0,
+                 fee=0.0, volume=0.01, entry=1, reason=3, comment=""):
+        self.position_id = position_id
+        self.price = price
+        self.profit = profit
+        self.commission = commission
+        self.swap = swap
+        self.fee = fee
+        self.volume = volume
+        self.entry = entry
+        self.reason = reason
+        self.comment = comment
+        self.time = int(datetime.now(timezone.utc).timestamp())
+
+
 class _FakeMT5:
     """Just enough MetaTrader5 to exercise the LIVE management path."""
 
@@ -100,19 +121,30 @@ class _FakeMT5:
     POSITION_TYPE_SELL = 1
     ORDER_TYPE_BUY = 0
     ORDER_TYPE_SELL = 1
+    DEAL_ENTRY_IN = 0
+    DEAL_ENTRY_OUT = 1
+    DEAL_ENTRY_INOUT = 2
+    DEAL_ENTRY_OUT_BY = 3
+    DEAL_REASON_EXPERT = 3
+    DEAL_REASON_SL = 4
+    DEAL_REASON_TP = 5
 
     def __init__(self, positions=None, script=None, bid=4000.0, ask=4000.2,
-                 filling_mode=2):
+                 filling_mode=2, deals=None):
         self.positions = list(positions or [])
         self.script = list(script or [])
         self.sent = []
         self.bid = bid
         self.ask = ask
         self.filling_mode = filling_mode
+        self.deals = list(deals or [])
 
     # --- broker surface used by the engine ---
     def positions_get(self, ticket=None, symbol=None, magic=None):
         return [p for p in self.positions if ticket is None or p.ticket == ticket]
+
+    def history_deals_get(self, start, end):
+        return list(self.deals)
 
     def order_send(self, request):
         self.sent.append(dict(request))
@@ -345,7 +377,9 @@ class LiveManageCase(unittest.TestCase):
     # --- time stop ---------------------------------------------------------
     def test_time_stop_closes_then_books_one_time_row(self):
         pos = self.open_trade(entry=4000.0, risk=5.0, age_min=engine.MAX_HOLD_MINUTES + 5)
-        fake = self.broker(positions=[pos], bid=4001.0, ask=4001.2)
+        fake = self.broker(positions=[pos], bid=4001.0, ask=4001.2,
+                           deals=[_Deal(555, 4001.0, profit=1.0, commission=-0.05,
+                                        comment="Gold Engine LIVE TIME")])
         self.assertEqual(self.eng.live_manage_open_position(), "time-closed")
         self.assertEqual(len(fake.sent), 1)
         req = fake.sent[0]
@@ -426,6 +460,7 @@ class LiveManageCase(unittest.TestCase):
         self.eng.save_status()
         self.assertEqual(self.status()["live_ticket"], 555)
         self.assertEqual(self.status()["live_risk"], 5.0)
+        self.assertEqual(self.status()["current_trade_num"], 42)
 
         engine.TRADING_MODE = "FORWARD_TEST"             # construct without a terminal
         restarted = engine.GoldEngine()                   # reads the same status.json
@@ -434,6 +469,102 @@ class LiveManageCase(unittest.TestCase):
         self.assertEqual(restarted.live_ticket, 555)
         self.assertEqual(restarted.live_risk, 5.0)
         self.assertEqual(restarted.current_trade_num, 42)
+
+    def test_startup_adopts_one_magic_filtered_position_and_persists_mapping(self):
+        pos = _Pos(ticket=812, type=0, volume=0.02, price_open=4000.0,
+                   sl=3995.0, tp=4007.5, magic=engine.MAGIC_NUMBER)
+        fake = self.broker(positions=[pos])
+        self.assertEqual(self.eng.reconcile_live_positions(fake), "adopted")
+        self.assertTrue(self.eng.trade_active)
+        self.assertEqual(self.eng.live_ticket, 812)
+        self.assertEqual(self.eng.current_trade_num, 1)
+        self.assertEqual(self.eng.next_trade_num, 2)
+        self.assertEqual(self.status()["live_ticket"], 812)
+        self.assertEqual(self.status()["current_trade_num"], 1)
+
+        engine.TRADING_MODE = "FORWARD_TEST"
+        restarted = engine.GoldEngine()
+        engine.TRADING_MODE = "LIVE"
+        self.assertEqual(restarted.reconcile_live_positions(fake), "open")
+        self.assertEqual(restarted.live_ticket, 812)
+        self.assertEqual(restarted.current_trade_num, 1)
+        self.assertEqual(restarted.next_trade_num, 2)
+
+    def test_multiple_strategy_positions_fail_closed(self):
+        positions = [
+            _Pos(ticket=812, sl=3995.0, tp=4007.5),
+            _Pos(ticket=813, sl=3995.0, tp=4007.5),
+        ]
+        fake = self.broker(positions=positions)
+        self.assertEqual(self.eng.reconcile_live_positions(fake), "ambiguous")
+        self.assertTrue(self.eng.live_reconcile_pending)
+        self.assertFalse(self.eng.trade_active)
+        self.assertTrue(any("multiple strategy positions" in text for _, text in self.telegrams))
+
+    def test_position_query_failure_blocks_new_exposure(self):
+        fake = self.broker()
+        fake.positions_get = lambda **kwargs: None
+        self.assertEqual(self.eng.reconcile_live_positions(fake), "unknown")
+        self.assertTrue(self.eng.live_reconcile_pending)
+        self.assertEqual(self.trades(), [])
+        self.assertTrue(any("no authoritative result" in text for _, text in self.telegrams))
+
+    def test_closed_position_books_actual_net_deals_once(self):
+        self.open_trade(entry=4000.0, risk=5.0)
+        fake = self.broker(positions=[], deals=[
+            _Deal(555, 4000.0, commission=-0.05, entry=_FakeMT5.DEAL_ENTRY_IN),
+            _Deal(555, 3995.0, profit=-5.0, commission=-0.05,
+                  reason=_FakeMT5.DEAL_REASON_SL),
+        ])
+        self.assertEqual(self.eng.reconcile_live_positions(fake), "closed")
+        self.assertFalse(self.eng.trade_active)
+        self.assertFalse(self.eng.live_reconcile_pending)
+        self.assertAlmostEqual(self.eng.balance, 494.9, places=2)
+        rows = self.trades()
+        self.assertEqual(len(rows), 2)
+        self.assertIn(",SL,-5.10,", rows[1])
+        # A repeated reconciliation after status is cleared is a no-op.
+        self.assertEqual(self.eng.reconcile_live_positions(fake), "flat")
+        self.assertEqual(len(self.trades()), 2)
+
+        # Simulate a crash after the CSV append but before status was cleared.
+        stale = self.status()
+        stale.update(trade_active=True, trade_type="BUY", entry_price=4000.0,
+                     stop_loss=3995.0, take_profit=4007.5,
+                     entry_time=(datetime.now(timezone.utc) - timedelta(minutes=10)
+                                 ).strftime("%Y-%m-%d %H:%M:%S"),
+                     current_trade_num=42, next_trade_num=43,
+                     live_ticket=555, live_risk=5.0, be_armed=False)
+        with open(engine.STATUS_FILE_PATH, "w") as fh:
+            json.dump(stale, fh)
+        engine.TRADING_MODE = "FORWARD_TEST"
+        restarted = engine.GoldEngine()
+        engine.TRADING_MODE = "LIVE"
+        self.assertEqual(restarted.reconcile_live_positions(fake), "closed")
+        self.assertAlmostEqual(restarted.balance, 494.9, places=2)
+        self.assertEqual(len(self.trades()), 2)
+
+    def test_unknown_broker_exit_reason_fails_closed_without_fabricating_row(self):
+        self.open_trade(entry=4000.0, risk=5.0)
+        fake = self.broker(positions=[], deals=[
+            _Deal(555, 3998.0, profit=-2.0, reason=0, comment="manual close")
+        ])
+        self.assertEqual(self.eng.reconcile_live_positions(fake), "pending")
+        self.assertTrue(self.eng.trade_active)
+        self.assertTrue(self.eng.live_reconcile_pending)
+        self.assertEqual(self.trades(), [])
+
+    def test_existing_strategy_position_prevents_duplicate_order(self):
+        pos = _Pos(ticket=909, type=0, volume=0.01, price_open=4000.0,
+                   sl=3995.0, tp=4007.5)
+        fake = self.broker(positions=[pos])
+        engine.live_armed = lambda env=None, halt_path=None: True
+        self.eng.atr = 2.0
+        self.eng.execute_live_trade("BUY", 4000.0, 0.5, "2026-11-06 00:00:00")
+        self.assertEqual(fake.sent, [])
+        self.assertTrue(self.eng.trade_active)
+        self.assertEqual(self.eng.live_ticket, 909)
+        self.assertTrue(any("ENTRY BLOCKED" in text for _, text in self.telegrams))
 
     def test_a_confirmed_fill_records_everything_management_needs(self):
         fake = self.broker(positions=[], bid=3999.8, ask=4000.2)
