@@ -87,11 +87,11 @@ class ViewTests(unittest.TestCase):
         self.assertTrue(view["ok"], view.get("reason"))
         self.assertEqual(view["gate"]["label"], "CLOSED")
         self.assertEqual(view["gate"]["counts"]["total"], 20)
-        self.assertEqual(view["gate"]["counts"]["pass"], 11)   # B2: broker_be + broker_time_stop
-        self.assertEqual(view["gate"]["counts"]["todo"], 6)
+        self.assertEqual(view["gate"]["counts"]["pass"], 17)   # B4: all code checks
+        self.assertEqual(view["gate"]["counts"]["todo"], 0)
         self.assertEqual(view["gate"]["counts"]["manual"], 3)
         self.assertEqual(len(view["checks"]), 20)
-        self.assertEqual(len(view["pending_checks"]), 9)
+        self.assertEqual(len(view["pending_checks"]), 3)
         self.assertTrue(view["completed"])
         self.assertTrue(view["blockers"])
         self.assertIn("$0.55", view["progress"]["median_spread_text"])

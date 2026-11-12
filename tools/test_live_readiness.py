@@ -148,13 +148,24 @@ class TestChecker(unittest.TestCase):
         self.assertIn("persisted ticket", self.by_id["position_reconcile"]["evidence"])
         self.assertIn("commission", self.by_id["deal_reconcile"]["evidence"])
 
-    def test_open_gaps_are_visible(self):
+    def test_b4_pre_order_guards_pass(self):
+        """B4 (2026-11-12): the last three code TODO items are implemented."""
         for cid in ("disconnect_safety", "sizing_limits", "cost_guard"):
-            self.assertEqual(self.by_id[cid]["status"], LR.TODO, cid)
+            self.assertEqual(self.by_id[cid]["status"], LR.PASS, cid)
+        self.assertIn("trade_allowed", self.by_id["disconnect_safety"]["evidence"])
+        self.assertIn("volume_max", self.by_id["sizing_limits"]["evidence"])
+        self.assertIn("live_cost_guard", self.by_id["cost_guard"]["evidence"])
 
     def test_operator_items_are_manual(self):
         for cid in ("demo_evidence", "cost_model", "edge_evidence"):
             self.assertEqual(self.by_id[cid]["status"], LR.MANUAL, cid)
+
+    def test_no_code_todo_remains(self):
+        """Only the three operator/evidence items may be open after B4."""
+        todo = sorted(c["id"] for c in self.checks if c["status"] == LR.TODO)
+        self.assertEqual(todo, [], f"unexpected code TODOs: {todo}")
+        self.assertEqual(sum(c["status"] == LR.PASS for c in self.checks), 17)
+        self.assertEqual(sum(c["status"] == LR.MANUAL for c in self.checks), 3)
 
     def test_gate_is_closed_and_says_so(self):
         self.assertFalse(LR.gate_open(self.checks))
@@ -225,6 +236,48 @@ class TestChecker(unittest.TestCase):
             checks = {c["id"]: c for c in LR.code_checks(root)}
             self.assertEqual(checks["position_reconcile"]["status"], LR.TODO)
             self.assertEqual(checks["deal_reconcile"]["status"], LR.TODO)
+
+    def test_b4_guards_must_be_reachable_and_actually_read_the_fields(self):
+        """B4: the checks must go red again if the guards are disconnected.
+
+        A guard that exists but is never called from the order path is not a
+        guard - the same lesson B2/B3 pinned. Also pins that `_refers_to` sees
+        broker fields however the code spells them (attr / getattr / dict key),
+        which is what made the first B4 wiring silently report TODO.
+        """
+        self.assertTrue(LR._refers_to("def f(i): return getattr(i, 'volume_max', 0)", "volume_max"))
+        self.assertTrue(LR._refers_to("def f(i): return {'trade_stops_level': 0}", "trade_stops_level"))
+        self.assertTrue(LR._refers_to("def f(m): return m.terminal_info()", "terminal_info"))
+        self.assertFalse(LR._refers_to('def f():\n    """volume_max is checked here."""\n', "volume_max"))
+        self.assertFalse(LR._refers_to("def f():\n    # terminal_info() is called\n    return 1\n",
+                                       "terminal_info"))
+
+        with tempfile.TemporaryDirectory() as root:
+            with open(os.path.join(ROOT, "engine.py"), encoding="utf-8") as fh:
+                source = fh.read()
+            source = source.replace("live_connection_problem(mt5)", "None")
+            with open(os.path.join(root, "engine.py"), "w", encoding="utf-8") as fh:
+                fh.write(source)
+            checks = {c["id"]: c for c in LR.code_checks(root)}
+            self.assertEqual(checks["disconnect_safety"]["status"], LR.TODO)
+
+        with tempfile.TemporaryDirectory() as root:
+            with open(os.path.join(ROOT, "engine.py"), encoding="utf-8") as fh:
+                source = fh.read()
+            source = source.replace("live_sizing_problem(self.trade_lots, limits)", "None")
+            with open(os.path.join(root, "engine.py"), "w", encoding="utf-8") as fh:
+                fh.write(source)
+            checks = {c["id"]: c for c in LR.code_checks(root)}
+            self.assertEqual(checks["sizing_limits"]["status"], LR.TODO)
+
+        with tempfile.TemporaryDirectory() as root:
+            with open(os.path.join(ROOT, "engine.py"), encoding="utf-8") as fh:
+                source = fh.read()
+            source = source.replace("self.live_cost_check(risk)", "None")
+            with open(os.path.join(root, "engine.py"), "w", encoding="utf-8") as fh:
+                fh.write(source)
+            checks = {c["id"]: c for c in LR.code_checks(root)}
+            self.assertEqual(checks["cost_guard"]["status"], LR.TODO)
 
     def test_docstrings_and_comments_never_satisfy_a_check(self):
         """A comment claiming a feature is not the feature (B2 lesson)."""
