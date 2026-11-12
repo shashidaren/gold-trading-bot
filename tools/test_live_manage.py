@@ -82,11 +82,20 @@ class _Info:
     def __init__(self, filling_mode=2, point=0.01):
         self.filling_mode = filling_mode
         self.point = point
+        self.volume_min, self.volume_max, self.volume_step = 0.01, 50.0, 0.01
+        self.trade_stops_level, self.trade_freeze_level = 0, 0
 
 
 class _Account:
-    def __init__(self, balance=500.0):
+    def __init__(self, balance=500.0, margin_free=None):
         self.balance = balance
+        self.margin_free = margin_free if margin_free is not None else balance
+
+
+class _Terminal:
+    def __init__(self, connected=True, trade_allowed=True):
+        self.connected = connected
+        self.trade_allowed = trade_allowed
 
 
 class _Deal:
@@ -162,6 +171,13 @@ class _FakeMT5:
 
     def account_info(self):
         return _Account(500.0)
+
+    # B4 (2026-11-12): the LIVE order path now checks these before it will send.
+    def terminal_info(self):
+        return _Terminal()
+
+    def order_calc_margin(self, order_type, symbol, volume, price):
+        return volume * 100.0 * price / 1000.0      # the captured 1:1000 spec
 
 
 class LiveManageCase(unittest.TestCase):

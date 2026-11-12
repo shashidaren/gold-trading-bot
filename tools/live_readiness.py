@@ -79,6 +79,24 @@ def _uses_name(source, name):
     return any(isinstance(n, ast.Name) and n.id == name for n in ast.walk(fn_tree))
 
 
+def _refers_to(source, name):
+    """True when the code touches `name` on the broker object, however it is spelled.
+
+    Brokers expose fields three ways in this codebase and all three are real reads:
+      * an attribute call/access  - ``mt5_mod.terminal_info()``, ``info.volume_max``
+      * a getattr with a literal  - ``getattr(info, "trade_stops_level", 0)``
+      * a dict literal            - ``{"volume_max": ...}``
+    Comments and docstrings are ignored, so a claim about a guard never satisfies it.
+    """
+    if _uses_attribute(source, name):
+        return True
+    try:
+        fn_tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    return any(isinstance(n, ast.Constant) and n.value == name for n in ast.walk(fn_tree))
+
+
 def _dict_has_key(source, key):
     """True when the code builds a dict literal with `key` (not a docstring)."""
     try:
@@ -243,22 +261,51 @@ def code_checks(root=ROOT):
         "before idempotent ledger booking" if deal_reconcile else
         "no reachable, idempotent deal-level P&L reconciliation"))
 
+    # B4 (2026-11-12): connection, broker sizing limits and the cost-as-%-of-R
+    # veto. Same rule as B2/B3 — a helper that `run_live`/`execute_live_trade`
+    # never reaches does NOT count, and a docstring is not a feature.
+    order_calls = _calls(fn_src, order)
+    entry_path = set(reachable) | set(order_calls)
+
+    conn_src = fn_src.get("live_connection_problem", "")
+    conn_guard = ("live_connection_problem" in order_calls
+                  and _refers_to(conn_src, "terminal_info")
+                  and _refers_to(conn_src, "connected")
+                  and _refers_to(conn_src, "trade_allowed"))
     out.append(_check(
         "disconnect_safety", "code", "terminal connection checked before orders",
-        PASS if "terminal_info" in src else TODO,
-        "terminal_info() gating present" if "terminal_info" in src else
+        PASS if conn_guard else TODO,
+        ("live_connection_problem() gates execute_live_trade; terminal_info().connected "
+         "and trade_allowed are both required") if conn_guard else
         "no connected/disconnect check; a dead terminal can leave stale orders"))
 
+    lim_src = fn_src.get("live_symbol_limits", "")
+    sizing_guard = (
+        "live_symbol_limits" in order_calls
+        and "live_sizing_problem" in order_calls
+        and "live_stop_distance_problem" in order_calls
+        and _refers_to(lim_src, "volume_max")
+        and _refers_to(lim_src, "volume_step")
+        and _refers_to(lim_src, "trade_stops_level")
+    )
     out.append(_check(
         "sizing_limits", "code", "volume max/step from the live symbol spec",
-        PASS if "volume_max" in src else TODO,
-        "symbol volume limits consulted" if "volume_max" in src else
+        PASS if sizing_guard else TODO,
+        "symbol_info() volume_min/volume_max/volume_step + stops/freeze levels are "
+        "checked before the send (live_symbol_limits -> live_sizing_problem, "
+        "live_stop_distance_problem)" if sizing_guard else
         "VOLUME_MIN/STEP are hard-coded; volume_max and stops/freeze levels are not checked"))
 
+    cost_measured = ("live_cost_measure" in _calls(fn_src, order)
+                     or "live_cost_check" in order_calls)
+    cost_veto = ("live_cost_check" in order_calls
+                 and _uses_name(fn_src.get("live_cost_check", ""), "live_cost_guard"))
     out.append(_check(
         "cost_guard", "code", "cost measured against R before entry",
-        PASS if "cost_guard" in src else TODO,
-        "risk-relative cost veto present" if "cost_guard" in src else
+        PASS if (cost_measured and cost_veto) else TODO,
+        ("execute_live_trade -> live_cost_check(risk) -> live_cost_guard: the measured "
+         "live round-trip spread is vetoed above LIVE_COST_MAX_PCT_OF_R of 1R") if
+        (cost_measured and cost_veto) else
         "MIN_SPREAD_POINTS=60 ($0.60) allows the measured $0.55 median spread, "
         "which is ~10% of median 1R; no spread-as-%-of-risk veto"))
 

@@ -3918,6 +3918,8 @@ class _FakeBrokerAC:
     DEAL_REASON_SL = 4
     DEAL_REASON_TP = 5
 
+    leverage = 1000
+
     def __init__(self, ticket=9001, bid=4000.0, ask=4000.2):
         self.ticket, self.bid, self.ask = ticket, bid, ask
         self.filling_mode, self.point = 2, 0.01
@@ -3967,8 +3969,20 @@ class _FakeBrokerAC:
     def symbol_info_tick(self, symbol):
         return types.SimpleNamespace(bid=self.bid, ask=self.ask)
 
+    def order_calc_margin(self, order_type, symbol, volume, price):
+        return volume * 100.0 * price / self.leverage     # the captured 1:1000 spec
+
     def account_info(self):
-        return types.SimpleNamespace(balance=500.0)
+        # $20,000 balance: at 1% risk and a $6.00 stop the sizer wants 0.33 lot,
+        # which is a real, placeable size on the captured spec (min 0.01, step 0.01).
+        return types.SimpleNamespace(balance=20000.0, margin_free=20000.0)
+
+    # B4 (2026-11-12): the order path now requires these before it will send.
+    def terminal_info(self):
+        return types.SimpleNamespace(connected=True, trade_allowed=True)
+
+    volume_min, volume_max, volume_step = 0.01, 50.0, 0.01
+    trade_stops_level, trade_freeze_level = 0, 0
 
 
 try:
@@ -4071,6 +4085,159 @@ finally:
 check("AC: the LIVE scenario leaves the checkout in paper mode", 
       engine.TRADING_MODE == "FORWARD_TEST" and engine.SL_CLEAR_ATR == 0.5
       and engine.BE_TRIGGER_R == 0.75 and engine.MAX_HOLD_MINUTES == 240)
+
+
+# --- Scenario AD -----------------------------------------------------------
+# B4 (2026-11-12): the three pre-order guards, driven through the REAL order path.
+# Each case makes the guard refuse and asserts that NOTHING was sent to the broker -
+# a guard that prints a warning but still sends the order is not a guard.
+print("\nScenario AD: LIVE pre-order safety — connection, broker sizing limits, "
+      "stops distance and the cost-as-%-of-R veto; paper untouched")
+
+tmp_ad = tempfile.mkdtemp(prefix="gold_smoke_ad_")
+_saved_ad = (engine.LOG_FILE_PATH, engine.STATUS_FILE_PATH, engine.TRADES_LOG_PATH,
+             engine.TRADING_MODE, engine.live_armed)
+engine.LOG_FILE_PATH = os.path.join(tmp_ad, "forward_test_log.csv")
+engine.STATUS_FILE_PATH = os.path.join(tmp_ad, "status.json")
+engine.TRADES_LOG_PATH = os.path.join(tmp_ad, "trades.csv")
+
+
+class _BrokerAD:
+    """A broker whose terminal/spec/tick the test can make fail on demand."""
+    TRADE_ACTION_DEAL = 1
+    TRADE_ACTION_SLTP = 6
+    TRADE_RETCODE_DONE = 10009
+    ORDER_FILLING_IOC = 2
+    ORDER_TIME_GTC = 0
+    POSITION_TYPE_BUY = 0
+    POSITION_TYPE_SELL = 1
+    ORDER_TYPE_BUY = 0
+    ORDER_TYPE_SELL = 1
+
+    leverage = 1000
+
+    def __init__(self):
+        self.sent = []
+        self.connected = True
+        self.trade_allowed = True
+        self.filling_mode, self.point = 2, 0.01
+        self.volume_min, self.volume_max, self.volume_step = 0.01, 50.0, 0.01
+        self.trade_stops_level, self.trade_freeze_level = 0, 0
+        self.bid, self.ask = 4000.0, 4000.55      # the measured $0.55 spread
+
+    def terminal_info(self):
+        return types.SimpleNamespace(connected=self.connected,
+                                     trade_allowed=self.trade_allowed)
+
+    def symbol_info(self, symbol):
+        return types.SimpleNamespace(
+            filling_mode=self.filling_mode, point=self.point,
+            volume_min=self.volume_min, volume_max=self.volume_max,
+            volume_step=self.volume_step, trade_stops_level=self.trade_stops_level,
+            trade_freeze_level=self.trade_freeze_level)
+
+    def symbol_info_tick(self, symbol):
+        return types.SimpleNamespace(bid=self.bid, ask=self.ask)
+
+    def positions_get(self, ticket=None, symbol=None, magic=None):
+        return []
+
+    def history_deals_get(self, start, end):
+        return []
+
+    def order_calc_margin(self, order_type, symbol, volume, price):
+        return volume * 100.0 * price / self.leverage     # the captured 1:1000 spec
+
+    def account_info(self):
+        # $20,000 balance: at 1% risk and a $6.00 stop the sizer wants 0.33 lot,
+        # which is a real, placeable size on the captured spec (min 0.01, step 0.01).
+        return types.SimpleNamespace(balance=20000.0, margin_free=20000.0)
+
+    def order_send(self, request):
+        self.sent.append(dict(request))
+        return _ResAC(self.TRADE_RETCODE_DONE, "done", order=9001,
+                      price=float(request.get("price") or 0.0))
+
+
+try:
+    eng_ad = engine.GoldEngine()                 # paper mode: no terminal init
+    broker_ad = _BrokerAD()
+    engine.mt5 = broker_ad
+    engine.TRADING_MODE = "LIVE"
+    engine.live_armed = lambda env=None, halt_path=None: True
+    eng_ad.send_telegram = lambda text, kind="trade": None
+    eng_ad.entry_guard_reason = lambda now=None: None
+    eng_ad.atr, eng_ad.rsi = 2.0, 50.0
+    eng_ad.ema_fast, eng_ad.ema_slow = 4001.0, 3999.0
+
+    def _try(label, level=3995.0):
+        # level=3995 reproduces the era's median geometry: the 20-bar floor sits
+        # 2.5 ATR (2 x 2.0 = $5.00) below the fill, so 1R = $5.55 + 0.5 ATR
+        # clearance = $6.55 and the measured $0.55 round trip is 16.8% of R -
+        # inside the 20% veto. level=None falls back to the 2-ATR floor (1R=$4.00),
+        # where the same quote is 27.5% and must be refused.
+        before = len(broker_ad.sent)
+        eng_ad.trade_active, eng_ad.live_ticket = False, None
+        eng_ad.live_reconcile_pending = False
+        eng_ad.execute_live_trade("BUY", 4000.0, 0.5, "2026-11-12 10:00:00", level=level)
+        return len(broker_ad.sent) - before
+
+    # (0) The happy path still trades: the guards must not block a sound order.
+    check("AD: a connected terminal with sound geometry still sends exactly one order",
+          _try("ok") == 1, f"sent={len(broker_ad.sent)}")
+    good = broker_ad.sent[-1]
+    check("AD: the sent size is on the broker's step grid and inside its max",
+          abs(good["volume"] / 0.01 - round(good["volume"] / 0.01)) < 1e-6
+          and 0.01 <= good["volume"] <= 50.0, f"volume={good['volume']}")
+
+    # (1) disconnect_safety
+    broker_ad.connected = False
+    check("AD: a disconnected terminal sends NOTHING", _try("disc") == 0)
+    broker_ad.connected, broker_ad.trade_allowed = True, False
+    check("AD: AutoTrading off sends NOTHING", _try("tradeoff") == 0)
+    broker_ad.trade_allowed = True
+
+    # (2) sizing_limits - the broker tightens volume_max below the computed lot.
+    real_size = good["volume"]                  # what the sound order actually sent
+    broker_ad.volume_max = max(0.01, round(real_size - 0.01, 2))
+    check("AD: a size above the broker's volume_max sends NOTHING", _try("vmax") == 0)
+    broker_ad.volume_max = 50.0
+
+    # (3) stops distance - the broker raises trade_stops_level above the TP distance.
+    broker_ad.trade_stops_level = 100000        # 1000.00 > any TP here
+    check("AD: geometry inside a raised stops_level sends NOTHING", _try("stops") == 0)
+    broker_ad.trade_stops_level = 0
+
+    # (4) cost_guard - a spread so wide that the round trip exceeds 20% of 1R.
+    broker_ad.ask = broker_ad.bid + 5.00        # $10.00 round trip vs the $6.00 risk
+    check("AD: a cost above 20% of 1R sends NOTHING", _try("cost") == 0)
+    broker_ad.ask = broker_ad.bid               # zero spread is a data fault, not a bargain
+    check("AD: an unmeasurable (zero) spread sends NOTHING", _try("zero") == 0)
+    broker_ad.ask = broker_ad.bid + 0.55        # back to the measured quote
+    # The veto is about R, not about the spread alone: the SAME $0.55 quote is
+    # refused when the structural stop is tight enough (1R=$4.00 -> 27.5%).
+    check("AD: the same quote is refused when 1R is too small (cost is risk-relative)",
+          _try("tight", level=None) == 0 and _try("wide") == 1)
+
+    # (5) the guards never touch the paper path.
+    engine.TRADING_MODE = "FORWARD_TEST"
+    eng_ad.account_balance = None
+    before = len(broker_ad.sent)
+    eng_ad.execute_simulated_trade("BUY", 4000.0, 0.5, "2026-11-12 10:00:00")
+    check("AD: in FORWARD_TEST none of the guards run and no broker call is made",
+          len(broker_ad.sent) == before and eng_ad.trade_active,
+          f"sent={len(broker_ad.sent)} active={eng_ad.trade_active}")
+finally:
+    (engine.LOG_FILE_PATH, engine.STATUS_FILE_PATH, engine.TRADES_LOG_PATH,
+     engine.TRADING_MODE, engine.live_armed) = _saved_ad
+    if hasattr(engine, "mt5"):
+        delattr(engine, "mt5")
+    shutil.rmtree(tmp_ad, ignore_errors=True)
+
+check("AD: the B4 scenario leaves the checkout in paper mode and changes no strategy",
+      engine.TRADING_MODE == "FORWARD_TEST" and engine.SL_CLEAR_ATR == 0.5
+      and engine.BE_TRIGGER_R == 0.75 and engine.MAX_HOLD_MINUTES == 240
+      and engine.RR_TARGET == 1.5)
 
 
 print()

@@ -60,6 +60,7 @@ python3 tools/check_data.py       # 1. integrity gate — run FIRST, trust nothi
 python3 tools/live_readiness.py   # 1b. LIVE execution gate scorecard (read-only; --strict exits 1 while CLOSED)
 python3 tools/test_live_readiness.py # 1c. LIVE-path hermetic tests
 python3 tools/test_live_manage.py    # 1c2. LIVE broker-side BE ratchet / time-stop tests (fake MT5)
+python3 tools/test_live_safety.py    # 1c3. LIVE pre-order guards: connection, broker sizing, cost-as-%-of-R
 python3 readiness.py              # 1d. readiness timeline in days: done vs pending (--json; dashboard ?tab=readiness)
 python3 tools/test_readiness_tab.py # 1e. Readiness tab hermetic tests
 python3 tools/win_rate_report.py  # 2. win-rate decomposition (era/side/day, ratchet grid)

@@ -677,6 +677,173 @@ def live_position(mt5_mod, ticket):
     return found[0]
 
 
+# ── LIVE pre-order safety (B4, 2026-11-12; LIVE path ONLY) ───────────────────
+# Three guards that must pass BEFORE a real order leaves the process. All three
+# are pure functions over a broker object, so they are hermetic in tests and
+# impossible to trip from the paper path (nothing calls them unless
+# TRADING_MODE == "LIVE"). No strategy variable, stop/TP geometry, entry rule or
+# paper-ledger row is touched by any of this.
+#
+# 1) CONNECTION. A dead terminal can accept `order_send` and return a stale or
+#    misleading result; worse, it can leave an order in flight that the engine
+#    does not know about. `terminal_info()` is the documented liveness read and
+#    `trade_allowed` is the terminal-side permission for EAs to trade at all.
+# 2) SIZING against the LIVE symbol spec. VOLUME_MIN/VOLUME_STEP are hard-coded
+#    0.01 and `volume_max` was never consulted, so a mis-sized lot (or a broker
+#    change) would be rejected after the decision to trade - or worse, accepted
+#    at a size the risk model never priced. Stops/freeze levels are read the same
+#    way: the spec says 0 pts today, but a broker change must not silently
+#    produce an order whose SL/TP cannot be attached.
+# 3) COST as a share of R. This is the measured gap the 2026-10-26 audit named:
+#    MIN_SPREAD_POINTS = 60 ($0.60) is a FLAT cap that lets the measured $0.55
+#    median spread through, but $0.55 is ~9% of a median 1R ($5.88) and up to 25%
+#    of the smallest ones. On the repo's own ledger the worst bucket is also the
+#    losing one (see docs/ANALYSIS-2026-11-12-b4-live-order-safety.md §3).
+LIVE_MIN_FREE_MARGIN_PCT = 30.0   # refuse an entry that would consume >70% of free margin
+LIVE_COST_MAX_PCT_OF_R = 20.0     # veto an entry whose round-trip cost > 20% of 1R (measured)
+
+
+def live_connection_problem(mt5_mod):
+    """None when the terminal is connected and allowed to trade, else a short reason.
+
+    Fails CLOSED: a query error or a missing field is treated the same as
+    "disconnected", because the whole point is to refuse an order we cannot
+    prove the terminal can execute.
+    """
+    if mt5_mod is None:
+        return "MetaTrader5 module unavailable"
+    try:
+        info = mt5_mod.terminal_info()
+    except Exception as exc:
+        return f"terminal_info() raised {type(exc).__name__}: {exc}"
+    if info is None:
+        return "terminal_info() returned nothing (terminal not running or not connected)"
+    if not bool(getattr(info, "connected", False)):
+        return "terminal reports connected=False"
+    if not bool(getattr(info, "trade_allowed", False)):
+        return "terminal reports trade_allowed=False (AutoTrading/EA permission is off)"
+    return None
+
+
+def live_symbol_limits(mt5_mod, symbol=SYMBOL):
+    """(limits, None) read from the LIVE symbol spec, or (None, reason).
+
+    `volume_max` is the field that was previously never consulted. The min/step
+    values are taken from the BROKER, not from the hard-coded constants, so a
+    spec change cannot make the local size model wrong without anyone noticing.
+    """
+    if mt5_mod is None:
+        return None, "MetaTrader5 module unavailable"
+    try:
+        info = mt5_mod.symbol_info(symbol)
+    except Exception as exc:
+        return None, f"symbol_info() raised {type(exc).__name__}: {exc}"
+    if info is None:
+        return None, f"symbol_info({symbol!r}) returned nothing"
+    try:
+        limits = {
+            "volume_min": float(getattr(info, "volume_min", VOLUME_MIN)),
+            "volume_max": float(getattr(info, "volume_max", 0.0) or 0.0),
+            "volume_step": float(getattr(info, "volume_step", VOLUME_STEP)),
+            "stops_level": float(getattr(info, "trade_stops_level", 0) or 0),
+            "freeze_level": float(getattr(info, "trade_freeze_level", 0) or 0),
+            "point": float(getattr(info, "point", 0.0) or 0.0),
+        }
+    except (AttributeError, TypeError, ValueError) as exc:
+        return None, f"symbol spec is not readable ({type(exc).__name__}: {exc})"
+    if limits["volume_max"] <= 0:
+        return None, "symbol spec reports no volume_max (cannot bound the order size)"
+    if limits["volume_step"] <= 0:
+        return None, "symbol spec reports volume_step <= 0"
+    return limits, None
+
+
+def live_sizing_problem(lots, limits):
+    """None when `lots` is placeable on this spec, else why the order must not be sent."""
+    if limits is None:
+        return "symbol limits unavailable"
+    if lots is None:
+        return "no position size was computed"
+    try:
+        lots = float(lots)
+        step = float(limits["volume_step"])
+        vmin = float(limits["volume_min"])
+        vmax = float(limits["volume_max"])
+    except (TypeError, ValueError, KeyError):
+        return "symbol limits are malformed"
+    if not math.isfinite(lots) or lots <= 0:
+        return f"computed lot size is not a positive number ({lots})"
+    if lots < vmin - 1e-9:
+        return f"{lots:g} lot is below the broker volume_min {vmin:g}"
+    if lots > vmax + 1e-9:
+        return f"{lots:g} lot exceeds the broker volume_max {vmax:g}"
+    # Volume must land ON the step grid (rounded down), not between two steps.
+    steps = lots / step
+    if abs(steps - round(steps)) > 1e-6:
+        return f"{lots:g} lot is not a multiple of the broker volume_step {step:g}"
+    return None
+
+
+def live_stop_distance_problem(direction, entry, sl, tp, limits):
+    """None when the broker can accept this SL/TP, else why it cannot.
+
+    `trade_stops_level` / `trade_freeze_level` are broker-side minimum distances
+    (0 pts on the captured XM spec, so today this is inert). A broker that raises
+    them would otherwise reject every order AFTER the entry decision, which is
+    the failure mode this check exists to make loud and early.
+    """
+    if limits is None:
+        return "symbol limits unavailable"
+    try:
+        point = float(limits["point"])
+        stops = float(limits["stops_level"])
+    except (TypeError, ValueError, KeyError):
+        return "symbol limits are malformed"
+    if direction not in ("BUY", "SELL"):
+        return f"unknown direction {direction!r}"
+    if not point or point <= 0:
+        return "symbol point is not positive"
+    entry, sl, tp = float(entry), float(sl), float(tp)
+    if direction == "BUY" and not (sl < entry < tp):
+        return f"BUY geometry is not SL < entry < TP ({sl} / {entry} / {tp})"
+    if direction == "SELL" and not (tp < entry < sl):
+        return f"SELL geometry is not TP < entry < SL ({tp} / {entry} / {sl})"
+    if stops <= 0:
+        return None
+    min_dist = stops * point
+    for label, value in (("SL", sl), ("TP", tp)):
+        if abs(value - entry) < min_dist - 1e-9:
+            return (f"{label} is {abs(value - entry):.2f} from entry, "
+                    f"below the broker stops_level {min_dist:.2f}")
+    return None
+
+
+def live_cost_guard(cost_usd, risk_usd, max_pct=None):
+    """(ok, reason, pct) for a round-trip cost measured against the trade's 1R.
+
+    `cost_usd` is the ROUND TRIP (both sides). The registered model charges one
+    side on entry and one on exit, so comparing the round trip to 1R is the same
+    arithmetic the ledger's net R/trade uses - no new cost assumption is invented
+    here. Fails CLOSED: an unreadable cost or risk refuses the trade.
+    """
+    limit = LIVE_COST_MAX_PCT_OF_R if max_pct is None else float(max_pct)
+    try:
+        cost = float(cost_usd)
+        risk = float(risk_usd)
+    except (TypeError, ValueError):
+        return False, "cost or risk is not a number", None
+    if not math.isfinite(cost) or not math.isfinite(risk) or cost < 0:
+        return False, "cost or risk is not a finite positive number", None
+    if risk <= 0:
+        return False, "risk is zero - cost cannot be expressed as a share of R", None
+    pct = 100.0 * cost / risk
+    if pct > limit + 1e-9:
+        return (False,
+                f"round-trip cost ${cost:.2f} is {pct:.1f}% of 1R (${risk:.2f}) "
+                f"> the {limit:g}% limit", pct)
+    return True, f"cost {pct:.1f}% of 1R (limit {limit:g}%)", pct
+
+
 if TRADING_MODE == "LIVE":
     import MetaTrader5 as mt5
 else:
@@ -1765,6 +1932,103 @@ class GoldEngine:
     # stop closes at MAX_HOLD_MINUTES. See the decision doc linked above the
     # LIVE_MGMT_* constants. Nothing here opens exposure or changes a parameter.
 
+    def live_free_margin_problem(self, account_info, lots, price=None, direction="BUY",
+                                 order_type=None, symbol=SYMBOL):
+        """None when the order's margin is a sane share of free margin, else why not.
+
+        B4 (2026-11-12). The required margin comes from the BROKER's own
+        `order_calc_margin()` - which is the only way to get leverage right. The
+        captured XM spec is **1:1000**, so 0.01 lot of GOLD is ~$4 of margin on a
+        ~$4,000 notional: pricing the notional directly (the first cut of this
+        guard) overstates the requirement by the leverage factor and would refuse
+        every sound order. If the broker will not answer, this refuses rather than
+        estimating - an unmeasurable account is not a tradeable one.
+        """
+        free = getattr(account_info, "margin_free", None)
+        if free is None:
+            return "account_info() reports no margin_free - cannot size a real order"
+        try:
+            free = float(free)
+            lots = float(lots)
+            price = float(price if price is not None else 0.0)
+        except (TypeError, ValueError):
+            return "free margin, lot size or price is not a number"
+        if not math.isfinite(free):
+            return "free margin is not a finite number"
+        if price <= 0 or lots <= 0:
+            return "order price or lot size is not positive"
+        if free <= 0:
+            return f"free margin ${free:,.2f} is not positive; nothing can be risked"
+        mt5_mod = live_mt5_module()
+        if mt5_mod is None:
+            return "MetaTrader5 module unavailable - margin cannot be measured"
+        if order_type is None:
+            order_type = (getattr(mt5_mod, "ORDER_TYPE_BUY", 0) if direction == "BUY"
+                          else getattr(mt5_mod, "ORDER_TYPE_SELL", 1))
+        try:
+            need = mt5_mod.order_calc_margin(order_type, symbol, lots, price)
+        except Exception as exc:
+            return f"order_calc_margin() raised {type(exc).__name__}: {exc}"
+        if need is None:
+            return "order_calc_margin() returned nothing - margin cannot be measured"
+        try:
+            need = float(need)
+        except (TypeError, ValueError):
+            return "order_calc_margin() returned a non-number"
+        if not math.isfinite(need) or need < 0:
+            return f"order_calc_margin() returned an unusable value ({need})"
+        need_pct = 100.0 * need / free
+        if need_pct > (100.0 - LIVE_MIN_FREE_MARGIN_PCT):
+            return (f"order needs ${need:,.2f} margin = {need_pct:.0f}% of the "
+                    f"${free:,.2f} free; limit is {100.0 - LIVE_MIN_FREE_MARGIN_PCT:.0f}%")
+        return None
+
+    def live_cost_measure(self):
+        """(round-trip cost $, source, None) or (None, None, why-not).
+
+        B4 (2026-11-12). The cost is the ONLY input the guard needs, and it must
+        be measured, not guessed:
+          * `live_spread` - the broker's live spread (ask - bid) right now,
+            doubled for the round trip. This is what a market entry+exit pays.
+        Returns a reason instead of a number when it cannot be measured, so the
+        caller can refuse rather than assume $0.40 (an assumption the measured
+        2026-10-13..11-11 sample already showed to be low: median $0.55/trade).
+        """
+        mt5_mod = live_mt5_module()
+        if mt5_mod is None:
+            return None, None, "MetaTrader5 module unavailable - no measured spread"
+        try:
+            tick = mt5_mod.symbol_info_tick(SYMBOL)
+        except Exception as exc:
+            return None, None, f"symbol_info_tick() raised {type(exc).__name__}: {exc}"
+        if tick is None:
+            return None, None, "symbol_info_tick() returned nothing - no measured spread"
+        try:
+            ask = float(getattr(tick, "ask", 0.0) or 0.0)
+            bid = float(getattr(tick, "bid", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return None, None, "tick bid/ask are not numbers"
+        if ask <= 0 or bid <= 0 or ask < bid:
+            return None, None, f"tick is not a usable quote (bid {bid}, ask {ask})"
+        one_way = ask - bid
+        if one_way <= 0:
+            # A zero/negative spread cannot PROVE a small cost - it is a data fault
+            # (this broker's measured median is $0.55), and a fault is not a cheap
+            # trade. Fail closed rather than let a broken quote pass every limit.
+            return None, None, f"measured spread is not positive (bid {bid}, ask {ask})"
+        return 2.0 * one_way, "live_spread", None
+
+    def live_cost_check(self, risk_usd):
+        """(ok, reason, pct) - the round-trip cost veto against this trade's 1R.
+
+        `risk_usd` is the SAME structural risk the order's SL uses, so the veto and
+        the geometry can never disagree about what 1R is.
+        """
+        cost, _source, why = self.live_cost_measure()
+        if cost is None:
+            return False, f"cost could not be measured ({why})", None
+        return live_cost_guard(cost, risk_usd)
+
     def _live_send(self, mt5_mod, request, label: str):
         """Send one manage request, retrying ONCE on a market-moved rejection.
 
@@ -2142,6 +2406,16 @@ class GoldEngine:
                 f"LIVE ORDER BLOCKED\nLive execution is not armed ({LIVE_ARM_ENV} != 1 "
                 "or kill-switch file present)", kind="risk")
             return
+        # B4 (2026-11-12): a dead terminal must never be asked to trade. This is
+        # the first check because every later query assumes a live connection.
+        conn = live_connection_problem(mt5)
+        if conn:
+            print(f"\nLIVE ENTRY BLOCKED -> connection: {conn}\n")
+            self.send_telegram(
+                f"LIVE ENTRY BLOCKED\nConnection check failed: {conn}\n"
+                "No order was sent; the engine will retry on the next signal.",
+                kind="risk")
+            return
         # B3: reconcile before every possible order. A failed query, an orphan
         # position, an existing position, or an unresolved close all fail closed.
         reconcile = self.reconcile_live_positions()
@@ -2175,6 +2449,15 @@ class GoldEngine:
             print("LIVE order skipped -> symbol_info() unavailable, no point/filling data")
             self.send_telegram("LIVE ORDER SKIPPED\nsymbol_info() unavailable - no point/filling data",
                               kind="risk")
+            return
+        # B4: read the broker's own volume/stops limits instead of trusting the
+        # hard-coded VOLUME_MIN/VOLUME_STEP. volume_max was never consulted before.
+        limits, limits_reason = live_symbol_limits(mt5, SYMBOL)
+        if limits is None:
+            print(f"LIVE order skipped -> symbol limits: {limits_reason}")
+            self.send_telegram(
+                f"LIVE ORDER SKIPPED\nSymbol limits unreadable: {limits_reason}",
+                kind="risk")
             return
         # The captured XM spec reports filling_mode = 2 (IOC only). Sending the
         # old hard-coded ORDER_FILLING_FOK would be rejected on every real order.
@@ -2223,7 +2506,40 @@ class GoldEngine:
                 f"LIVE POSITION SIZE SKIPPED\nStop ${risk:.2f} needs <{VOLUME_MIN} lot for {RISK_PCT}% risk",
                 kind="risk")
             return
+        # B4: the computed size must be placeable on the BROKER's spec (max, step,
+        # min) - a rejection here would otherwise arrive after the entry decision.
+        sizing = live_sizing_problem(self.trade_lots, limits)
+        if sizing:
+            print(f"\nLIVE order skipped -> sizing: {sizing}\n")
+            self.send_telegram(f"LIVE POSITION SIZE SKIPPED\n{sizing}", kind="risk")
+            return
+        # B4: free-margin sanity. A position that eats the account's margin is a
+        # config error, not a trade signal.
+        margin = self.live_free_margin_problem(
+            info, self.trade_lots, price, direction=direction, order_type=order_type)
+        if margin:
+            print(f"\nLIVE order skipped -> margin: {margin}\n")
+            self.send_telegram(f"LIVE ORDER SKIPPED\n{margin}", kind="risk")
+            return
+        # B4: cost-as-%-of-R veto. The flat MIN_SPREAD_POINTS cap lets the measured
+        # $0.55 median spread through at ~9% of a median 1R; the worst deciles are
+        # both the most expensive AND the worst-performing (ANALYSIS-2026-11-12 §3).
+        cost_ok, cost_reason, _cost_pct = self.live_cost_check(risk)
+        if not cost_ok:
+            print(f"\nLIVE order skipped -> cost guard: {cost_reason}\n")
+            self.send_telegram(
+                f"LIVE SETUP SKIPPED\nCost guard: {cost_reason}\n"
+                f"Price: `${price:.2f}` | risk `${risk:.2f}`", kind="skip")
+            return
         self.pnl_scale = self.trade_lots * CONTRACT_SIZE
+
+        # B4: SL/TP must satisfy the broker's stops/freeze distance before the send.
+        geometry = live_stop_distance_problem(direction, price, sl_price, tp_price, limits)
+        if geometry:
+            print(f"\nLIVE order skipped -> broker stops/freeze: {geometry}\n")
+            self.send_telegram(
+                f"LIVE ORDER SKIPPED\nBroker stops/freeze level: {geometry}", kind="risk")
+            return
 
         sl_price = round(sl_price / point) * point
         tp_price = round(tp_price / point) * point

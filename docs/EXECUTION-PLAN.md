@@ -1,15 +1,15 @@
 # Gold bot execution plan — “follow execution plan”
 
-**Status:** living session queue — re-based **2026-11-06** on collection 435 (data through `2026-11-06 08:59:02 UTC`);
+**Status:** living session queue — re-based **2026-11-12** on collection 480 (data through `2026-11-11 23:59:05 UTC`);
 §2/§2b refreshed 2026-10-27, §2c 2026-10-28, §2d 2026-10-30 (paper-ledger decision: **no top-up / no rebaseline**),
 and §2e refreshed **2026-11-06**. **G1 is SIGNED (2026-10-27, branch A):** A1 is DONE; **A2 remains blocked on a
 production-host flat-position check at deploy time**. This checkout's current ledger is flat, but it is not evidence
-about the inaccessible host. **B2 is DONE (2026-10-28) and B3 is DONE (2026-11-06)** in Track B; `live_readiness`
-is **14 PASS / 3 TODO / 3 MANUAL**, gate still CLOSED. The end-of-session quote digest reports the logger **STALE
-(newest row ≈0.6 h old)**; under §6 precedence, **first verify/recover `mt5quotes-gold` on the host**. This host
-check cannot be performed from the checkout. Once feed health is confirmed, **B4** is next repo-code step; A6's
-sample gate is met and follows the preceding Track-B queue step. Evidence: `docs/REVIEW-2026-10-27-g1-decision.md`, `docs/REVIEW-2026-10-28-b2-broker-be-time-stop.md`,
-`docs/REVIEW-2026-11-06-b3-position-deal-reconciliation.md`.
+about the inaccessible host. **B2 (2026-10-28), B3 (2026-11-06) and B4 (2026-11-12) are DONE** in Track B; `live_readiness`
+is **17 PASS / 0 TODO / 3 MANUAL**, gate still CLOSED — **no code TODO remains**. **B4 is DONE (2026-11-12)**; the
+next Track-B step is **B5 (DEMO-account evidence), a host/operator action** that cannot be done from the checkout. The
+feed is healthy at this snapshot (quotes continuous to `2026-11-11 23:59:30`, bars to `23:59:05`), so there is no §6
+feed item outstanding. A6's sample gate is met and follows the preceding Track-B queue step. Evidence: `docs/REVIEW-2026-10-27-g1-decision.md`, `docs/REVIEW-2026-10-28-b2-broker-be-time-stop.md`,
+`docs/REVIEW-2026-11-06-b3-position-deal-reconciliation.md`, `docs/ANALYSIS-2026-11-12-b4-live-order-safety.md`.
 **Purpose:** make progress consistent across sessions while the bot stays in paper/forward-test mode, until there is — or is not — something genuinely workable for live trade.
 **Canonical prompt:** **“Follow execution plan.”** (The older “Execute the plan.” remains an exact alias; README/HANDOFF point here.)
 
@@ -193,6 +193,34 @@ Read with §2/§2b/§2c/§2d; this is a current-state refresh, not a re-judgemen
   verified from this checkout. Do not infer host flatness from the local ledger.
 - **Verdict:** paper-only; no strategy or cost assumption change, no real order, no live authorization.
 
+### 2f. Refresh 2026-11-12 ~03:00 UTC (collection 480, log through `2026-11-11 23:59:05 UTC`)
+
+Read with §2–§2e; a current-state refresh, not a re-judgement of any closed experiment.
+
+- **887 closed** (191W/388L/305BE/3TIME, decisive **33.0% [29.3–36.9]**), engine ledger **$130.70**, true equity
+  **$113.76**, net **−$741.04** at the registered $0.40 round trip. No open trade (`next_trade_num: 888`).
+  `check_data` 0 fail / 9 documented warnings; `handoff_check` FRESH after refresh; `check_structural_stop` PASS.
+- **Era n=390** (106W/177L/105BE/2TIME): decisive **37.5% [32.0–43.2]**, gross **−0.028R/trade** (pressure-report
+  scale), SL/day **5.90**, SL share **45.4%**, scratch **26.9%**, avg SL **$6.01**, era DD **$200.06**. Bar card
+  B1/B2/B3/C1/C2/A4/A5 **OK**. Grown-sample observation only — the 10-19 judgement stays closed and the lapsed
+  n=150 arm stays lapsed.
+- **Gap rides: 6** (threshold 2), 1 reopen through the stop, 0 worse exits, 3 scratch stops, 0 weekend rides.
+  **New, recorded not judged:** the broker moved the daily break `20:58→22:00` → **`21:58→23:00` UTC from
+  2026-11-02 with the server offset unchanged (`+7200 s` both sides)** — a schedule change, not DST.
+  `derive_daily_closure()` now returns exactly `((21,58),(23,0))` from the price log, so the deployed guard
+  follows it by itself; trade #887 was entered 76 min before the new close, outside the 30-min window.
+- **Cost sample 27/14 complete UTC days, 3/2 weekends** (81 727 quote rows). Spread-only median **$0.55**,
+  p90 $0.57; matched-trade round trip mean/median **$0.55** on **309** trades. Still spread-only, so **$0.40
+  stays registered** pending A6. Offsets +2h/+3h, EU rule fits 100.00% of 56 304 rows. Spec re-captured
+  2026-11-11 19:54:21 UTC: REAL, 1:1000, build 6230, IOC only, 0.01/0.01/50 volumes, stops 0 pts.
+- **Feed healthy — no §6 item:** quotes continuous to `23:59:30`, bars to `23:59:05`; the 2026-11-06 "STALE"
+  flag was the previous snapshot's collection boundary, not a dead logger.
+- **B4 DONE:** connection (`connected` + `trade_allowed`), broker volume/stops limits, leverage-aware margin via
+  `order_calc_margin()`, and a measured round-trip veto above **20% of 1R**. **17 PASS / 0 TODO / 3 MANUAL — no
+  code TODO remains.** 28 hermetic tests, smoke Scenario AD, call-graph-pinned. Paper path byte-identical.
+- **Verdict unchanged: no demonstrated edge after costs.** Paper-only; no strategy or cost change, no real
+  order, no live authorization.
+
 ---
 
 ## 3. The queue
@@ -229,8 +257,8 @@ Every step must move at least one `live_readiness.py` check from TODO to PASS **
 | **B1** | DONE 10-26 | `tools/live_readiness.py` scorecard + arm/filling/closed-bar hardening. | 9 PASS / 8 TODO / 3 MANUAL. | — |
 | **B2** | **DONE 2026-10-28** | Choice recorded first (**implement, no divergence**): `docs/DECISION-2026-10-28-b2-broker-be-and-time-stop.md`. Broker-side **BE ratchet** (`TRADE_ACTION_SLTP` at +0.75R, stop to entry, only after `DONE`) **and** the 240-min **time stop** (market close by ticket), plus the LIVE fill state both rules need, restart persistence and a reconcile-pending block on new exposure. B3 later replaced quote-based time-stop booking with actual deal-history accounting. | **MET:** `live_readiness.py` `broker_be` + `broker_time_stop` PASS (now call-graph checks, not substring checks); **19** fake-MT5 tests in `tools/test_live_manage.py`; **Scenario AC** (12 checks) in `smoke_test.py`; smoke A–AB unchanged; scorecard **11 PASS / 6 TODO / 3 MANUAL**, gate CLOSED. Evidence: `docs/REVIEW-2026-10-28-b2-broker-be-time-stop.md`. | — (closed; followed by B3, now done) |
 | **B3** | **DONE 2026-11-06** | Startup adopts one valid strategy position by magic; order path reconciles before exposure; realized P&L comes from broker `history_deals_get`; ticket↔trade number persists; ambiguous states fail closed. | **MET:** `position_reconcile` + `deal_reconcile` PASS through the LIVE call graph; 25 fake-MT5 tests (including query-failure, restart, and idempotency); smoke Scenario AC uses actual deal accounting. | — |
-| **B4** | any session | **Pre-order safety:** `terminal_info().connected`, `volume_max`/step/stops/freeze levels from the live spec, and a **spread-as-%-of-R** veto (measured $0.55 is ~10% of 1R; `MIN_SPREAD_POINTS=60` is too loose). | `disconnect_safety`, `sizing_limits`, `cost_guard` PASS; unit tests with a fake spec. | none |
-| **B5** | B2–B4 done | **DEMO-account** evidence on the host: fill (IOC), SL/TP, BE/time management, rejection handling, disconnect, restart, reconciliation, kill switch, and 48 h of stable running. Use a DEMO account and a separate data dir — the captured spec says REAL. | `docs/DEMO-EVIDENCE.md` (**new file to be created**, redacted) exists; `live_readiness.py` `demo_evidence` PASS. | **HOST/operator action** — cannot be done from the repo checkout. |
+| **B4** | **DONE 2026-11-12** | **Pre-order safety:** `terminal_info().connected` **+** `trade_allowed`; `volume_min`/`volume_step`/**`volume_max`** and `trade_stops_level`/`freeze_level` from the live spec; leverage-aware free-margin check via `order_calc_margin()`; and a **spread-as-%-of-R** veto (measured $0.55 is ~9% of median 1R, up to 24.5% of the smallest). | **MET:** `disconnect_safety`, `sizing_limits`, `cost_guard` PASS through the call graph; **28** hermetic tests (`tools/test_live_safety.py`); **smoke Scenario AD** (11 checks, every refusal sends nothing); every guard re-pinned to go red if disconnected; paper path byte-identical. Scorecard **17 PASS / 0 TODO / 3 MANUAL**, gate CLOSED. Evidence: `docs/ANALYSIS-2026-11-12-b4-live-order-safety.md`. | — (closed; followed by B5, host-only) |
+| **B5** | **B2–B4 DONE → next open step** | **DEMO-account** evidence on the host: fill (IOC), SL/TP, BE/time management, rejection handling, disconnect, restart, reconciliation, kill switch, and 48 h of stable running. Use a DEMO account and a separate data dir — the captured spec says REAL. | `docs/DEMO-EVIDENCE.md` (**new file to be created**, redacted) exists; `live_readiness.py` `demo_evidence` PASS. | **HOST/operator action** — cannot be done from the repo checkout. |
 | **B6** | B5 done | Ops runbook: `GOLD_LIVE_ARMED=1`, `LIVE_HALT` kill-switch drill, service/user separation, monitoring/alerts, rollback, and a written “who can arm it” rule. | dated `docs/RUNBOOK-LIVE.md` (**new file to be created**) + a drill log; no credential in Git. | none |
 
 ### Track C — the only path to a live pilot
@@ -256,6 +284,7 @@ Every step must move at least one `live_readiness.py` check from TODO to PASS **
 | 2026-10-27 (later) | **G1 SIGNED (branch A) → A1 DONE. No deploy, no engine change.** `docs/PREREG-2026-10-26-structstop1.5.md` registered verbatim with the dated owner sign-off; the §2 pre-deploy tool work landed (strategy_lab / check_structural_stop / win_rate_report / pressure + pressure_report / journal all era-aware, `CLEAR15_CUTOVER = None` so every clear15 path is inert); new **smoke Scenario AB** pins the one-dial geometry and the "refuse to judge an unstarted window" guards; readiness timeline moved G1 → done and added the A2 row. Evidence: `docs/REVIEW-2026-10-27-g1-decision.md`. **A2 is the next step and it is gated on there being no open trade.** |
 | 2026-10-28 | **B2 DONE (Track B, parallel to the blocked A2).** Decision recorded before coding (implement, no divergence); the LIVE path now mirrors the +0.75R BE ratchet (`TRADE_ACTION_SLTP`) and the 240-min time stop (market close), records the fill state both rules need, persists ticket/risk across restarts, refuses new exposure while a broker-closed position is unreconciled, and runs management even while disarmed (risk-reducing only). Scorecard **9→11 PASS, 8→6 TODO, gate CLOSED**; the two checks were also made semantic (call-graph + AST, no docstring credit). Tests: 19 new fake-MT5, Scenario AC (12 checks), smoke A–AB unchanged, 20 + 64 existing green. **No order, no arming, no strategy change.** `docs/REVIEW-2026-10-28-b2-broker-be-time-stop.md`. |
 | 2026-11-06 | **B3 DONE (Track B; A2 remains host-blocked).** LIVE startup/order attempts reconcile magic-filtered broker positions, adopt one valid orphan, persist ticket↔trade number, and book actual realized deal P&L (profit/commission/swap/fee) idempotently. Ambiguous position/deal state stays fail-closed. Readiness **12→14 PASS, 5→3 TODO, gate CLOSED**; 25 fake-MT5 tests + Scenario AC's broker-deal time-stop accounting; no broker connection/order, no strategy change. `docs/REVIEW-2026-11-06-b3-position-deal-reconciliation.md`. |
+| 2026-11-12 | **B4 DONE (Track B; A2 remains host-blocked).** The LIVE order path now refuses to send without a connected, trade-permitted terminal; a lot size on the broker's own min/step/**max** grid with SL/TP outside its stops level; a leverage-aware free-margin check; and a **measured** round trip ≤ 20% of 1R. Readiness **14→17 PASS, 3→0 TODO**, gate CLOSED — **no code TODO left**. 28 hermetic tests + smoke Scenario AD; two defects caught (zero-spread fail-open; notional margin ignoring 1:1000). Paper path byte-identical, no order, no strategy change. `docs/ANALYSIS-2026-11-12-b4-live-order-safety.md`. |
 | 2026-10-27 | **G1 made answerable + ritual refresh (no strategy step run).** Wrote the owner decision pack `docs/BRIEF-2026-10-27-g1-owner-decision.md`; refreshed §2/§2b on collection 359 (era 212→225, gross −0.054R→−0.081R); re-ran the costed replay for 0.5/1.0/1.5/revert at $0.20/$0.275/$0.35; **verified the post-DST daily break against `derive_daily_closure()`** (PREREG §2.3 done, host blocker closed). No parameter change, no registration, no deploy, no order — **A1 is still waiting on the owner's line.** |
 
 ---
@@ -275,7 +304,8 @@ python3 tools/strategy_lab.py --calib-only # only when a replay/param idea is in
 python3 tools/handoff_check.py --update    # after checking the underlying files
 ```
 If code changed, also: `python3 tools/smoke_test.py`, `python3 tools/test_live_readiness.py`,
-`python3 tools/test_live_manage.py`, `python3 -m unittest discover -s goldbot/tests -t .`,
+`python3 tools/test_live_manage.py`, `python3 tools/test_live_safety.py`,
+`python3 -m unittest discover -s goldbot/tests -t .`,
 `python3 -m py_compile engine.py trade_filter.py`, and the relevant replay/calibration checks.
 
 **End-of-session checklist**
@@ -292,7 +322,8 @@ If code changed, also: `python3 tools/smoke_test.py`, `python3 tools/test_live_r
 1. A data-integrity failure or a feed outage — fix/report first; no judgement on bad data.
 2. Any expired **time gate** — judge it on the latest available snapshot, exactly as registered, before any new change.
 3. Track A in order (A1 → A5), unless blocked by G1 or a host action.
-4. Track B in order (B2 → B6), one `live_readiness.py` check at a time.
+4. Track B in order (B2 → B6), one `live_readiness.py` check at a time. B2–B4 are done; **B5 is a host/operator
+   action** (DEMO account + separate data dir) and must be reported as the exact blocker, not simulated.
 5. A6/A8 (cost sample, private observation log) whenever their data arrives.
 6. C1 only when everything above is complete.
 
