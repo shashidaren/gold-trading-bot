@@ -90,6 +90,14 @@ MILESTONES = [
      "LIVE mirrors the paper exits at the broker (SLTP to entry at +0.75R, market close at 240 min), so "
      "paper and LIVE are one strategy; gate still CLOSED at 11 PASS / 6 TODO / 3 MANUAL.",
      "docs/REVIEW-2026-10-28-b2-broker-be-time-stop.md"),
+    ("2026-11-06", "B3 — position/deal reconciliation",
+     "One magic-filtered position adopted at startup, ticket↔trade persisted, realized P&L from broker "
+     "deals, ambiguous state fail-closed; 14 PASS / 3 TODO, gate CLOSED.",
+     "docs/REVIEW-2026-11-06-b3-position-deal-reconciliation.md"),
+    ("2026-11-12", "B4 — LIVE pre-order safety (no code TODO left)",
+     "Connection, broker volume/stops limits, leverage-aware margin and a measured cost-as-%-of-R veto "
+     "before any order; 17 PASS / 0 TODO / 3 MANUAL, gate CLOSED.",
+     "docs/ANALYSIS-2026-11-12-b4-live-order-safety.md"),
 ]
 
 # Blockers that no code commit can clear. `who` is the person/place that must act.
@@ -104,9 +112,11 @@ BLOCKERS = [
      "~2 h of open-market M1 bars missing on 10-25 (quotes fresh from 22:00, bars resume 23:59). "
      "Verify mt5feed / goldbot; next chance to observe it is the 10-31/11-01 weekend.",
      "docs/REVIEW-2026-10-26-full-system-audit.md"),
-    ("Host", "DEMO account + 48 h evidence",
-     "Track B5 needs a demo account (captured spec says REAL) and a dated demo test report.",
-     "docs/EXECUTION-PLAN.md"),
+    ("Host", "DEMO account + 48 h evidence (B5 — next open step)",
+     "Every code check on the LIVE gate is now PASS (B2/B3/B4 done); what remains is operator evidence: a "
+     "DEMO account with a separate data dir, and a dated report covering fill, SL/TP, BE/time management, "
+     "rejection, disconnect, restart, reconciliation and 48 h stable. The captured spec says REAL.",
+     "docs/ANALYSIS-2026-11-12-b4-live-order-safety.md"),
     ("Evidence", "Positive net expectancy",
      "Whole book net −$713 at the registered $0.40; no independent forward window yet.",
      "docs/REVIEW-2026-10-26-full-system-audit.md"),
@@ -200,11 +210,21 @@ def build_timeline(now, progress, counts):
              "The broker now holds both engine-side exit rules (SLTP to entry at +0.75R, market close at "
              "240 min, booked through the same TIME path). Call-graph checks, 18 fake-MT5 tests, smoke "
              "Scenario AC. Gate still CLOSED — this is code/evidence, not demo evidence."),
+        _row("b3", "B3 — position/deal reconciliation", "done", "done", "2026-11-06",
+             "Startup adopts one valid magic-filtered position, ticket↔trade number persists, realized P&L "
+             "comes from broker deals (profit + commission + swap + fee), and ambiguous state blocks new "
+             "exposure. 25 fake-MT5 tests, smoke Scenario AC. Code evidence, not DEMO evidence."),
+        _row("b4", "B4 — LIVE pre-order safety", "done", "done", "2026-11-12",
+             "Connection (`connected` + `trade_allowed`), broker volume/stops limits, leverage-aware margin "
+             "and a measured cost-as-%-of-R veto. 28 hermetic tests + smoke Scenario AD. **No code TODO "
+             "remains**; the gate is CLOSED on the three MANUAL items alone."),
         _row("track_b", "LIVE execution engineering (Track B)", "active",
-             f"{counts['todo']} TODO · {counts['manual']} MANUAL", "one check / session",
-             "Each step turns one live_readiness.py check green with a hermetic test."),
-        _row("demo", "DEMO-account evidence", "blocked", "— (host)", "host action",
-             "Needs a demo account + separate data dir; the captured spec says REAL."),
+             f"{counts['todo']} TODO · {counts['manual']} MANUAL", "B5 next (host)",
+             "Every code check is PASS; each remaining step is host/operator evidence."),
+        _row("demo", "DEMO-account evidence (B5)", "blocked", "— (host)", "host action",
+             "The next open Track-B step and it cannot be produced from the repo: a demo account + separate "
+             "data dir, fill/SLTP/BE/time/rejection/disconnect/restart/reconciliation and 48 h stable. The "
+             "captured spec says REAL."),
         _row("edge_review", "Independent edge reassessment (2–4 months)", "conditional",
              f"~{edge_lo}–{edge_hi} d",
              f"{_date(AUDIT + timedelta(days=edge_lo))} – {_date(AUDIT + timedelta(days=edge_hi))}",
