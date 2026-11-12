@@ -201,3 +201,31 @@ Read with `docs/EXECUTION-PLAN.md` §2–§2e; a current-state refresh, not a re
 4. **A8** — still waiting on the owner to **define** the manual pressure/hold rule before anything is coded.
 
 No real order, no arming, no LIVE switch, no strategy change, no ledger edit was made in this session.
+
+---
+
+## 8. Addendum — the guard's first real setups (post-hoc, not a test)
+
+Recorded after the merge, because it is the first concrete check of the bar against setups that arrived
+*after* the measurement window. **This is a post-hoc observation on n=2; it is not a pre-registered test, it
+is not evidence of edge, and it changes nothing about the bar.**
+
+| Trade | Entry (UTC) | 1R | Measured spread | Round trip | % of 1R | B4 verdict | Outcome |
+|---|---|---|---|---|---|---|---|
+| #885 | 2026-11-11 18:15:04 | $5.99 | $0.54 | $1.08 | **18.0%** | allow | — |
+| #886 | 2026-11-11 19:28:08 | $2.51 | $0.49 | $0.98 | **39.0%** | **VETO** | **SL −$2.51** |
+| #887 | 2026-11-11 20:42:07 | $3.95 | $0.55 | $1.10 | **27.9%** | **VETO** | **SL −$3.94** |
+
+The first two setups the guard would have seen at the 20% bar (#886, #887) were both **structural-stop losses**,
+and the one inside the bar (#885) was allowed. The vetoed pair is exactly the failure mode §3 describes: a
+tight structural stop (`max(2·ATR, |entry − level| + 0.5·ATR)`) on a quiet tape makes 1R small enough that the
+measured round trip is a third of it — the trade has to win ~2 in 3 to break even, against a book running 37.5%.
+
+**Two caveats, stated plainly.** (1) n=2, and being stopped out is the modal outcome of this strategy — the
+veto's value is that it declines a *badly-priced* bet, not that it predicted these two. (2) This is the
+**paper** book: B4 is a LIVE-path veto and would **not** have prevented #886/#887 from being recorded, because
+the paper engine has no spread feed. Do not cite this as "the guard would have saved $6.45"; cite it as "the
+guard's first live setups were the ones it exists to refuse".
+
+The honest way to accumulate real evidence is unchanged: `sim_trades`-free, in LIVE/B5 and later A7, count how
+many setups the veto refuses and what they would have done.
