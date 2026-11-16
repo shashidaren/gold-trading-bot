@@ -2045,3 +2045,6 @@ Timestamp,Reason,Price,ATR
 2026-11-13 14:59:05,Blackout: NY Open & US High-Impact Macro Releases,3893.14,2.29
 2026-11-16 01:26:04,ATR too high - News volatility (4.57 > 4.5),3872.18,4.57
 2026-11-16 03:09:03,SL Cooldown: 2 min remaining (2 consecutive SLs -> 60m cooldown),3871.48,2.11
+2026-11-16 08:44:03,Blackout: London Open & Early Session Kill-Zone,3858.72,2.29
+2026-11-16 08:45:04,Blackout: London Open & Early Session Kill-Zone,3859.43,2.18
+2026-11-16 08:50:05,Blackout: London Open & Early Session Kill-Zone,3861.98,2.06
