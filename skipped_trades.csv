@@ -2119,3 +2119,22 @@ Timestamp,Reason,Price,ATR
 2026-11-17 14:55:07,Blackout: NY Open & US High-Impact Macro Releases,3862.73,3.08
 2026-11-17 14:57:08,Blackout: NY Open & US High-Impact Macro Releases,3861.92,3.00
 2026-11-17 15:52:05,ATR too high - News volatility (5.13 > 4.5),3875.43,5.13
+2026-11-17 18:08:06,SL Cooldown: 36 min remaining (6 consecutive SLs -> 60m cooldown),3862.70,1.27
+2026-11-17 18:14:03,SL Cooldown: 31 min remaining (6 consecutive SLs -> 60m cooldown),3860.41,1.30
+2026-11-17 18:17:04,SL Cooldown: 28 min remaining (6 consecutive SLs -> 60m cooldown),3860.31,1.13
+2026-11-17 18:32:05,SL Cooldown: 12 min remaining (6 consecutive SLs -> 60m cooldown),3861.93,1.20
+2026-11-17 18:33:06,SL Cooldown: 11 min remaining (6 consecutive SLs -> 60m cooldown),3862.27,1.22
+2026-11-17 18:34:07,SL Cooldown: 10 min remaining (6 consecutive SLs -> 60m cooldown),3862.31,1.21
+2026-11-17 18:38:08,SL Cooldown: 6 min remaining (6 consecutive SLs -> 60m cooldown),3862.67,1.27
+2026-11-17 19:18:06,SL Cooldown: 60 min remaining (7 consecutive SLs -> 60m cooldown),3856.21,1.37
+2026-11-17 19:19:02,SL Cooldown: 60 min remaining (7 consecutive SLs -> 60m cooldown),3856.19,1.41
+2026-11-17 19:20:03,SL Cooldown: 59 min remaining (7 consecutive SLs -> 60m cooldown),3856.51,1.37
+2026-11-17 19:21:05,SL Cooldown: 57 min remaining (7 consecutive SLs -> 60m cooldown),3856.80,1.40
+2026-11-17 19:28:06,SL Cooldown: 50 min remaining (7 consecutive SLs -> 60m cooldown),3852.62,1.90
+2026-11-17 19:29:02,SL Cooldown: 50 min remaining (7 consecutive SLs -> 60m cooldown),3852.44,1.81
+2026-11-17 19:31:03,SL Cooldown: 48 min remaining (7 consecutive SLs -> 60m cooldown),3852.85,1.86
+2026-11-17 19:34:04,SL Cooldown: 45 min remaining (7 consecutive SLs -> 60m cooldown),3852.84,1.79
+2026-11-17 20:05:05,SL Cooldown: 13 min remaining (7 consecutive SLs -> 60m cooldown),3846.13,1.46
+2026-11-17 20:09:06,SL Cooldown: 9 min remaining (7 consecutive SLs -> 60m cooldown),3846.51,1.97
+2026-11-17 20:11:07,SL Cooldown: 7 min remaining (7 consecutive SLs -> 60m cooldown),3846.07,2.02
+2026-11-17 20:13:08,SL Cooldown: 5 min remaining (7 consecutive SLs -> 60m cooldown),3848.52,2.05
