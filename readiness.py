@@ -98,28 +98,35 @@ MILESTONES = [
      "Connection, broker volume/stops limits, leverage-aware margin and a measured cost-as-%-of-R veto "
      "before any order; 17 PASS / 0 TODO / 3 MANUAL, gate CLOSED.",
      "docs/ANALYSIS-2026-11-12-b4-live-order-safety.md"),
+    ("2026-11-19", "A6 — repo-side cost model (spread + swap + sensitivity)",
+     "Spread ($0.55 med across 34 days / 4 weekends / 396 trades), 5s spike (+$0.009 mean), overnight swap "
+     "(−$0.0091/t era across 5 captured specs), and $0.00–$1.00 RT sensitivity tables; realized slippage "
+     "and deal commission await B5 DEMO execution.",
+     "docs/ANALYSIS-2026-11-19-a6-cost-model-and-session-refresh.md"),
 ]
 
 # Blockers that no code commit can clear. `who` is the person/place that must act.
 BLOCKERS = [
     ("Owner", "A2 — deploy the registered 1.5 ATR clearance",
      "G1 is SIGNED (2026-10-27), so the one-line change `SL_CLEAR_ATR 0.5 → 1.5` is authorised. "
-     "It goes in only when the host has NO open position, and the deploy's own commit time becomes "
-     "`strategy_lab.CLEAR15_CUTOVER` in the same change. Until then `check_structural_stop.py "
-     "--era clear15` prints NOT STARTED and the window is unjudged.",
-     "docs/REVIEW-2026-10-27-g1-decision.md"),
-    ("Host", "Sunday-reopen price-bar hole",
-     "~2 h of open-market M1 bars missing on 10-25 (quotes fresh from 22:00, bars resume 23:59). "
-     "Verify mt5feed / goldbot; next chance to observe it is the 10-31/11-01 weekend.",
+     "It goes in only when the host has NO open position (`BUY #975 @ $3737.09` is open in collection 540), "
+     "and the deploy's own commit time becomes `strategy_lab.CLEAR15_CUTOVER` in the same change. "
+     "With ~8.5 trading days before 2026-12-01 21:00 UTC, n=150 will lapse on date unless the owner signs "
+     "a pre-deploy date-gate amendment while CLEAR15_CUTOVER is None.",
+     "docs/ANALYSIS-2026-11-19-a6-cost-model-and-session-refresh.md"),
+    ("Host", "Sunday-reopen price-bar hole (10-25 historical)",
+     "~2 h of open-market M1 bars missing on 10-25 (quotes fresh from 22:00, bars resume 23:59); "
+     "subsequent Sunday reopens through 2026-11-15 23:00:07 resumed cleanly.",
      "docs/REVIEW-2026-10-26-full-system-audit.md"),
     ("Host", "DEMO account + 48 h evidence (B5 — next open step)",
      "Every code check on the LIVE gate is now PASS (B2/B3/B4 done); what remains is operator evidence: a "
      "DEMO account with a separate data dir, and a dated report covering fill, SL/TP, BE/time management, "
-     "rejection, disconnect, restart, reconciliation and 48 h stable. The captured spec says REAL.",
-     "docs/ANALYSIS-2026-11-12-b4-live-order-safety.md"),
+     "rejection, disconnect, restart, reconciliation and 48 h stable (which also supplies realized slippage "
+     "and deal commission to close A6). The captured spec says REAL.",
+     "docs/ANALYSIS-2026-11-19-a6-cost-model-and-session-refresh.md"),
     ("Evidence", "Positive net expectancy",
-     "Whole book net −$713 at the registered $0.40; no independent forward window yet.",
-     "docs/REVIEW-2026-10-26-full-system-audit.md"),
+     "Whole book net −$832.77 at the registered $0.40 (−$978.87 at measured $0.55); no independent forward window yet.",
+     "docs/ANALYSIS-2026-11-19-a6-cost-model-and-session-refresh.md"),
     ("Owner", "G2 — real-money approval",
      "Never delegated to 'Follow execution plan'. Required even if every check is green.",
      "docs/EXECUTION-PLAN.md"),

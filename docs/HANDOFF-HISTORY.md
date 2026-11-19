@@ -12,6 +12,31 @@ the same commit (HANDOFF §11 rule 5). Never edit a historical block to change a
 block or a REVIEW instead; that is what makes this file trustworthy. (Created 2026-10-15, when §1 was
 223 lines and 92% of it was history no session had pruned.)
 
+## 2026-11-19 — §1 superseded (A6 repo-side cost model analysis + ritual refresh; collection 540)
+
+*(The following is the 2026-11-12 current-state block, preserved verbatim when §1 was refreshed on 2026-11-19.
+Only its heading level was demoted so this file's `## ` blocks stay flat.)*
+
+#### 1. Where things stand (as of **2026-11-12 — collection 480; log through 2026-11-11 23:59 UTC; B4 complete; no open paper trade**)
+
+**Stance:** paper-only. `TRADING_MODE = "FORWARD_TEST"`; no real order was placed and the LIVE gate is still **CLOSED**. Stop geometry remains **`SL_CLEAR_ATR = 0.5`**; the owner-signed `structstop1.5` pre-registration is still **not deployed**. `RR_TARGET = 1.5`, `BE_TRIGGER_R = 0.75`, `MAX_HOLD_MINUTES = 240`, the 30-min entries-only gap guard and the B2/B3 broker-side management/reconciliation are unchanged. **No strategy variable and no cost assumption changed.** B4 (2026-11-12) touched the LIVE order path only.
+
+**The book:** **887 closed** (191W/388L/305BE/3TIME; **33.0% decisive [29.3–36.9]**), engine ledger **$130.70**, true equity **$113.76**, net **−$741.04** at the registered $0.40 round trip. Log 67,149 bars through `2026-11-11 23:59:05 UTC`; no open trade (`next_trade_num: 888`). `check_data.py`: **0 fail / 9 documented warnings**; the machine snapshot in this file is **FRESH**. The paper ledger remains an unedited counter; the signed policy remains **"no rebaseline ever — let it go negative."**
+
+**Open experiment (observation only):** structural-stop era **n=390** (106W/177L/105BE/2TIME), decisive **37.5% [32.0–43.2]**, gross **−0.028R/trade** on the pressure-report scale, SL/day **5.90**, SL share **45.4%**, scratch **26.9%**, average SL **$6.01**, era DD **$200.06**. Geometry guard **PASS**: 0 stops inside level, 83.8% level-bound, +0.50 ATR median clearance, 3.3 ATR median risk. The bar card reads B1/B2/B3/C1/C2/A4/A5 **OK**. The 10-19 judgement is closed; its lapsed n=150 arm is not reopened by later data. **No demonstrated edge after costs.**
+
+**Gap rides:** registered count **6** (threshold 2), 1 reopen gapped through the stop, **0** exits worse than the stop, 3 scratch stops, **0** weekend rides — recorded, not re-judged; the §7 judgement stays closed. **New observation (no action):** the broker moved its daily break from `20:58→22:00` to `21:58→23:00` UTC starting **2026-11-02** with **no** offset change (still `+7200 s`), i.e. a schedule change, not DST. `derive_daily_closure()` now derives exactly `((21,58),(23,0))` from the price log, so the deployed guard follows it on its own.
+
+**G1 / A2:** G1 remains signed for the single registered change `SL_CLEAR_ATR 0.5 → 1.5`. A2 is still blocked on an actual **flat-host check at deploy time** — the local book is flat, but this checkout cannot reach the production host, so that is not host evidence. The cutover remains the host's `autosync: merge upstream` commit time, not this session's date or merge time.
+
+**Track B — B4 DONE 2026-11-12:** the LIVE order path now refuses to send without (1) `terminal_info().connected` **and** `trade_allowed`, (2) a lot size on the **broker's own** `volume_min`/`volume_step`/**`volume_max`** grid with SL/TP outside its `trade_stops_level`, and (3) a **measured** round trip ≤ `LIVE_COST_MAX_PCT_OF_R = 20%` of 1R. Free margin is checked through the broker's `order_calc_margin()` (leverage-aware — the captured spec is 1:1000). Every refusal happens before `order_send` and alerts once. Scorecard **14→17 PASS, 3→0 TODO, 3 MANUAL**, gate **CLOSED**; 28 new hermetic tests, smoke **Scenario AD**, and each check re-pinned through the call graph so a disconnected guard goes red again. **No broker connection, no arming, no order, no strategy change.** Evidence: `docs/ANALYSIS-2026-11-12-b4-live-order-safety.md`.
+
+**Cost and clock:** quote coverage **27/14 complete UTC days and 3/2 weekends**; spread-only measured round trip on **309** matched trades mean/median **$0.55**, p90 $0.57 (max $1.66). This is **not** the all-in model — slippage/commission/swap remain unresolved, so the registered **$0.40 stays fixed** pending A6. The 2026-11-06 "logger STALE" flag does **not** recur: quotes are continuous to `2026-11-11 23:59:30` and the price log to `23:59:05`, both alive at the collection boundary. Broker offset **+2h**, EU rule fits 100% of 56,304 rows. Captured symbol spec remains **REAL / IOC-only**; any DEMO evidence must use a DEMO account and a separate data directory.
+
+**Engine + readiness:** `live_readiness.py` = **17 PASS / 0 TODO / 3 MANUAL; LIVE GATE CLOSED**. **Every code check is now PASS**; the three MANUAL items are the complete cost model (A6), DEMO-account evidence (B5, host/operator — the file does not exist yet) and independent edge evidence (Track A). `smoke_test.py` A–AD PASSED; `test_live_manage.py` **25**, `test_live_readiness.py` **24**, `test_live_safety.py` **28**, `test_readiness_tab.py` **16**, `test_manual_chart.py` **32**, `goldbot/tests` **64**. `py_compile` OK. An AST diff against the previous commit shows **`execute_live_trade` is the only changed function** — the paper path is byte-identical. A green scorecard is a code check and **never** permission for G2.
+
+**Next queue:** **B5** is now the lowest-numbered open Track-B step and it is a **host/operator action** (DEMO-account evidence written to `docs/` as `DEMO-EVIDENCE.md`, including a 48 h stable run — DEMO account, separate data dir). **A2** independently awaits a verified flat-host window. **A6** (complete cost model) follows the preceding Track-B queue step and its sample gate is already met. Remain paper-only. For the complete queue and ritual, follow `docs/EXECUTION-PLAN.md`.
+
 ## 2026-11-12 — §1 superseded (B4 complete; collection 480)
 
 *(The following is the 2026-11-06 current-state block, preserved verbatim when §1 was refreshed on 2026-11-12.
