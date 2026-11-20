@@ -14,7 +14,7 @@
     "trade_expert": true,
     "trade_mode": 2
   },
-  "captured_utc": "2026-11-20 07:56:01",
+  "captured_utc": "2026-11-20 13:56:01",
   "decoded": {
     "account_kind": "REAL",
     "calc_mode": "CFD_LEVERAGE",
@@ -42,15 +42,15 @@
     "swap_triple_day": "WED",
     "symbol_trade_mode": "FULL"
   },
-  "hash": "1ce4d83e9b30",
+  "hash": "2e751cf53375",
   "label": "",
   "probes": {
     "calc_margin_usd_0.01lot": 3.57,
     "calc_profit_usd_0.01lot_plus_1usd": 1.0,
-    "price_used": 3573.98
+    "price_used": 3567.62
   },
   "schema": 1,
-  "spread_points_now": 54,
+  "spread_points_now": 55,
   "symbol": "GOLD",
   "symbol_info": {
     "currency_base": "USD",
@@ -95,8 +95,8 @@
     "trade_tick_value_profit": 1.0,
     "volume_limit": 0.0,
     "volume_max": 50.0,
-    "volume_min": 0.01,
-    "volume_step": 0.01
+    "volume_min": 0.001,
+    "volume_step": 0.001
   },
   "terminal": {
     "build": 6230,
