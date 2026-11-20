@@ -2213,3 +2213,6 @@ Timestamp,Reason,Price,ATR
 2026-11-19 23:02:04,SL Cooldown: 29 min remaining,3633.56,3.48
 2026-11-19 23:08:00,SL Cooldown: 24 min remaining,3631.66,3.47
 2026-11-19 23:20:01,SL Cooldown: 12 min remaining,3631.19,3.06
+2026-11-20 01:01:01,SL Cooldown: 6 min remaining (2 consecutive SLs -> 60m cooldown),3602.38,5.91
+2026-11-20 02:43:03,ATR too high - News volatility (7.35 > 4.5),3547.28,7.35
+2026-11-20 02:59:04,ATR too high - News volatility (6.19 > 4.5),3550.33,6.19
