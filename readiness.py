@@ -98,6 +98,11 @@ MILESTONES = [
      "Connection, broker volume/stops limits, leverage-aware margin and a measured cost-as-%-of-R veto "
      "before any order; 17 PASS / 0 TODO / 3 MANUAL, gate CLOSED.",
      "docs/ANALYSIS-2026-11-12-b4-live-order-safety.md"),
+    ("2026-11-22", "A6 — all-in cost model + November feed forensics",
+     "All four cost legs modelled: spread measured $0.55, swap computed, slippage/commission declared "
+     "unobservable with sensitivities (all-in ~$0.57). Three BOTH-FEEDS-DOWN November outages "
+     "documented; #819 marked not judgeable. $0.40 stays registered.",
+     "docs/ANALYSIS-2026-11-22-a6-all-in-cost-model.md"),
 ]
 
 # Blockers that no code commit can clear. `who` is the person/place that must act.
@@ -118,8 +123,14 @@ BLOCKERS = [
      "rejection, disconnect, restart, reconciliation and 48 h stable. The captured spec says REAL.",
      "docs/ANALYSIS-2026-11-12-b4-live-order-safety.md"),
     ("Evidence", "Positive net expectancy",
-     "Whole book net −$713 at the registered $0.40; no independent forward window yet.",
-     "docs/REVIEW-2026-10-26-full-system-audit.md"),
+     "Whole book net −$826 at the registered $0.40 (−$994 at the measured all-in $0.57); negative even at "
+     "$0.00 cost, so no cost assumption rescues it. No independent forward window yet.",
+     "docs/ANALYSIS-2026-11-22-a6-all-in-cost-model.md"),
+    ("Host", "November feed outages (3 in 6 days)",
+     "Both feeds went silent inside open sessions: 11-04 08:17→19:33 (676 open min), 11-05 03:00→03:26 "
+     "(26 min, #819 open), 11-06 13:50→20:55 (425 min). Needs journal/log review + restart durability; "
+     "acceptance test is `python3 tools/feed_forensics.py` showing no BOTH-FEEDS-DOWN row.",
+     "docs/ANALYSIS-2026-11-22-feed-holes-november.md"),
     ("Owner", "G2 — real-money approval",
      "Never delegated to 'Follow execution plan'. Required even if every check is green.",
      "docs/EXECUTION-PLAN.md"),
@@ -218,13 +229,19 @@ def build_timeline(now, progress, counts):
              "Connection (`connected` + `trade_allowed`), broker volume/stops limits, leverage-aware margin "
              "and a measured cost-as-%-of-R veto. 28 hermetic tests + smoke Scenario AD. **No code TODO "
              "remains**; the gate is CLOSED on the three MANUAL items alone."),
+        _row("a6", "A6 — all-in cost model", "done", "done", "2026-11-22",
+             "Spread measured ($0.55), swap computed (−$2.66 both-sided), slippage and commission "
+             "DECLARED unobservable with sensitivities → all-in ~$0.57. $0.40 stays registered pending "
+             "an owner decision; the book is negative at $0.00, so no cost rescues it."),
         _row("track_b", "LIVE execution engineering (Track B)", "active",
              f"{counts['todo']} TODO · {counts['manual']} MANUAL", "B5 next (host)",
              "Every code check is PASS; each remaining step is host/operator evidence."),
         _row("demo", "DEMO-account evidence (B5)", "blocked", "— (host)", "host action",
              "The next open Track-B step and it cannot be produced from the repo: a demo account + separate "
              "data dir, fill/SLTP/BE/time/rejection/disconnect/restart/reconciliation and 48 h stable. The "
-             "captured spec says REAL."),
+             "captured spec says REAL. A 48 h DEMO run needs the feed to survive 48 h — three "
+             "BOTH-FEEDS-DOWN outages happened in six days in November, so the restart durability must be "
+             "fixed first (`tools/feed_forensics.py` is the acceptance test)."),
         _row("edge_review", "Independent edge reassessment (2–4 months)", "conditional",
              f"~{edge_lo}–{edge_hi} d",
              f"{_date(AUDIT + timedelta(days=edge_lo))} – {_date(AUDIT + timedelta(days=edge_hi))}",

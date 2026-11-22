@@ -385,12 +385,26 @@ def data_checks(root=ROOT, progress=None):
         f"account block has {len(account)} allow-listed fields, no identifiers" if not hits else
         f"forbidden keys present in account block: {hits}"))
 
+    # A6 (2026-11-22): the dated analysis exists and models all four legs
+    # (docs/ANALYSIS-2026-11-22-a6-all-in-cost-model.md), so the EVIDENCE CLASS is
+    # resolved — but the check stays MANUAL on purpose: commission and slippage are
+    # not observable from a quotes CSV, and a document that says so is evidence of
+    # the gap, not evidence that closes it. Only demo fills / a broker statement can.
+    a6 = os.path.join(root, "docs", "ANALYSIS-2026-11-22-a6-all-in-cost-model.md")
+    if os.path.isfile(a6):
+        detail = (f"dated A6 analysis present and all four legs modelled: spread "
+                  f"${med:.2f} measured, swap computed, slippage+commission DECLARED "
+                  "unobservable with sensitivities (all-in ~$0.57 round trip). $0.40 stays "
+                  "registered. Still MANUAL: only demo fills or a broker statement can "
+                  "promote the two unobservable legs." if med is not None else
+                  "dated A6 analysis present; no usable quote rows to measure the spread leg")
+    else:
+        detail = (f"median spread-only ${med:.2f}/trade vs the registered $0.40 assumption; "
+                  "spread alone is a LOWER bound. Needs a dated cost doc before any re-costing."
+                  if med is not None else "no usable quote rows yet")
     out.append(_check(
         "cost_model", "evidence", "measured all-in cost (spread + slippage + commission + swap)",
-        MANUAL,
-        f"median spread-only ${med:.2f}/trade vs the registered $0.40 assumption; "
-        "spread alone is a LOWER bound. Needs a dated cost doc before any re-costing."
-        if med is not None else "no usable quote rows yet"))
+        MANUAL, detail))
 
     demo = os.environ.get("GOLD_DEMO_EVIDENCE", os.path.join(root, "docs", "DEMO-EVIDENCE.md"))
     out.append(_check(

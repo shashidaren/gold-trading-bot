@@ -90,6 +90,10 @@ python3 tools/pressure_report.py            # 13b. dashboard read layer: tape pr
                                             #     and the calibration of the pressure gauge (display-only)
 python3 tools/win_rate_report.py --spread 0.40   # 14. the same report net of the assumed round-trip cost (default output unchanged)
 python3 tools/xm_quote_report.py            # 15. what the quote logger measured: spreads, cost vs the assumed $0.40, server clock, spec
+python3 tools/cost_model.py                 # 15b. the ALL-IN cost model: spread (measured) + swap (computed) +
+                                            #      slippage/commission (declared unobservable, with sensitivities)
+python3 tools/feed_forensics.py             # 15c. which feed lost data and whether a position was open: closure vs
+                                            #      outage vs logger fault, minute by minute, using the other feed as the witness
 python3 tools/history_to_log.py mt5_history.csv --out history_utc.csv && python3 tools/strategy_lab.py --bars history_utc.csv
                                             # 16. large-N: broker history -> validated UTC -> replay (docs/ACCELERATE-TESTING.md)
 ```
