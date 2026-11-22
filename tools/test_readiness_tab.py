@@ -172,6 +172,11 @@ class DashboardWiringTests(unittest.TestCase):
         self.assertIn("A2 — the deploy commit itself", text)
         self.assertIn("LIVE-gate checks (read-only)", text)
         self.assertIn("not deadlines", text)
+        # 2026-11-22 A6 decision: the page must show BOTH costs, so neither can be mistaken
+        # for the other — the registered one is labelled as binding and $0.57 as the next.
+        self.assertIn("binding now", text)
+        self.assertIn(self.view["progress"]["next_cost_text"], text)   # $0.57, dated 2026-12-01
+        self.assertIn("Cost basis — which number is binding", text)
 
     def test_readiness_tab_survives_a_broken_pressure_read(self):
         self.dashboard.PR = None

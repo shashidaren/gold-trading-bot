@@ -36,7 +36,11 @@ CUTOVER = datetime(2026, 10, 6, 3, 0, tzinfo=UTC)             # structural-stop 
 AUDIT = datetime(2026, 10, 26, 14, 15, tzinfo=UTC)            # full-system audit
 US_DST_END = datetime(2026, 11, 1, 6, 0, tzinfo=UTC)          # US-rule cross-check
 REGISTERED_END = datetime(2026, 12, 1, 21, 0, tzinfo=UTC)     # structstop1.5 window end
-ASSUMED_COST = 0.40                                           # registered round trip
+ASSUMED_COST = 0.40                                           # REGISTERED for the CURRENT window
+NEXT_COST = 0.57                                              # adopted 2026-11-22 for the NEXT window
+COST_AMENDMENT = datetime(2026, 11, 22, 12, 45, tzinfo=UTC)   # when the owner's decision was recorded
+NEXT_COST_FROM = datetime(2026, 12, 1, 21, 0, tzinfo=UTC)     # the registered window's date gate
+COST_OVERRIDE_RT = 0.70                                       # PREREG-2026-10-26 §C cost override
 
 # Conditional research horizons, measured from the audit date. Not promises.
 EDGE_RANGE_DAYS = (61, 122)        # ~2–4 months
@@ -103,6 +107,12 @@ MILESTONES = [
      "unobservable with sensitivities (all-in ~$0.57). Three BOTH-FEEDS-DOWN November outages "
      "documented; #819 marked not judgeable. $0.40 stays registered.",
      "docs/ANALYSIS-2026-11-22-a6-all-in-cost-model.md"),
+    ("2026-11-22", "A6 cost decision — $0.40 stays, $0.57 for the NEXT window",
+     "The registered structstop1.5 bar keeps $0.40/side because its own cost-override clause did not fire "
+     "(measured $0.57 ≤ the pre-declared $0.70), so changing it mid-window would be exactly the "
+     "post-outcome re-cost §0 forbids. $0.57 is adopted for the next window and is visible in every cost "
+     "view rather than swapped in.",
+     "docs/REVIEW-2026-11-22-a6-cost-decision.md"),
 ]
 
 # Blockers that no code commit can clear. `who` is the person/place that must act.
@@ -126,6 +136,11 @@ BLOCKERS = [
      "Whole book net −$826 at the registered $0.40 (−$994 at the measured all-in $0.57); negative even at "
      "$0.00 cost, so no cost assumption rescues it. No independent forward window yet.",
      "docs/ANALYSIS-2026-11-22-a6-all-in-cost-model.md"),
+    ("Rule", "No new reading at the measured cost until 2026-12-01",
+     "The registered structstop1.5 bar was written at $0.40/side and its cost-override clause did not "
+     "fire, so re-reading any net figure at the measured $0.57 mid-window would be a post-outcome "
+     "re-cost. $0.57 applies from the next window (2026-12-01 21:00 UTC at the earliest).",
+     "docs/REVIEW-2026-11-22-a6-cost-decision.md"),
     ("Host", "November feed outages (3 in 6 days)",
      "Both feeds went silent inside open sessions: 11-04 08:17→19:33 (676 open min), 11-05 03:00→03:26 "
      "(26 min, #819 open), 11-06 13:50→20:55 (425 min). Needs journal/log review + restart durability; "
@@ -195,12 +210,20 @@ def build_timeline(now, progress, counts):
         _row("structstop_era", "Structural-stop era", "active",
              f"{_elapsed_days(CUTOVER, now)} d elapsed", _date(CUTOVER),
              "One unchanged geometry. SCREEN MET at its registered gate; PASS arm lapsed."),
+        _row("cost_basis", "Cost basis — which number is binding", "done", "set",
+             _date(COST_AMENDMENT),
+             f"The registered **${ASSUMED_COST:.2f}** round trip is binding for the CURRENT "
+             f"structstop1.5 bar and cannot be replaced mid-window: the bar's own cost-override "
+             f"clause fires only above ${COST_OVERRIDE_RT:.2f}, and the measured all-in is "
+             f"${NEXT_COST:.2f}. Measured **${NEXT_COST:.2f}** is adopted for the NEXT window. "
+             "Net figures at the measured cost are shown as a diagnostic only and are never a bar."),
         _row("cost_sample", f"Cost sample {days_target} days / {weekends_target} weekends",
              "done" if cost_met else "active",
              "met" if cost_met else f"~{cost_days_left} d left", cost_eta,
              f"{days_done}/{days_target} complete UTC days, {weekends_done}/{weekends_target} weekends"
              + (f"; median spread ${med:.2f}" if med is not None else "")
-             + ". Keep the registered $0.40 round trip until met."),
+             + (". Sample met — it no longer gates anything; the binding cost is the row above." if cost_met
+                else f". Keep the registered ${ASSUMED_COST:.2f} round trip until met.")),
         _row("dst_us", "US DST discriminating window", "active",
              f"~{_ceil_days(US_DST_END, now)} d left", _date(US_DST_END),
              "Cross-check only: the EU rule is already confirmed on observed offsets (+2h)."),
@@ -311,6 +334,8 @@ def readiness_view(root=ROOT, now=None, checks=None, progress=None):
             "weekends_target": pg.get("target_weekends", 2),
             "median_spread_text": f"${med:.2f}" if med is not None else "—",
             "assumed_cost_text": f"${ASSUMED_COST:.2f}",
+            "next_cost_text": f"${NEXT_COST:.2f}",
+            "next_cost_from": _date(NEXT_COST_FROM),
             "rows": pg.get("rows", 0),
             "offsets": pg.get("offsets", []),
             "filling_flags": pg.get("filling_flags") or [],
