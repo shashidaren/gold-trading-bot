@@ -939,7 +939,9 @@ HTML_TEMPLATE = """
                             Cost sample <span class="font-mono text-slate-200">{{ r.progress.days_done }}/{{ r.progress.days_target }} days,
                             {{ r.progress.weekends_done }}/{{ r.progress.weekends_target }} weekends</span> ·
                             median spread <span class="text-amber-300">{{ r.progress.median_spread_text }}</span> vs registered
-                            <span class="text-slate-200">{{ r.progress.assumed_cost_text }}</span> ·
+                            <span class="text-slate-200">{{ r.progress.assumed_cost_text }}</span> (binding now;
+                            measured <span class="text-slate-200">{{ r.progress.next_cost_text }}</span> from
+                            <span class="font-mono text-slate-200">{{ r.progress.next_cost_from }}</span>) ·
                             broker offsets <span class="font-mono text-slate-200">{{ r.progress.offsets|join(', ') }}</span>
                         </div>
                     </div>

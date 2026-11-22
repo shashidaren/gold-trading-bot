@@ -160,6 +160,24 @@ class TestChecker(unittest.TestCase):
         for cid in ("demo_evidence", "cost_model", "edge_evidence"):
             self.assertEqual(self.by_id[cid]["status"], LR.MANUAL, cid)
 
+    def test_a6_analysis_is_evidence_of_the_gap_not_of_the_fix(self):
+        """A6 (2026-11-22): the dated all-in cost model exists and is acknowledged in the
+        scorecard — but it must NOT promote the check. Slippage and commission are not
+        observable from a quotes CSV; only demo fills or a broker statement can close it."""
+        self.assertTrue(os.path.isfile(os.path.join(
+            ROOT, "docs", "ANALYSIS-2026-11-22-a6-all-in-cost-model.md")))
+        ev = self.by_id["cost_model"]["evidence"]
+        self.assertIn("all four legs", ev)
+        self.assertIn("all-in ~$0.57", ev)
+        self.assertIn("$0.40 stays registered", ev)
+        # 2026-11-22 owner decision: the registered cost is kept for THIS window because the
+        # pre-registration's own override clause did not fire, and $0.57 is deferred to the next one.
+        self.assertIn("$0.57 applies to the NEXT window", ev)
+        self.assertTrue(os.path.isfile(os.path.join(
+            ROOT, "docs", "REVIEW-2026-11-22-a6-cost-decision.md")))
+        self.assertIn("Still MANUAL", ev)
+        self.assertNotEqual(self.by_id["cost_model"]["status"], LR.PASS)
+
     def test_no_code_todo_remains(self):
         """Only the three operator/evidence items may be open after B4."""
         todo = sorted(c["id"] for c in self.checks if c["status"] == LR.TODO)
