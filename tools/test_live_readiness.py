@@ -170,6 +170,11 @@ class TestChecker(unittest.TestCase):
         self.assertIn("all four legs", ev)
         self.assertIn("all-in ~$0.57", ev)
         self.assertIn("$0.40 stays registered", ev)
+        # 2026-11-22 owner decision: the registered cost is kept for THIS window because the
+        # pre-registration's own override clause did not fire, and $0.57 is deferred to the next one.
+        self.assertIn("$0.57 applies to the NEXT window", ev)
+        self.assertTrue(os.path.isfile(os.path.join(
+            ROOT, "docs", "REVIEW-2026-11-22-a6-cost-decision.md")))
         self.assertIn("Still MANUAL", ev)
         self.assertNotEqual(self.by_id["cost_model"]["status"], LR.PASS)
 

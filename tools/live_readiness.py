@@ -391,12 +391,18 @@ def data_checks(root=ROOT, progress=None):
     # not observable from a quotes CSV, and a document that says so is evidence of
     # the gap, not evidence that closes it. Only demo fills / a broker statement can.
     a6 = os.path.join(root, "docs", "ANALYSIS-2026-11-22-a6-all-in-cost-model.md")
+    decision = os.path.join(root, "docs", "REVIEW-2026-11-22-a6-cost-decision.md")
     if os.path.isfile(a6):
+        decided = os.path.isfile(decision)
         detail = (f"dated A6 analysis present and all four legs modelled: spread "
                   f"${med:.2f} measured, swap computed, slippage+commission DECLARED "
-                  "unobservable with sensitivities (all-in ~$0.57 round trip). $0.40 stays "
-                  "registered. Still MANUAL: only demo fills or a broker statement can "
-                  "promote the two unobservable legs." if med is not None else
+                  "unobservable with sensitivities (all-in ~$0.57 round trip). "
+                  + ("Owner decision recorded 2026-11-22: $0.40 stays registered for the CURRENT "
+                     "structstop1.5 window (its own cost-override clause needs >$0.70 and the measured "
+                     "$0.57 does not fire it); $0.57 applies to the NEXT window from 2026-12-01. "
+                     if decided else "$0.40 stays registered, decision pending. ")
+                  + "Still MANUAL: only demo fills or a broker statement can promote the two "
+                    "unobservable legs." if med is not None else
                   "dated A6 analysis present; no usable quote rows to measure the spread leg")
     else:
         detail = (f"median spread-only ${med:.2f}/trade vs the registered $0.40 assumption; "
