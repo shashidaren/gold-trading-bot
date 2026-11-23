@@ -2234,3 +2234,8 @@ Timestamp,Reason,Price,ATR
 2026-11-20 13:46:07,Blackout: NY Open & US High-Impact Macro Releases,3556.28,3.23
 2026-11-20 15:04:04,Blackout: NY Open & US High-Impact Macro Releases,3574.52,4.88
 2026-11-20 15:05:04,Blackout: NY Open & US High-Impact Macro Releases,3572.96,4.87
+2026-11-23 00:24:07,SL Cooldown: 17 min remaining,3577.96,3.72
+2026-11-23 01:37:07,ATR too high - News volatility (5.63 > 4.5),3607.24,5.63
+2026-11-23 01:38:03,ATR too high - News volatility (5.31 > 4.5),3606.67,5.31
+2026-11-23 01:39:04,ATR too high - News volatility (5.38 > 4.5),3605.45,5.38
+2026-11-23 01:50:05,ATR too high - News volatility (4.60 > 4.5),3605.30,4.60
