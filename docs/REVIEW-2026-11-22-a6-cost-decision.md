@@ -106,7 +106,7 @@ state its status, and make it impossible to apply silently.
 ## 4. What this decision does NOT authorise
 
 * **No re-costing of the current window.** SCREEN (n=100) and PASS/FAIL (n=150 or 2026-12-01) are read at
-  **$0.40/side** exactly as registered. A later session quoting a net-R figure "at the measured cost" as
+  **$0.40 round trip ($0.20/side)** exactly as registered. A later session quoting a net-R figure "at the measured cost" as
   if it were the bar is wrong, and this document is the citation that says so.
 * **No strategy change, deploy, or order.** `SL_CLEAR_ATR` stays 0.5, A2 stays host-blocked, `TRADING_MODE`
   stays `FORWARD_TEST`, the LIVE gate stays CLOSED at 17 PASS / 0 TODO / 3 MANUAL.
@@ -145,8 +145,9 @@ python3 tools/handoff_check.py                    # FRESH; --cost blocks all sti
 
 ## 7. One-line answer for the plan
 
-**The owner's decision is recorded: the registered $0.40/side stays for the current `structstop1.5` window
-because the pre-registration's own cost-override clause did not fire (measured $0.57 ≤ the pre-declared
-$0.70); the measured $0.57 becomes the registered yardstick for the next window from 2026-12-01 21:00 UTC
+**The owner's decision is recorded: the registered $0.40 round trip ($0.20/side) stays for the current
+`structstop1.5` window because the pre-registration's own cost-override clause did not fire (measured $0.57
+round trip ≤ the pre-declared $0.70); the measured $0.57 round trip ($0.285/side) becomes the registered
+yardstick for the next window from 2026-12-01 21:00 UTC
 and must be written into that pre-registration before its first trade. Nothing is re-read, re-costed or
 deployed today.**

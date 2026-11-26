@@ -50,7 +50,7 @@ must be **≥ ~5.5/oz** wide (≈ **3 ATR** on a quiet tape) or the spread alone
 | `tools/manual_trade.py` | The CLI: `python3 tools/manual_trade.py` prints the read; `--side/--entry/--stop/--budget` judges **your** numbers; `--log-decision` appends one journal row; `--journal-summary` counts rows. |
 | `dashboard.py` → **🤝 Manual Trade** tab (`?tab=manual`) | The same read as cards: both sides' entry/stop/target/1R, the size table, the daily-break clock, the cost ruler, and the journal command. Display-only, no form, no input, no button. |
 | `tools/test_manual_plan.py` | **39 hermetic tests** (no live CSVs, no clock, no network). |
-| `tools/smoke_test.py` **Scenario AE** | 7 deploy-gate checks, including the one that matters: the manual daily-break mirror must equal `engine.derive_daily_closure()` on the live log. |
+| `tools/smoke_test.py` **Scenario AE** | 8 deploy-gate checks, including the one that matters: the manual daily-break mirror must equal `engine.derive_daily_closure()` on the live log. |
 | `tools/autosync.sh` | `manual_plan.py` added to `DASH_CHANGED` (and the hand-edit detector): it restarts the **dashboard**, never the engine. |
 
 ---

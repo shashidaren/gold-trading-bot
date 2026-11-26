@@ -396,7 +396,9 @@ class DashboardRender(unittest.TestCase):
                        "If you risk", "Record the decision before the outcome",
                        "No edge", "'manual'", "the bot reads"):
             self.assertIn(needle, html)
-        self.assertIn("var TABS = ['simple', 'journal', 'chart', 'boxes', 'manual', "
+        # The parallel Manual desk session added its own ?tab=desk panel; the
+        # TABS list must contain both display-only tabs in this merged tree.
+        self.assertIn("var TABS = ['simple', 'journal', 'chart', 'boxes', 'manual', 'desk', "
                       "'readiness', 'details']", html)
         panel = html[html.index('id="panel-manual"'):html.index("END MANUAL TRADE")]
         # Display-only: no form, no input, no button inside the panel at all.
