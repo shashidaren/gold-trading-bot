@@ -2320,3 +2320,7 @@ Timestamp,Reason,Price,ATR
 2026-11-25 18:26:06,ATR too high - News volatility (4.90 > 4.5),3530.79,4.90
 2026-11-25 18:34:02,ATR too high - News volatility (4.53 > 4.5),3530.94,4.53
 2026-11-25 20:42:04,ATR too high - News volatility (5.09 > 4.5),3568.17,5.09
+2026-11-25 21:45:03,Blackout: Daily Market Rollover & Spread Spike,3577.21,2.23
+2026-11-25 21:46:04,Blackout: Daily Market Rollover & Spread Spike,3578.47,2.26
+2026-11-25 21:47:05,Blackout: Daily Market Rollover & Spread Spike,3579.79,2.35
+2026-11-25 21:50:01,Blackout: Daily Market Rollover & Spread Spike,3581.01,2.28
