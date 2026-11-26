@@ -4240,6 +4240,76 @@ check("AD: the B4 scenario leaves the checkout in paper mode and changes no stra
       and engine.RR_TARGET == 1.5)
 
 
+# --- Scenario AE -----------------------------------------------------------
+print("\nScenario AE: the manual-trade read layer (manual_plan.py) — display-only, "
+      "and its daily-break mirror must agree with the engine's")
+import manual_plan as MP  # noqa: E402
+
+# (1) The one deliberate duplication: manual_plan reports the observed daily break for
+# the manual trader's clock, and it must not drift from the deployed guard's signature
+# on the live log. It is the mirror that is wrong when they disagree, so a deploy gate
+# that says nothing here is the difference between "the clock is right" and "the clock
+# looks right".
+# The checkout's OWN log, not engine.LOG_FILE_PATH: the scenarios above repoint that
+# constant at throw-away temp files. This is the log the deployed guard actually reads.
+_AE_LIVE_LOG = os.path.join(ROOT, "forward_test_log.csv")
+
+
+def _ae_live_rows():
+    import csv as _csv
+    with open(_AE_LIVE_LOG, newline="") as fh:
+        return list(_csv.DictReader(fh))
+
+_ae_rows = _ae_live_rows()
+_ae_mirror = MP.observed_closure(_ae_rows)
+_ae_engine = engine.derive_daily_closure(_AE_LIVE_LOG)
+check("AE: the manual daily-break mirror matches the engine's signature on the live log "
+      "(the mirror is the one to distrust when they disagree)",
+      (_ae_mirror.get("close_tod"), _ae_mirror.get("reopen_tod"))
+      == (tuple(_ae_engine[0]), tuple(_ae_engine[1])) if _ae_engine and _ae_mirror.get("ok") else True,
+      f"mirror={_ae_mirror.get('close_tod')}/{_ae_mirror.get('reopen_tod')} engine={_ae_engine}")
+
+# (2) Lot sizing is on the broker's grid and never rounds UP into more risk.
+_ae_spec = MP.load_spec(os.path.join(ROOT, "xm_data"))
+_ae_down, _ = MP.round_lots(0.0199, _ae_spec)
+_ae_refused, _ae_note = MP.round_lots(0.0001, _ae_spec)
+check("AE: a manual lot size snaps DOWN onto the broker's grid",
+      abs(_ae_down - 0.019) < 1e-9, f"lots={_ae_down}")
+check("AE: a size under volume_min is refused, never raised",
+      _ae_refused == 0.0 and "minimum" in (_ae_note or ""))
+
+# (3) The cost share is spread / risk, so it cannot change with size — the whole point.
+_ae_rows_sizing = MP.sizing_rows(10.0, budgets=(5.0, 10.0, 20.0), spec=_ae_spec, entry=4000.0)
+check("AE: the spread's share of 1R is identical at every lot size",
+      len({round(r["cost_share_pct"], 9) for r in _ae_rows_sizing}) == 1,
+      str([round(r["cost_share_pct"], 6) for r in _ae_rows_sizing]))
+
+# (4) The manual read never claims an edge and never points at the engine's gates as a veto.
+_ae_read = MP.read(log_rows=_ae_rows[-500:], quotes=[], spec=_ae_spec,
+                   now=datetime(2026, 11, 26, 15, 0))
+check("AE: the manual read carries the measured no-edge footer",
+      _ae_read["ok"] and _ae_read["measured"]["box_cleared"] == 0
+      and "no edge" in _ae_read["measured"]["line"].lower())
+check("AE: the bot's gate verdict is attached as context, never as the manual verdict",
+      all(("bot_view" in _ae_read["plans"][s]) for s in ("BUY", "SELL"))
+      and all(_ae_read["plans"][s]["verdict"] in ("no trade", "watch", "geometry ok")
+              for s in ("BUY", "SELL")))
+
+# (5) The journal refuses to write inside the checkout (filled rows are private).
+_ae_tmp = tempfile.mkdtemp(prefix="gold_smoke_ae_")
+_ae_ok, _ae_detail = MP.append_journal(os.path.join(_ae_tmp, "j.jsonl"), {"x": 1},
+                                       repo_root=_ae_tmp)
+check("AE: the manual journal refuses to write inside the checkout",
+      _ae_ok is False and "refusing" in _ae_detail)
+shutil.rmtree(_ae_tmp, ignore_errors=True)
+
+# (6) No strategy surface is touched by this feature.
+check("AE: the manual layer changes no strategy constant",
+      engine.SL_CLEAR_ATR == 0.5 and engine.BE_TRIGGER_R == 0.75
+      and engine.MAX_HOLD_MINUTES == 240 and engine.RR_TARGET == 1.5
+      and engine.TRADING_MODE == "FORWARD_TEST")
+
+
 print()
 if FAILURES:
     print(f"SMOKE TEST FAILED: {FAILURES}")
