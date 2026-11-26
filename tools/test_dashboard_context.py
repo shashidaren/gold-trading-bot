@@ -59,6 +59,52 @@ class DashboardContextTests(unittest.TestCase):
         self.assertEqual(dashboard._safe_format("%.0f", None), "—")
         self.assertEqual(dashboard._safe_format("%.2f", 3.14159), "3.14")
 
+    def test_manual_desk_tab_renders(self):
+        # New tab (2026-11-26): a broken/missing companion must never take the
+        # page down, and the private log is a HEADER only — no filled rows.
+        os.environ['GOLD_DATA_DIR'] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        import dashboard
+        response = dashboard.app.test_client().get('/?tab=desk')
+        self.assertEqual(response.status_code, 200)
+        page = response.get_data(as_text=True)
+        for title in ('Manual desk', 'Cost ruler', 'Private manual observation log',
+                      'timestamp_utc,bot_trade_id,side', 'display-only advice'):
+            self.assertIn(title, page)
+        self.assertIn('id="panel-desk"', page)
+
+    def test_manual_trade_tab_renders(self):
+        # main's already-landed 🤝 Manual Trade tab (PR #72) must survive the
+        # integration with the separate 🧾 Manual desk tab.
+        os.environ['GOLD_DATA_DIR'] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        import dashboard
+        response = dashboard.app.test_client().get('/?tab=manual')
+        self.assertEqual(response.status_code, 200)
+        page = response.get_data(as_text=True)
+        self.assertIn('id="panel-manual"', page)
+        self.assertIn('Manual trade — size it, cost it, then decide', page)
+        self.assertIn('python3 tools/manual_trade.py', page)
+        self.assertNotIn('href="/scalp"', page)
+
+    def test_manual_desk_open_trade_overlay_is_in_the_chart_view(self):
+        # The deferred Chart-tab item: an open PAPER trade draws three labelled
+        # lines; a flat book draws none. No engine import, no order path.
+        os.environ['GOLD_DATA_DIR'] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        import dashboard
+        status = dict(trade_active=True, trade_type='BUY', current_trade_num=1065,
+                      entry_price=3580.63, stop_loss=3574.00, take_profit=3590.57,
+                      entry_time='2026-11-26 12:12:06', be_armed=False)
+        dashboard._chart_cache.update({"key": None, "group": None, "view": None})
+        try:
+            with_open = dashboard.chart_context(5, None, status)
+            flat = dashboard.chart_context(5, None, {"trade_active": False})
+        finally:
+            dashboard._chart_cache.update({"key": None, "group": None, "view": None})
+        self.assertTrue(with_open["ok"], with_open.get("reason"))
+        self.assertEqual(with_open["view"]["open_levels"], 3)
+        self.assertEqual(flat["view"]["open_levels"], 0)
+        kinds = [l["kind"] for l in with_open["view"]["levels"] if l["kind"].startswith("open_")]
+        self.assertEqual(kinds, ['open_entry', 'open_stop', 'open_target'])
+
     def test_render_survives_an_open_trade_outlook(self):
         # Before any era trade has closed, signal_outlook() has no hold to take a
         # median of, so hold_median_min is None. The template used to pass that
@@ -197,7 +243,7 @@ class BoxReadTests(unittest.TestCase):
         # a new page must not break the existing tab switch (journal is also a tab).
         # The Manual Scalping page was removed in the 2026-10-23 redesign: it is not
         # reachable and must not come back as a dead link.
-        self.assertIn("var TABS = ['simple', 'journal', 'chart', 'boxes', 'readiness', 'details']", html)
+        self.assertIn("var TABS = ['simple', 'journal', 'chart', 'boxes', 'manual', 'desk', 'readiness', 'details']", html)
         self.assertNotIn('href="/scalp"', html)
         # Tab persistence must update the URL as well as localStorage: the
         # meta-refresh otherwise replays an old ?tab=chart deep link.

@@ -138,7 +138,9 @@ if [ -n "$REMOTE_SHA" ] && [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
 fi
 
 if [ "$NEED_MERGE" = "1" ]; then
-    if ! git diff --quiet -- engine.py trade_filter.py dashboard.py pressure.py chart.py readiness.py goldbot/ tools/ 2>/dev/null; then
+    # manual_plan.py (Manual Trade tab) and manual_desk.py (Manual desk tab) are
+    # both display-only read layers; a local edit to either must block the merge.
+    if ! git diff --quiet -- engine.py trade_filter.py dashboard.py pressure.py chart.py readiness.py manual_plan.py manual_desk.py goldbot/ tools/ 2>/dev/null; then
         DEPLOY_MSG="SKIPPED - local code edits detected on server (hand-edits are not supported); manual pull needed"
         log "$DEPLOY_MSG"
     elif [ "$AUTO_DEPLOY" != "1" ]; then
@@ -147,10 +149,11 @@ if [ "$NEED_MERGE" = "1" ]; then
     else
         CODE_CHANGED=$(git diff --name-only HEAD "$REMOTE_SHA" -- '*.py' | grep -c . || true)
         CORE_CHANGED=$(git diff --name-only HEAD "$REMOTE_SHA" -- engine.py trade_filter.py | grep -c . || true)
-        # readiness.py is the Readiness tab's read layer and tools/live_readiness.py
-        # is its scorecard source — either changing must restart the dashboard so
-        # the 5-minute cached view is rebuilt. Display-only, never the engine.
-        DASH_CHANGED=$(git diff --name-only HEAD "$REMOTE_SHA" -- dashboard.py pressure.py chart.py readiness.py tools/live_readiness.py goldbot/ | grep -c . || true)
+        # readiness.py is the Readiness tab's read layer, tools/live_readiness.py is
+        # its scorecard source, manual_plan.py is the Manual Trade tab's read layer,
+        # and manual_desk.py is the Manual desk tab's. All display-only: a change
+        # must restart the DASHBOARD (5-min cache), never the engine.
+        DASH_CHANGED=$(git diff --name-only HEAD "$REMOTE_SHA" -- dashboard.py pressure.py chart.py readiness.py manual_plan.py manual_desk.py tools/live_readiness.py goldbot/ | grep -c . || true)
         # the box-alert sidecar runs pressure.py's read layer, so either file changing
         # needs its own restart (it is display-only: like the dashboard, never the engine)
         BOXALERT_CHANGED=$(git diff --name-only HEAD "$REMOTE_SHA" -- tools/box_alert.py pressure.py | grep -c . || true)

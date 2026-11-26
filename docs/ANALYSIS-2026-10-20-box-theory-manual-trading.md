@@ -163,7 +163,7 @@ in the sense of §7 — nothing here changes `engine.py`.
    manual trades.
 6. **Charge the real cost every time.** $0.40–$0.55 round trip. At 1:1 you need
    ~54% to break even; at 1:1.5 about 43%. A "50% box" is a losing system.
-7. **Skip 20:58–22:00 UTC** (the daily break — see the §7 closure-gap trigger) and
+7. **Skip the broker's daily break (currently 21:58–23:00 UTC since 2026-11-02; run `engine.derive_daily_closure()` for the current window — the 20:58–22:00 UTC window below was the pre-DST schedule)** (see the §7 closure-gap trigger) and
    high-impact news. A gap through a box stop is not a stop.
 8. **No re-entry within 10–15 minutes of a scratch.** 47% of the 0.75R-era
    entries came <10 min after the previous exit; that churn is a cost pump.
