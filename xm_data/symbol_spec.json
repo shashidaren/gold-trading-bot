@@ -14,7 +14,7 @@
     "trade_expert": true,
     "trade_mode": 2
   },
-  "captured_utc": "2026-11-25 19:56:56",
+  "captured_utc": "2026-11-26 01:56:56",
   "decoded": {
     "account_kind": "REAL",
     "calc_mode": "CFD_LEVERAGE",
@@ -45,12 +45,12 @@
   "hash": "bb6928a5f670",
   "label": "",
   "probes": {
-    "calc_margin_usd_0.01lot": 3.55,
+    "calc_margin_usd_0.01lot": 3.57,
     "calc_profit_usd_0.01lot_plus_1usd": 1.0,
-    "price_used": 3547.8
+    "price_used": 3565.28
   },
   "schema": 1,
-  "spread_points_now": 56,
+  "spread_points_now": 57,
   "symbol": "GOLD",
   "symbol_info": {
     "currency_base": "USD",
