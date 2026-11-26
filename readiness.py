@@ -108,16 +108,17 @@ MILESTONES = [
      "documented; #819 marked not judgeable. $0.40 stays registered.",
      "docs/ANALYSIS-2026-11-22-a6-all-in-cost-model.md"),
     ("2026-11-22", "A6 cost decision — $0.40 stays, $0.57 for the NEXT window",
-     "The registered structstop1.5 bar keeps $0.40/side because its own cost-override clause did not fire "
-     "(measured $0.57 ≤ the pre-declared $0.70), so changing it mid-window would be exactly the "
-     "post-outcome re-cost §0 forbids. $0.57 is adopted for the next window and is visible in every cost "
-     "view rather than swapped in.",
+     "The registered structstop1.5 bar keeps $0.40 round trip ($0.20/side) because its own cost-override "
+     "clause did not fire (measured $0.57 round trip ≤ the pre-declared $0.70), so changing it mid-window "
+     "would be exactly the post-outcome re-cost §0 forbids. $0.57 round trip ($0.285/side) is adopted for "
+     "the next window and is visible in every cost view rather than swapped in.",
      "docs/REVIEW-2026-11-22-a6-cost-decision.md"),
-    ("2026-11-26", "Manual desk + B5 feed precondition verified on checked-in data",
-     "Display-only companion for the owner's manual trading (conditions checklist, cost/break-even, private "
-     "§7 observation template, open paper trade drawn on the chart). Ritual refresh + feed_forensics --days 14 "
-     "clean, so the trailing 14-day acceptance test for B5 is met on this snapshot; B5 is still a HOST action. "
-     "No strategy variable, cost, ledger row or order path changed.",
+    ("2026-11-26", "Two manual-trading aids + B5 feed precondition verified on checked-in data",
+     "Main's PR #72 landed the display-only 🤝 Manual Trade tab (structural stop on YOUR entry, cost share of 1R, "
+     "broker-grid lot table, daily-break clock, private §7 journal); this branch adds the complementary 🧾 Manual "
+     "desk (conditions checklist, cost/break-even, private §7 CSV template) and draws the bot's open paper trade on "
+     "the chart. Ritual refresh + feed_forensics --days 14 clean, so the trailing 14-day acceptance test for B5 is "
+     "met on this snapshot; B5 is still a HOST action. No strategy variable, cost, ledger row or order path changed.",
      "docs/ANALYSIS-2026-11-26-manual-desk.md"),
 ]
 
@@ -145,9 +146,10 @@ BLOCKERS = [
      "$0.00 cost, so no cost assumption rescues it. No independent forward window yet.",
      "docs/ANALYSIS-2026-11-22-a6-all-in-cost-model.md"),
     ("Rule", "No new reading at the measured cost until 2026-12-01",
-     "The registered structstop1.5 bar was written at $0.40/side and its cost-override clause did not "
-     "fire, so re-reading any net figure at the measured $0.57 mid-window would be a post-outcome "
-     "re-cost. $0.57 applies from the next window (2026-12-01 21:00 UTC at the earliest).",
+     "The registered structstop1.5 bar was written at $0.40 round trip ($0.20/side) and its cost-override "
+     "clause did not fire, so re-reading any net figure at the measured $0.57 round trip mid-window would "
+     "be a post-outcome re-cost. $0.57 round trip ($0.285/side) applies from the next window "
+     "(2026-12-01 21:00 UTC at the earliest).",
      "docs/REVIEW-2026-11-22-a6-cost-decision.md"),
     ("Host", "November feed outages (3 in 6 days) — trailing 14 d now clean",
      "Both feeds went silent inside open sessions: 11-04 08:17→19:33 (676 open min), 11-05 03:00→03:26 "

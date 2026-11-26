@@ -64,13 +64,26 @@ class DashboardContextTests(unittest.TestCase):
         # page down, and the private log is a HEADER only — no filled rows.
         os.environ['GOLD_DATA_DIR'] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         import dashboard
-        response = dashboard.app.test_client().get('/?tab=manual')
+        response = dashboard.app.test_client().get('/?tab=desk')
         self.assertEqual(response.status_code, 200)
         page = response.get_data(as_text=True)
         for title in ('Manual desk', 'Cost ruler', 'Private manual observation log',
                       'timestamp_utc,bot_trade_id,side', 'display-only advice'):
             self.assertIn(title, page)
+        self.assertIn('id="panel-desk"', page)
+
+    def test_manual_trade_tab_renders(self):
+        # main's already-landed 🤝 Manual Trade tab (PR #72) must survive the
+        # integration with the separate 🧾 Manual desk tab.
+        os.environ['GOLD_DATA_DIR'] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        import dashboard
+        response = dashboard.app.test_client().get('/?tab=manual')
+        self.assertEqual(response.status_code, 200)
+        page = response.get_data(as_text=True)
         self.assertIn('id="panel-manual"', page)
+        self.assertIn('Manual trade — size it, cost it, then decide', page)
+        self.assertIn('python3 tools/manual_trade.py', page)
+        self.assertNotIn('href="/scalp"', page)
 
     def test_manual_desk_open_trade_overlay_is_in_the_chart_view(self):
         # The deferred Chart-tab item: an open PAPER trade draws three labelled
@@ -230,7 +243,7 @@ class BoxReadTests(unittest.TestCase):
         # a new page must not break the existing tab switch (journal is also a tab).
         # The Manual Scalping page was removed in the 2026-10-23 redesign: it is not
         # reachable and must not come back as a dead link.
-        self.assertIn("var TABS = ['simple', 'journal', 'chart', 'boxes', 'manual', 'readiness', 'details']", html)
+        self.assertIn("var TABS = ['simple', 'journal', 'chart', 'boxes', 'manual', 'desk', 'readiness', 'details']", html)
         self.assertNotIn('href="/scalp"', html)
         # Tab persistence must update the URL as well as localStorage: the
         # meta-refresh otherwise replays an old ?tab=chart deep link.

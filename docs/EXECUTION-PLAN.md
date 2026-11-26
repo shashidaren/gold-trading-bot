@@ -10,15 +10,11 @@ analysis (11-22) and now as a decision:** the all-in round trip is measured at *
 slippage, swap computed, commission unobservable), and the owner decided on 2026-11-22 that **$0.40 stays registered for
 the current `structstop1.5` window** — the pre-registration's own cost-override clause fires only above **$0.70**, which
 $0.57 does not reach — with **$0.57 adopted for the next window from 2026-12-01 21:00 UTC**. The decisive A6 finding is
-that the book is **negative at $0.00 cost**, so no cost assumption can make it pay. **§6 rule 1 fires this session:** `tools/feed_forensics.py` finds **three `BOTH FEEDS DOWN` outages in six
-days** (11-04 676 open min, 11-05 26 min with **#819 open**, 11-06 425 min) — so the host feed is **not** healthy and this
-corrects the 11-12 note that said no host action was implied. **B5 (DEMO-account evidence) is the next open Track-B step
-and remains a host/operator action**, now with a precondition: a 48 h run needs a feed that survives 48 h.
-**2026-11-26 update (§2i):** `tools/feed_forensics.py --days 14` is **clean** on the checked-in window, so that
+that the book is **negative at $0.00 cost**, so no cost assumption can make it pay. **§6 rule 1 (2026-11-26 refresh):** the three `BOTH FEEDS DOWN` outages in six days (11-04 676 open min, 11-05 26 min with **#819 open**, 11-06 425 min) stay historical and corrected the 11-12 note; `tools/feed_forensics.py --days 14` is now **clean** on the checked-in window, so B5's registered *data* precondition is MET. That is **not host proof** — restart durability and the 48 h DEMO run remain operator actions. **B5 (DEMO-account evidence) is the next open Track-B step and remains a host/operator action.**
+**2026-11-26 update (§2i):** main's PR #72 landed a complementary display-only 🤝 Manual Trade aid in parallel; this branch merges it and adds the 🧾 Manual desk. `tools/feed_forensics.py --days 14` is **clean** on the checked-in window, so that
 *data* precondition is **MET** — the November outages are now older than 14 days — but this is **not host proof**:
 restart durability and the 48 h DEMO run remain operator actions, and `demo_evidence` stays MANUAL. The session's
-runnable step was **A8-supporting, display-only tooling for the owner's manual trading** (a Manual desk, the private
-§7 observation template and the deferred open-paper-trade chart overlay) — **no strategy variable, cost assumption,
+runnable step was **A8-supporting, display-only tooling for the owner's manual trading** — main's 🤝 Manual Trade aid plus this branch's 🧾 Manual desk, private §7 observation template and deferred open-paper-trade chart overlay — **no strategy variable, cost assumption,
 ledger row or gate changed, no manual rule coded**. The manual pressure/hold rule is still owner-undefined (A8 blocker).
 Evidence: `docs/REVIEW-2026-10-27-g1-decision.md`, `docs/REVIEW-2026-10-28-b2-broker-be-time-stop.md`,
 `docs/REVIEW-2026-11-06-b3-position-deal-reconciliation.md`, `docs/ANALYSIS-2026-11-12-b4-live-order-safety.md`,
@@ -352,12 +348,15 @@ below re-opens a closed judgement or changes a registered bar.
   negative"** unchanged; nothing here edits the ledger.
 - **Step selection:** A2 is still host-blocked, B5 is host-only, no time gate is expired, A6 is DONE. The lowest-numbered
   *runnable* work was therefore **A8-supporting research tooling**, which the owner explicitly requested for their
-  manual trading. Shipped (display-only, paper-safe): `manual_desk.py`, `tools/manual_desk_report.py`, a `?tab=manual`
-  dashboard tab, the §7 private observation template, and the deferred open-paper-trade chart overlay in `chart.py`.
-  The verdict is conditions only (never buy/sell), **$0.40 stays binding**, no manual rule was coded — **A8's
-  "manual rule undefined" blocker is preserved**. Tests: `test_manual_desk.py` 29, `test_manual_chart.py` 35,
-  `test_dashboard_context.py` 19, `test_readiness_tab.py` 16, smoke **A–AE PASSED** (Scenario AE, 10 checks),
-  `goldbot` 64, `check_data` 0 fail/9 warn, `handoff_check` FRESH. `docs/ANALYSIS-2026-11-26-manual-desk.md`.
+  manual trading. Two parallel sessions shipped complementary display-only aids, merged here: main's `manual_plan.py` +
+  `tools/manual_trade.py` + 🤝 Manual Trade tab (`?tab=manual`), and this branch's `manual_desk.py` +
+  `tools/manual_desk_report.py` + 🧾 Manual desk tab (`?tab=desk`), the §7 private observation template, and the deferred
+  open-paper-trade chart overlay in `chart.py`. The verdict is conditions only (never buy/sell), **$0.40 stays binding**, no
+  manual rule was coded — **A8's "manual rule undefined" blocker is preserved**. Tests after integration:
+  `test_manual_plan.py` 39, `test_manual_desk.py` 29, `test_manual_chart.py` 35, `test_dashboard_context.py` 20,
+  `test_readiness_tab.py` 16, smoke **A–AF PASSED** (main AE 8 checks + new AF 10 checks), `goldbot` 64,
+  `check_data` 0 fail/9 warn, `handoff_check` FRESH. Evidence: `docs/ANALYSIS-2026-11-26-manual-desk.md`,
+  `docs/MANUAL-TRADING.md`.
 - **`live_readiness` stays 17 PASS / 0 TODO / 3 MANUAL, CLOSED** — no check changed status. `SL_CLEAR_ATR` still **0.5**,
   `CLEAR15_CUTOVER` still **None**, `TRADING_MODE` still `FORWARD_TEST`; no engine/trade_filter/paper-path/LIVE-order-path
   function changed, no real order, no host action, no second strategy variable.
@@ -390,7 +389,7 @@ below re-opens a closed judgement or changes a registered bar.
 | **A5** | n=150 or 2026-12-01 21:00 UTC, whichever comes first | **PASS/FAIL/REVERT** judgement exactly as registered. | dated REVIEW; PASS requires Wilson LB > 40%, net ≥ 0.00R at $0.20/side, ≥ −0.05R at $0.275/side, era DD ≤ $200. | none |
 | **A6** | **DONE 2026-11-22 (analysis)** — sample gate MET 11-06 | **All four legs modelled** in `tools/cost_model.py`: spread measured ($0.55 median, 420 joined trades), swap computed from the captured spec (long −69.5 / short +15.07 pts, triple-WED, DST-derived rollover → −$2.66 **both-sided**), slippage and commission **declared unobservable with sensitivities**. Ledger + era re-costed across 0.00/0.01/0.02 slip and 0/0.05/0.10 commission; share-of-1R distribution; break-even check. | **MET:** dated `docs/ANALYSIS-2026-11-22-a6-all-in-cost-model.md`; `tools/test_cost_model.py` **19 OK**; all-in **$0.57** vs registered $0.40; book **negative at $0.00**, so no cost assumption rescues it. | **DECIDED 2026-11-22 (§2h, `docs/REVIEW-2026-11-22-a6-cost-decision.md`): $0.40 stays registered for the current `structstop1.5` window** — the pre-registration's own overlay fires only **> $0.70** and the measured $0.57 does not reach it, so changing it now would be the banned post-outcome re-cost. **$0.57 is adopted for the NEXT window from 2026-12-01 21:00 UTC** and must be written into that pre-registration before its first trade. Nothing re-read or re-costed today. `cost_model` stays MANUAL — only demo fills / a broker statement can promote the two unobservable legs. |
 | **A7** | after A5, only if PASS | **Independent** forward window on the **same unchanged strategy** — 2–4 months, multiple regimes, chronological holdout. This, not a replay, is the edge test. | dated pre-registration before the window; positive net expectancy after measured cost with acceptable drawdown and uncertainty. | time; a FAIL/REVERT ends this track. |
-| **A8** | research only, parallel | Private manual observation log (§7) for the owner's pressure/hold hypothesis. No bot behaviour change. ≥100 matched post-stop observations before any exploratory screen; then a new dated pre-registration, never an engine gate. **2026-11-26 (tooling only, not the step):** the §7 header/template, a display-only Manual desk and the open-paper-trade chart overlay shipped (`docs/ANALYSIS-2026-11-26-manual-desk.md`) — the record exists, no rule is implemented or judged. | private log (outside Git) + optional dated ANALYSIS. | **STILL OPEN:** the manual rule is undefined — ask the owner for the definition before coding it. The desk's own rules say so; it implements no rule, no gate, no journal writer. |
+| **A8** | research only, parallel | Private manual observation log (§7) for the owner's pressure/hold hypothesis. No bot behaviour change. ≥100 matched post-stop observations before any exploratory screen; then a new dated pre-registration, never an engine gate. **2026-11-26 (tooling only, not the step):** main's 🤝 Manual Trade aid plus the §7 header/template, a display-only 🧾 Manual desk and the open-paper-trade chart overlay shipped (`docs/ANALYSIS-2026-11-26-manual-desk.md`) — the record exists, no rule is implemented or judged. | private log (outside Git) + optional dated ANALYSIS. | **STILL OPEN:** the manual rule is undefined — ask the owner for the definition before coding it. The desk's own rules say so; it implements no rule, no gate, no journal writer. |
 
 ### Track B — LIVE execution engineering (all paper-safe; none places an order)
 
@@ -419,7 +418,7 @@ Every step must move at least one `live_readiness.py` check from TODO to PASS **
 
 | When | What |
 |---|---|
-| 2026-11-26 | **Ritual refresh + B5 feed data-precondition MET + display-only Manual desk (paper-only, no strategy change).** Collection 598 (1,064 closes, era n=567): `check_data` 0 fail/9 warn, `handoff_check` STALE→FRESH, `check_structural_stop` PASS, `check_gap_rides` 9/2, `pressure_report` era 36.8% / −0.034R, `xm_quote_report` 41/14 days + 5/2 weekends, `live_readiness` 17/0/3 CLOSED. §6 rule 1: `feed_forensics.py --days 14` clean → B5's registered data precondition met on the checked-in window (NOT host proof). A2 host-blocked, B5 host-only → the runnable step was A8-supporting, owner-requested manual-trading tooling: `manual_desk.py` + `tools/manual_desk_report.py` + `?tab=manual` (conditions checklist, cost/break-even, §7 private template, open paper position), and `chart.py` draws the deferred open-paper-trade overlay. **No manual rule coded (A8 blocker preserved), no parameter/cost/ledger/gate change.** Tests: 29 + 35 + 19 + 16, smoke A–AE, `goldbot` 64. `docs/ANALYSIS-2026-11-26-manual-desk.md`. |
+| 2026-11-26 | **Ritual refresh + B5 feed data-precondition MET + display-only Manual desk (paper-only, no strategy change).** Collection 598 (1,064 closes, era n=567): `check_data` 0 fail/9 warn, `handoff_check` STALE→FRESH, `check_structural_stop` PASS, `check_gap_rides` 9/2, `pressure_report` era 36.8% / −0.034R, `xm_quote_report` 41/14 days + 5/2 weekends, `live_readiness` 17/0/3 CLOSED. §6 rule 1: `feed_forensics.py --days 14` clean → B5's registered data precondition met on the checked-in window (NOT host proof). A2 host-blocked, B5 host-only → the runnable step was A8-supporting, owner-requested manual-trading tooling: main's `manual_plan.py` + `tools/manual_trade.py` + `?tab=manual` (stop/size/clock/private journal), plus `manual_desk.py` + `tools/manual_desk_report.py` + `?tab=desk` (conditions checklist, cost/break-even, §7 private template, open paper position), and `chart.py` draws the deferred open-paper-trade overlay. **No manual rule coded (A8 blocker preserved), no parameter/cost/ledger/gate change.** Tests: 39 + 29 + 35 + 20 + 16, smoke A–AF, `goldbot` 64. `docs/ANALYSIS-2026-11-26-manual-desk.md`. |
 | 2026-10-19 21:00 UTC | Structural-stop time gate judged: geometry PASS, **SCREEN MET**, **PASS unavailable** (n=139 < 150; Wilson LB 28.8%). §7 closure-gap trigger fired 2/2. `docs/REVIEW-2026-10-19-struct-stop-judgement.md`. |
 | 2026-10-20 | Post-gate refresh: n=150 arm **lapsed with the time gate**; no re-judgement on a grown sample. `docs/REVIEW-2026-10-20-post-gate-refresh.md`. |
 | 2026-10-25 ~03:30 UTC | Owner stop-hunt hypothesis → `tools/stop_hunt_markout.py` + `structstop1.5` replay variant. Deeper stops monotone-better at every cost; 1.5 ATR passes 3/4 of a **pre-declared** bar; **NO live change**, candidate only. `docs/ANALYSIS-2026-10-25-stop-hunt-markouts-and-clearance-grid.md`. |
@@ -448,11 +447,12 @@ python3 tools/pressure_report.py --root .  # era verdict + calibration
 python3 tools/xm_quote_report.py           # cost sample + DST offsets
 python3 tools/live_readiness.py            # live gate scorecard
 python3 tools/feed_forensics.py --days 14  # §6 rule 1: B5's feed acceptance test
+python3 tools/manual_trade.py             # main's display-only manual-trade read (optional)
 python3 tools/manual_desk_report.py        # display-only manual-trading brief (optional)
 python3 tools/strategy_lab.py --calib-only # only when a replay/param idea is in play
 python3 tools/handoff_check.py --update    # after checking the underlying files
 ```
-If code changed, also: `python3 tools/smoke_test.py`, `python3 tools/test_manual_desk.py`,
+If code changed, also: `python3 tools/smoke_test.py`, `python3 tools/test_manual_plan.py`, `python3 tools/test_manual_desk.py`,
 `python3 tools/test_dashboard_context.py`, `python3 tools/test_live_readiness.py`,
 `python3 tools/test_live_manage.py`, `python3 tools/test_live_safety.py`,
 `python3 -m unittest discover -s goldbot/tests -t .`,
@@ -475,7 +475,8 @@ If code changed, also: `python3 tools/smoke_test.py`, `python3 tools/test_manual
 4. Track B in order (B2 → B6), one `live_readiness.py` check at a time. B2–B4 are done; **B5 is a host/operator
    action** (DEMO account + separate data dir) and must be reported as the exact blocker, not simulated. **2026-11-26:**
    its registered *data* precondition (`feed_forensics.py --days 14` clean) is MET on checked-in data; that removes
-   neither the host-durability verification nor the 48 h DEMO run.
+   neither the host-durability verification nor the 48 h DEMO run. Both 2026-11-26 manual-trading aids are display-only
+   and move no queue gate.
 5. A6/A8 (cost sample, private observation log) whenever their data arrives.
 6. C1 only when everything above is complete.
 
@@ -493,4 +494,4 @@ A trade that later touches its former target after the bot's stop is a **counter
 
 Rules for keeping the record honest (mirrored verbatim in `manual_desk.OBSERVATION_RULES` and printed by `python3 tools/manual_desk_report.py --template`): log every eligible event including losses and non-overrides; keep bot/manual rows separate; timestamp the decision before looking at recovery; a later target touch is a mark-out, not a win; ≥100 matched post-stop observations before any exploratory screen; then a NEW dated pre-registration, never an engine gate; keep the file private with no account identifiers. `manual_observations*.csv` is git-ignored — **filled rows are never committed**.
 
-**Tooling shipped 2026-11-26 (display-only; no filled rows in Git).** The header and rules are available without reading or writing a journal: `python3 tools/manual_desk_report.py --template` prints them, and the dashboard's `?tab=manual` shows the same template beside the current conditions checklist. The read layer has no journal reader, no writer and no write route. **This does not define or judge A8's manual pressure/hold rule** — that remains the owner's open question. Scope and blocker: `docs/ANALYSIS-2026-11-26-manual-desk.md` §3/§5.
+**Tooling shipped 2026-11-26 (display-only; no filled rows in Git).** The header and rules are available without reading or writing a journal: `python3 tools/manual_desk_report.py --template` prints them, the 🧾 Manual desk tab (`?tab=desk`) shows the same template beside the current conditions checklist, and main's 🤝 Manual Trade tab (`?tab=manual`) offers the separate host-local `--log-decision` journal (never in Git). The read layer has no journal reader, no writer and no write route. **Neither aid defines or judges A8's manual pressure/hold rule** — that remains the owner's open question. Scope and blockers: `docs/ANALYSIS-2026-11-26-manual-desk.md` §3/§5 and `docs/MANUAL-TRADING.md`.

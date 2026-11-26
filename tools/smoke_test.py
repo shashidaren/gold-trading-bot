@@ -4241,19 +4241,89 @@ check("AD: the B4 scenario leaves the checkout in paper mode and changes no stra
 
 
 # --- Scenario AE -----------------------------------------------------------
-print("\nScenario AE: Manual desk (2026-11-26) — display-only companion for the "
+print("\nScenario AE: the manual-trade read layer (manual_plan.py) — display-only, "
+      "and its daily-break mirror must agree with the engine's")
+import manual_plan as MP  # noqa: E402
+
+# (1) The one deliberate duplication: manual_plan reports the observed daily break for
+# the manual trader's clock, and it must not drift from the deployed guard's signature
+# on the live log. It is the mirror that is wrong when they disagree, so a deploy gate
+# that says nothing here is the difference between "the clock is right" and "the clock
+# looks right".
+# The checkout's OWN log, not engine.LOG_FILE_PATH: the scenarios above repoint that
+# constant at throw-away temp files. This is the log the deployed guard actually reads.
+_AE_LIVE_LOG = os.path.join(ROOT, "forward_test_log.csv")
+
+
+def _ae_live_rows():
+    import csv as _csv
+    with open(_AE_LIVE_LOG, newline="") as fh:
+        return list(_csv.DictReader(fh))
+
+_ae_rows = _ae_live_rows()
+_ae_mirror = MP.observed_closure(_ae_rows)
+_ae_engine = engine.derive_daily_closure(_AE_LIVE_LOG)
+check("AE: the manual daily-break mirror matches the engine's signature on the live log "
+      "(the mirror is the one to distrust when they disagree)",
+      (_ae_mirror.get("close_tod"), _ae_mirror.get("reopen_tod"))
+      == (tuple(_ae_engine[0]), tuple(_ae_engine[1])) if _ae_engine and _ae_mirror.get("ok") else True,
+      f"mirror={_ae_mirror.get('close_tod')}/{_ae_mirror.get('reopen_tod')} engine={_ae_engine}")
+
+# (2) Lot sizing is on the broker's grid and never rounds UP into more risk.
+_ae_spec = MP.load_spec(os.path.join(ROOT, "xm_data"))
+_ae_down, _ = MP.round_lots(0.0199, _ae_spec)
+_ae_refused, _ae_note = MP.round_lots(0.0001, _ae_spec)
+check("AE: a manual lot size snaps DOWN onto the broker's grid",
+      abs(_ae_down - 0.019) < 1e-9, f"lots={_ae_down}")
+check("AE: a size under volume_min is refused, never raised",
+      _ae_refused == 0.0 and "minimum" in (_ae_note or ""))
+
+# (3) The cost share is spread / risk, so it cannot change with size — the whole point.
+_ae_rows_sizing = MP.sizing_rows(10.0, budgets=(5.0, 10.0, 20.0), spec=_ae_spec, entry=4000.0)
+check("AE: the spread's share of 1R is identical at every lot size",
+      len({round(r["cost_share_pct"], 9) for r in _ae_rows_sizing}) == 1,
+      str([round(r["cost_share_pct"], 6) for r in _ae_rows_sizing]))
+
+# (4) The manual read never claims an edge and never points at the engine's gates as a veto.
+_ae_read = MP.read(log_rows=_ae_rows[-500:], quotes=[], spec=_ae_spec,
+                   now=datetime(2026, 11, 26, 15, 0))
+check("AE: the manual read carries the measured no-edge footer",
+      _ae_read["ok"] and _ae_read["measured"]["box_cleared"] == 0
+      and "no edge" in _ae_read["measured"]["line"].lower())
+check("AE: the bot's gate verdict is attached as context, never as the manual verdict",
+      all(("bot_view" in _ae_read["plans"][s]) for s in ("BUY", "SELL"))
+      and all(_ae_read["plans"][s]["verdict"] in ("no trade", "watch", "geometry ok")
+              for s in ("BUY", "SELL")))
+
+# (5) The journal refuses to write inside the checkout (filled rows are private).
+_ae_tmp = tempfile.mkdtemp(prefix="gold_smoke_ae_")
+_ae_ok, _ae_detail = MP.append_journal(os.path.join(_ae_tmp, "j.jsonl"), {"x": 1},
+                                       repo_root=_ae_tmp)
+check("AE: the manual journal refuses to write inside the checkout",
+      _ae_ok is False and "refusing" in _ae_detail)
+shutil.rmtree(_ae_tmp, ignore_errors=True)
+
+# (6) No strategy surface is touched by this feature.
+check("AE: the manual layer changes no strategy constant",
+      engine.SL_CLEAR_ATR == 0.5 and engine.BE_TRIGGER_R == 0.75
+      and engine.MAX_HOLD_MINUTES == 240 and engine.RR_TARGET == 1.5
+      and engine.TRADING_MODE == "FORWARD_TEST")
+
+
+# --- Scenario AF -----------------------------------------------------------
+print("\nScenario AF: Manual desk (2026-11-26) — display-only companion for the "
       "owner's manual trading, and the bot's open paper trade on the chart")
 # Load the ROOT read layer under its own name (the CLI is tools/manual_desk_report.py)
 # so the deploy gate tests exactly the module the dashboard imports.
-import importlib.util as _ae_ilu  # noqa: E402
-_ae_spec = _ae_ilu.spec_from_file_location(
+import importlib.util as _af_ilu  # noqa: E402
+_af_spec = _af_ilu.spec_from_file_location(
     "root_manual_desk_under_test", os.path.join(ROOT, "manual_desk.py"))
-MDE = _ae_ilu.module_from_spec(_ae_spec)
-_ae_spec.loader.exec_module(MDE)
+MDE = _af_ilu.module_from_spec(_af_spec)
+_af_spec.loader.exec_module(MDE)
 import chart as CHT  # noqa: E402
 
-_ae_now = datetime(2026, 11, 26, 14, 59)
-_ae_ctx = {
+_af_now = datetime(2026, 11, 26, 14, 59)
+_af_ctx = {
     "feed": {"ok": True, "age_seconds": 8},
     "setup": {"ok": True, "atr": 2.40},
     "location": {"buy": {"risk": 9.96}, "sell": {"risk": 9.96}},
@@ -4263,57 +4333,57 @@ _ae_ctx = {
                   "cooldown_minutes_left": 0, "daily_sls": 8, "breaker_on": False},
     "risk_now": {"quote": {"spread": 0.55, "stale": False}},
 }
-_ae_status = {"trade_active": True, "trade_type": "BUY", "current_trade_num": 1065,
+_af_status = {"trade_active": True, "trade_type": "BUY", "current_trade_num": 1065,
               "entry_price": 4000.0, "stop_loss": 3994.0, "take_profit": 4009.0,
               "entry_time": "2026-11-26 12:12:06", "be_armed": False}
 
-check("AE: every manual-desk mirror equals the engine / trade_filter source of truth",
+check("AF: every manual-desk mirror equals the engine / trade_filter source of truth",
       (MDE.RR_TARGET, MDE.MAX_HOLD_MINUTES, MDE.MIN_ATR, MDE.MAX_ATR,
        MDE.MAX_DAILY_LOSSES)
       == (engine.RR_TARGET, engine.MAX_HOLD_MINUTES, engine.MIN_ATR,
           trade_filter.MAX_ATR_TO_TRADE, trade_filter.MAX_DAILY_LOSSES))
-_ae_tree = ast.parse(inspect.getsource(MDE))
-_ae_imports = set()
-for _n in ast.walk(_ae_tree):
+_af_tree = ast.parse(inspect.getsource(MDE))
+_af_imports = set()
+for _n in ast.walk(_af_tree):
     if isinstance(_n, ast.Import):
-        _ae_imports.update(a.name for a in _n.names)
+        _af_imports.update(a.name for a in _n.names)
     elif isinstance(_n, ast.ImportFrom):
-        _ae_imports.add(_n.module or "")
-check("AE: manual_desk imports no engine module and contains no file writer",
-      not any(n.startswith(("engine", "trade_filter")) for n in _ae_imports)
+        _af_imports.add(_n.module or "")
+check("AF: manual_desk imports no engine module and contains no file writer",
+      not any(n.startswith(("engine", "trade_filter")) for n in _af_imports)
       and "open(" not in inspect.getsource(MDE))
-_ae_brief = MDE.brief(_ae_status, _ae_ctx, _ae_now)
-check("AE: the brief is an honest conditions read, never a buy/sell verdict",
-      _ae_brief["ok"] and len(_ae_brief["checks"]) == 8
-      and "buy" not in _ae_brief["verdict"]["headline"].lower()
-      and "sell" not in _ae_brief["verdict"]["headline"].lower()
-      and all("no order" in _ae_brief["disclaimer"] for _ in [0]))
-check("AE: $0.40 stays binding and $0.57 stays deferred (no mid-window re-cost)",
-      MDE.cost_basis(_ae_now)["binding_rt"] == 0.40
+_af_brief = MDE.brief(_af_status, _af_ctx, _af_now)
+check("AF: the brief is an honest conditions read, never a buy/sell verdict",
+      _af_brief["ok"] and len(_af_brief["checks"]) == 8
+      and "buy" not in _af_brief["verdict"]["headline"].lower()
+      and "sell" not in _af_brief["verdict"]["headline"].lower()
+      and all("no order" in _af_brief["disclaimer"] for _ in [0]))
+check("AF: $0.40 stays binding and $0.57 stays deferred (no mid-window re-cost)",
+      MDE.cost_basis(_af_now)["binding_rt"] == 0.40
       and MDE.cost_basis(datetime(2026, 12, 2, 9, 0))["binding_rt"] == 0.40
-      and MDE.cost_basis(_ae_now)["next_rt"] == 0.57)
-check("AE: break-even is 40% uncosted and rises with cost and scratches",
+      and MDE.cost_basis(_af_now)["next_rt"] == 0.57)
+check("AF: break-even is 40% uncosted and rises with cost and scratches",
       MDE.break_even_wr(1.5, 0.0, 6.0) == 40.0
       and MDE.break_even_wr(1.5, 0.40, 6.0, 0.27)
       > MDE.break_even_wr(1.5, 0.40, 6.0))
-check("AE: a stale feed BLOCKS and the verdict refuses to be a green light",
-      MDE.checklist({}, dict(_ae_ctx, feed={"ok": True, "age_seconds": 900}),
-                    _ae_now)[0]["state"] == "block")
-check("AE: the §7 private observation template carries every field and rule",
+check("AF: a stale feed BLOCKS and the verdict refuses to be a green light",
+      MDE.checklist({}, dict(_af_ctx, feed={"ok": True, "age_seconds": 900}),
+                    _af_now)[0]["state"] == "block")
+check("AF: the §7 private observation template carries every field and rule",
       len(MDE.OBSERVATION_FIELDS) == 23 and len(MDE.OBSERVATION_RULES) == 7
       and MDE.CSV_HEADER.startswith("timestamp_utc,bot_trade_id,side,"))
 # the deferred Chart-tab item: open paper trade lines, in-range and off-range
-_ae_rows = [{"Timestamp": (_ae_now - timedelta(minutes=i)).strftime("%Y-%m-%d %H:%M:%S"),
+_af_rows = [{"Timestamp": (_af_now - timedelta(minutes=i)).strftime("%Y-%m-%d %H:%M:%S"),
              "Open": "4000", "High": "4001", "Low": "3999", "Close": "4000",
              "ATR": "2.0"} for i in range(120)][::-1]
-_ae_view = CHT.view(rows=_ae_rows, extra_levels=MDE.open_levels(_ae_status))
-check("AE: the open paper trade is drawn as three pinned levels, never a signal",
-      _ae_view["ok"] and _ae_view["open_levels"] == 3
-      and all(l["kind"].startswith("open_") for l in _ae_view["levels"][-3:]))
-check("AE: a flat book draws no open-trade levels at all",
+_af_view = CHT.view(rows=_af_rows, extra_levels=MDE.open_levels(_af_status))
+check("AF: the open paper trade is drawn as three pinned levels, never a signal",
+      _af_view["ok"] and _af_view["open_levels"] == 3
+      and all(l["kind"].startswith("open_") for l in _af_view["levels"][-3:]))
+check("AF: a flat book draws no open-trade levels at all",
       MDE.open_levels({"trade_active": False}) == []
-      and CHT.view(rows=_ae_rows)["open_levels"] == 0)
-check("AE: the Manual desk changes no strategy variable and stays paper-only",
+      and CHT.view(rows=_af_rows)["open_levels"] == 0)
+check("AF: the Manual desk changes no strategy variable and stays paper-only",
       engine.TRADING_MODE == "FORWARD_TEST" and engine.SL_CLEAR_ATR == 0.5
       and engine.BE_TRIGGER_R == 0.75 and engine.RR_TARGET == 1.5
       and MDE.COST_REGISTERED_RT == 0.40)

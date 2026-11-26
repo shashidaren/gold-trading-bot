@@ -22,6 +22,14 @@ except Exception as _exc:  # never take the dashboard down over the read layer
 else:
     _CH_IMPORT_ERROR = ""
 
+try:  # display-only manual-trade read (see manual_plan.py's docstring)
+    import manual_plan as MP
+except Exception as _exc:  # never take the dashboard down over the read layer
+    MP = None
+    _MP_IMPORT_ERROR = str(_exc)
+else:
+    _MP_IMPORT_ERROR = ""
+
 try:  # display-only readiness timeline (see readiness.py's docstring)
     import readiness as RD
 except Exception as _exc:  # never take the dashboard down over the read layer
@@ -133,10 +141,11 @@ HTML_TEMPLATE = """
             <button id="tab-journal" onclick="showTab('journal')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📒 Journal</button>
             <button id="tab-boxes" onclick="showTab('boxes')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📦 Boxes &amp; Timing</button>
             <button id="tab-chart" onclick="showTab('chart')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">🧭 Chart &amp; Placement</button>
-            <button id="tab-manual" onclick="showTab('manual')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">🧾 Manual desk</button>
+            <button id="tab-manual" onclick="showTab('manual')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">🤝 Manual Trade</button>
+            <button id="tab-desk" onclick="showTab('desk')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">🧾 Manual desk</button>
             <button id="tab-readiness" onclick="showTab('readiness')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">🚦 Readiness</button>
             <button id="tab-details" onclick="showTab('details')" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:bg-slate-700">📊 Full Dashboard</button>
-            <span class="ml-auto text-[11px] text-slate-500 hidden md:inline">Simple is the mood · Chart shows <em>where</em> a trade would go · Boxes is the checklist · Manual desk is for <em>your</em> trade · Readiness is the <em>when</em> · Full shows every gate. All <span class="text-slate-300">paper only</span> — no real orders.</span>
+            <span class="ml-auto text-[11px] text-slate-500 hidden md:inline">Simple is the mood · Chart shows <em>where</em> a trade would go · Boxes is the checklist · Manual Trade sizes <em>your</em> trade · Manual desk reads conditions and the bot's paper stop · Readiness is the <em>when</em> · Full shows every gate. All <span class="text-slate-300">paper only</span> — no real orders.</span>
         </div>
 
         <!-- ================= SIMPLE TAB ================= -->
@@ -916,11 +925,230 @@ HTML_TEMPLATE = """
         <!-- ================= END CHART & PLACEMENT TAB ================= -->
 
 
-        <!-- ================= MANUAL DESK TAB — display-only companion (2026-11-26) ================= -->
+        <!-- ================= MANUAL TRADE TAB — your numbers, not the bot's ================= -->
         <div id="panel-manual" class="hidden">
             {% if ctx.manual and ctx.manual.ok %}
             {% set m = ctx.manual %}
-            {% set v = m.verdict %}
+            <div class="rounded-2xl border border-slate-700 bg-slate-800 p-5 mb-5">
+                <div class="flex flex-col md:flex-row md:items-start gap-4">
+                    <div class="text-4xl">🤝</div>
+                    <div class="flex-1">
+                        <h2 class="text-xl font-semibold text-slate-100">Manual trade — size it, cost it, then decide</h2>
+                        <p class="text-sm text-slate-400 mt-1">
+                            The bot's own stop rule applied to <span class="text-slate-200">your</span> entry, the dollars at risk for
+                            a budget you choose, and the share of it the spread takes. This is a <span class="text-slate-200">geometry
+                            and cost check</span> — never an entry signal, never a forecast, and it places nothing.
+                        </p>
+                        <p class="text-xs text-slate-500 mt-2">
+                            last closed bar <span class="font-mono text-slate-300">{{ m.as_of }} UTC</span> ·
+                            close <span class="font-mono text-slate-200">${{ "%.2f"|format(m.entry or 0) }}</span> ·
+                            ATR <span class="font-mono text-slate-200">${{ "%.2f"|format(m.atr or 0) }}</span> ·
+                            live spread <span class="font-mono text-slate-200">{{ "$%.2f"|format(m.spread_now) if m.spread_now is not none else "—" }}</span> ·
+                            round-trip cost used <span class="font-mono text-amber-300">${{ "%.2f"|format(m.spread_rt) }}</span>
+                            (registered ${{ "%.2f"|format(0.40) }})
+                        </p>
+                    </div>
+                    <div class="text-right text-xs text-slate-400 space-y-1 shrink-0">
+                        <div>CLI: <span class="font-mono text-slate-300">python3 tools/manual_trade.py</span></div>
+                        <div>your numbers: <span class="font-mono text-slate-300">--side BUY --entry … --stop …</span></div>
+                        <div>journal: <span class="font-mono text-slate-300">--log-decision</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- The daily-break clock: the risk nobody prices in -->
+            {% set clk = m.clock %}
+            <div class="rounded-2xl border p-4 mb-5
+                {% if clk.state == 'closed' %} bg-rose-950/30 border-rose-700
+                {% elif clk.state == 'guard' %} bg-amber-950/30 border-amber-700
+                {% elif clk.state == 'open' %} bg-slate-800 border-slate-700
+                {% else %} bg-slate-800/60 border-slate-700 {% endif %}">
+                <div class="flex items-start gap-3">
+                    <div class="text-2xl">{% if clk.state == 'closed' %}🚫{% elif clk.state == 'guard' %}⏳{% elif clk.state == 'open' %}🕒{% else %}❓{% endif %}</div>
+                    <div class="flex-1">
+                        <div class="text-sm font-semibold text-slate-200">The daily break — can your stop still be enforced?</div>
+                        <div class="text-xs text-slate-300 mt-1">{{ clk.detail }}</div>
+                        <div class="text-[11px] text-slate-500 mt-2">
+                            Observed from the price log, not a broker schedule —
+                            {% if m.closure.ok %}last break {{ m.closure.last_break.at.strftime('%Y-%m-%d %H:%M') }} UTC closes
+                            {{ "%02d:%02d"|format(m.closure.close_tod[0], m.closure.close_tod[1]) }} / opens
+                            {{ "%02d:%02d"|format(m.closure.reopen_tod[0], m.closure.reopen_tod[1]) }} UTC
+                            over {{ m.closure.samples }} break(s){% else %}{{ m.closure.detail }}{% endif %}.
+                            The engine refuses new entries in the last {{ clk.cutoff_min }} min; a manual position has no such guard —
+                            trade #815 rode the 2026-11-04 break and reopened $2.77 <span class="text-slate-300">through</span> its stop.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Both sides -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
+                {% for side in ['BUY', 'SELL'] %}
+                {% set p = m.plans[side] %}
+                <div class="rounded-2xl border p-4
+                    {% if not p.ok or p.verdict == 'no trade' %} border-rose-800 bg-rose-950/20
+                    {% elif p.verdict == 'watch' %} border-amber-700 bg-amber-950/20
+                    {% else %} border-emerald-700 bg-emerald-950/20 {% endif %}">
+                    <div class="flex items-center gap-2">
+                        <span class="text-lg font-bold {% if side == 'BUY' %}text-emerald-300{% else %}text-rose-300{% endif %}">{{ side }}</span>
+                        <span class="px-2 py-0.5 rounded text-[10px] font-bold tracking-wide
+                            {% if not p.ok or p.verdict == 'no trade' %} bg-rose-800 text-rose-100
+                            {% elif p.verdict == 'watch' %} bg-amber-700 text-amber-50
+                            {% else %} bg-emerald-700 text-emerald-50 {% endif %}">{{ p.verdict_text }}</span>
+                        {% if p.bot_view and p.bot_view.passed is not none %}
+                        <span class="ml-auto text-[10px] text-slate-400">bot reads
+                            <span class="font-mono text-slate-200">{{ p.bot_view.passed }}/{{ p.bot_view.total }}</span>
+                        </span>
+                        {% endif %}
+                    </div>
+
+                    {% if p.ok %}
+                    <dl class="grid grid-cols-3 gap-2 mt-3">
+                        <div class="bg-slate-900/60 rounded-lg p-2">
+                            <dt class="text-[10px] text-slate-400 uppercase tracking-wide">Entry</dt>
+                            <dd class="font-mono text-sm text-slate-100">${{ "%.2f"|format(p.entry) }}</dd>
+                        </div>
+                        <div class="bg-slate-900/60 rounded-lg p-2">
+                            <dt class="text-[10px] text-slate-400 uppercase tracking-wide">Stop (1R)</dt>
+                            <dd class="font-mono text-sm text-rose-300">${{ "%.2f"|format(p.stop) }}</dd>
+                            <dd class="text-[10px] text-slate-500">${{ "%.2f"|format(p.risk) }} / {{ "%.1f"|format(p.risk / p.atr) }} ATR</dd>
+                        </div>
+                        <div class="bg-slate-900/60 rounded-lg p-2">
+                            <dt class="text-[10px] text-slate-400 uppercase tracking-wide">Target</dt>
+                            <dd class="font-mono text-sm text-emerald-300">${{ "%.2f"|format(p.target) }}</dd>
+                            <dd class="text-[10px] text-slate-500">net {{ "%.2f"|format(p.cost.net_rr or 0) }}:1</dd>
+                        </div>
+                    </dl>
+
+                    <div class="grid grid-cols-2 gap-2 mt-2 text-[11px] text-slate-400">
+                        <div>spread is
+                            <span class="font-mono {% if p.cost.zone == 'red' %}text-rose-300{% elif p.cost.zone == 'amber' %}text-amber-300{% else %}text-emerald-300{% endif %}">{{ "%.0f"|format(p.cost.share_pct or 0) }}%</span>
+                            of 1R{% if p.cost.share_now_pct is not none %} (<span class="font-mono text-slate-200">{{ "%.0f"|format(p.cost.share_now_pct) }}%</span> at the live spread){% endif %}
+                        </div>
+                        <div>you need
+                            <span class="font-mono text-slate-200">{{ "%.0f"|format(p.cost.breakeven_wr_pct or 0) }}%</span>
+                            decisive WR to break even at this payoff
+                        </div>
+                    </div>
+
+                    <div class="mt-3">
+                        <div class="text-[10px] uppercase tracking-wide text-slate-500 mb-1">If you risk…</div>
+                        <table class="w-full text-[11px]">
+                            <tbody>
+                            {% for row in p.sizing %}
+                            <tr class="border-t border-slate-800">
+                                <td class="py-1 pr-2 font-mono text-slate-400">${{ "%.0f"|format(row.budget_usd) }}</td>
+                                {% if row.ok %}
+                                <td class="py-1 pr-2 font-mono text-slate-100">{{ "%.3f"|format(row.lots) }} lot</td>
+                                <td class="py-1 pr-2 text-slate-400">risks <span class="font-mono text-slate-200">${{ "%.2f"|format(row.risk_usd) }}</span></td>
+                                <td class="py-1 pr-2 text-slate-500">spread ${{ "%.2f"|format(row.cost_usd) }}</td>
+                                <td class="py-1 text-slate-500 text-right">margin ~${{ "%.2f"|format(row.margin_usd or 0) }}</td>
+                                {% else %}
+                                <td class="py-1 text-slate-500" colspan="4">{{ row.note or "no tradeable size" }}</td>
+                                {% endif %}
+                            </tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    {% if p.bot_view and p.bot_view.text %}
+                    <p class="text-[11px] text-slate-400 mt-3">🤖 {{ p.bot_view.text }}</p>
+                    {% endif %}
+                    {% if p.reasons %}
+                    <ul class="mt-3 space-y-1">
+                        {% for r in p.reasons %}<li class="text-xs text-rose-200/90">✗ {{ r }}</li>{% endfor %}
+                    </ul>
+                    {% endif %}
+                    {% if p.warnings %}
+                    <ul class="mt-2 space-y-1">
+                        {% for w in p.warnings %}<li class="text-[11px] text-amber-200/90">! {{ w }}</li>{% endfor %}
+                    </ul>
+                    {% endif %}
+                    {% else %}
+                    <p class="text-xs text-slate-400 mt-3">{{ p.reasons|join('; ') if p.reasons else "no plan available" }}</p>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+
+            <!-- Size table note + cost ruler -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
+                <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+                    <h3 class="text-sm font-semibold text-slate-200">💸 Why the stop distance decides the trade before you enter it</h3>
+                    {% if m.cost_ruler and m.cost_ruler.ok %}
+                    <p class="text-xs text-slate-400 mt-1">At ATR ${{ "%.2f"|format(m.cost_ruler.atr) }} the spread is charged once, win or lose, and it is
+                        <span class="text-slate-300">the same share of your risk at every lot size</span> — a bigger size changes the dollars, never the ratio.</p>
+                    <div class="mt-2 space-y-1">
+                        {% for row in m.cost_ruler.rows %}
+                        <div class="flex items-center gap-2 text-[11px]">
+                            <span class="w-14 shrink-0 font-mono text-slate-400">{{ "%.1f"|format(row.mult) }} ATR</span>
+                            <span class="w-14 shrink-0 font-mono text-slate-300">${{ "%.2f"|format(row.risk_usd) }}</span>
+                            <span class="flex-1 bg-slate-900 rounded h-3 overflow-hidden">
+                                <span class="block h-3 rounded {% if row.zone == 'red' %}bg-rose-500/70{% elif row.zone == 'amber' %}bg-amber-500/70{% else %}bg-emerald-500/70{% endif %}"
+                                      style="width: {{ [ (row.share['0.55'] / 40.0 * 100), 100 ] | min }}%"></span>
+                            </span>
+                            <span class="w-20 shrink-0 text-right font-mono {% if row.zone == 'red' %}text-rose-300{% elif row.zone == 'amber' %}text-amber-300{% else %}text-emerald-300{% endif %}">{{ "%.1f"|format(row.share['0.55']) }}%</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <p class="text-[11px] text-slate-500 mt-2">
+                        % = share of 1R at the measured ${{ "%.2f"|format(m.spread_rt) }} round trip. Keep it under 10%: a stop of at least
+                        <span class="text-amber-300 font-semibold">{{ "%.1f"|format(m.cost_ruler.min_mult['0.55']) }} ATR</span>
+                        (≈ ${{ "%.2f"|format(m.cost_ruler.min_mult['0.55'] * m.cost_ruler.atr) }}) does that on this tape.
+                    </p>
+                    {% else %}
+                    <p class="text-xs text-slate-400 mt-1">No ATR yet — the cost ruler needs one closed bar with an ATR value.</p>
+                    {% endif %}
+                </div>
+
+                <div class="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+                    <h3 class="text-sm font-semibold text-slate-200">📒 Record the decision before the outcome</h3>
+                    <p class="text-xs text-slate-400 mt-1">
+                        The repo's manual observation log (<span class="font-mono">docs/EXECUTION-PLAN.md §7</span>) is how the owner's own
+                        pressure/hold idea ever becomes testable. It is private: rows go to a host-local file
+                        (<span class="font-mono">manual_trade_journal.jsonl</span>), never into Git, and the tool refuses to write inside the checkout.
+                    </p>
+                    <p class="text-[11px] text-slate-500 mt-2">Record the losses too — a journal of wins measures memory, not method. {{ m.measured.line }}</p>
+                    <div class="mt-2 bg-slate-900/70 rounded-lg p-2 text-[11px] font-mono text-slate-300 break-all">{{ m.journal.command }}</div>
+                    <p class="text-[11px] text-slate-500 mt-2">
+                        {{ m.journal.fields|length }} fields · required: {{ m.journal.required|join(', ') }} ·
+                        <span class="font-mono">--journal-summary</span> counts rows without printing your notes.
+                    </p>
+                    <div class="mt-2 text-[11px] text-slate-500">
+                        Contract: {{ "captured broker spec" if m.spec.source == 'captured' else "DEFAULT constants (no spec captured)" }}
+                        {% if m.spec.captured_utc %}<span class="font-mono">{{ m.spec.captured_utc }} UTC</span>{% endif %} ·
+                        {{ "%.0f"|format(m.spec.contract_size) }} oz/lot · lots {{ m.spec.volume_min }}–{{ m.spec.volume_max }} step {{ m.spec.volume_step }} ·
+                        leverage 1:{{ "%.0f"|format(m.spec.leverage) }}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Honesty footer -->
+            <div class="rounded-xl border border-slate-700/60 bg-slate-900/60 p-3 text-[11px] text-slate-500">
+                <span class="text-slate-300 font-semibold">Measured, not assumed:</span>
+                {{ m.measured.line }}
+                Sizing is arithmetic on <span class="text-slate-300">your</span> stop, never a recommendation of size;
+                the margin figure uses the broker's own captured leverage and ignores the hedged/partial fills a real
+                account can produce. Display-only, paper only: no order is placed, no gate changes, nothing is written.
+                Method: <span class="font-mono">docs/MANUAL-TRADING.md</span>.
+            </div>
+            {% else %}
+            <div class="rounded-2xl border border-slate-700 bg-slate-800 p-5">
+                <div class="text-lg font-semibold text-slate-200">🤝 Manual read unavailable</div>
+                <div class="text-sm text-slate-400 mt-1">{{ ctx.manual.reason if ctx.manual else 'the read layer did not load' }}</div>
+                <div class="text-xs text-slate-500 mt-2">Needs <span class="font-mono">forward_test_log.csv</span> to hold enough recent bars. The other tabs still work.</div>
+            </div>
+            {% endif %}
+        </div>
+        <!-- ================= END MANUAL TRADE TAB ================= -->
+
+
+        <!-- ================= MANUAL DESK TAB (?tab=desk) — display-only companion (2026-11-26) ================= -->
+        <div id="panel-desk" class="hidden">
+            {% if ctx.desk and ctx.desk.ok %}
+            {% set d = ctx.desk %}
+            {% set v = d.verdict %}
             <div class="rounded-2xl border p-5 mb-5
                 {% if v.state == 'block' %} bg-rose-950/40 border-rose-700
                 {% elif v.state == 'warn' %} bg-amber-950/30 border-amber-700
@@ -928,7 +1156,7 @@ HTML_TEMPLATE = """
                 <div class="flex flex-col md:flex-row md:items-start gap-4">
                     <div class="text-4xl">🧾</div>
                     <div class="flex-1">
-                        <h2 class="text-xl font-bold text-slate-100">Manual desk — {{ m.as_of }}</h2>
+                        <h2 class="text-xl font-bold text-slate-100">Manual desk — {{ d.as_of }}</h2>
                         <p class="text-lg font-semibold mt-1
                             {% if v.state == 'block' %} text-rose-300
                             {% elif v.state == 'warn' %} text-amber-300
@@ -949,29 +1177,29 @@ HTML_TEMPLATE = """
             <!-- the bot's open paper position: the deferred Chart-tab item -->
             <div class="bg-slate-800 rounded-xl border border-slate-700 p-4 mb-5">
                 <h3 class="text-sm font-semibold text-slate-200 mb-2">🤖 The bot's open PAPER position — where its stop sits</h3>
-                {% if m.open.ok %}
+                {% if d.open.ok %}
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
                     <div class="bg-slate-900/50 rounded-lg p-3 border border-slate-700">
                         <p class="text-xs text-slate-400">Side / number</p>
-                        <p class="font-semibold {% if m.open.side == 'BUY' %}text-emerald-300{% else %}text-rose-300{% endif %}">{{ m.open.side }} #{{ m.open.trade_num or '—' }}</p>
+                        <p class="font-semibold {% if d.open.side == 'BUY' %}text-emerald-300{% else %}text-rose-300{% endif %}">{{ d.open.side }} #{{ d.open.trade_num or '—' }}</p>
                     </div>
                     <div class="bg-slate-900/50 rounded-lg p-3 border border-slate-700">
                         <p class="text-xs text-slate-400">Entry / stop / target</p>
-                        <p class="font-mono text-slate-200">${{ "%.2f"|format(m.open.entry) }} / <span class="text-rose-300">${{ "%.2f"|format(m.open.stop) }}</span> / <span class="text-emerald-300">${{ "%.2f"|format(m.open.target) }}</span></p>
+                        <p class="font-mono text-slate-200">${{ "%.2f"|format(d.open.entry) }} / <span class="text-rose-300">${{ "%.2f"|format(d.open.stop) }}</span> / <span class="text-emerald-300">${{ "%.2f"|format(d.open.target) }}</span></p>
                     </div>
                     <div class="bg-slate-900/50 rounded-lg p-3 border border-slate-700">
                         <p class="text-xs text-slate-400">Risk / reward</p>
-                        <p class="font-mono text-slate-200">${{ "%.2f"|format(m.open.risk_usd) }} / ${{ "%.2f"|format(m.open.reward_usd) }} <span class="text-slate-500">({{ m.open.rr or '—' }}:1)</span></p>
+                        <p class="font-mono text-slate-200">${{ "%.2f"|format(d.open.risk_usd) }} / ${{ "%.2f"|format(d.open.reward_usd) }} <span class="text-slate-500">({{ d.open.rr or '—' }}:1)</span></p>
                     </div>
                     <div class="bg-slate-900/50 rounded-lg p-3 border border-slate-700">
                         <p class="text-xs text-slate-400">Age / 240-min time stop</p>
-                        <p class="font-mono text-slate-200">{{ m.open.age_min or '—' }} min / {{ m.open.time_left_min if m.open.time_left_min is not none else '—' }} min left</p>
+                        <p class="font-mono text-slate-200">{{ d.open.age_min or '—' }} min / {{ d.open.time_left_min if d.open.time_left_min is not none else '—' }} min left</p>
                     </div>
                 </div>
-                <p class="text-xs text-amber-300/90 mt-3">{{ m.open.note }}</p>
+                <p class="text-xs text-amber-300/90 mt-3">{{ d.open.note }}</p>
                 <p class="text-[11px] text-slate-500 mt-1">These three levels are also drawn on the 🧭 Chart tab (white entry · rose stop · emerald target). They are simulated levels, not broker orders.</p>
                 {% else %}
-                <p class="text-sm text-slate-300">No open paper position ({{ m.open.reason }}) — nothing of the bot's is sharing your stop cluster right now.</p>
+                <p class="text-sm text-slate-300">No open paper position ({{ d.open.reason }}) — nothing of the bot's is sharing your stop cluster right now.</p>
                 {% endif %}
             </div>
 
@@ -979,7 +1207,7 @@ HTML_TEMPLATE = """
             <div class="bg-slate-800 rounded-xl border border-slate-700 p-4 mb-5">
                 <h3 class="text-sm font-semibold text-slate-200 mb-3">✅ Conditions checklist — read back from the engine's own gates</h3>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    {% for c in m.checks %}
+                    {% for c in d.checks %}
                     <div class="rounded-lg border p-3
                         {% if c.state == 'block' %} bg-rose-950/30 border-rose-800
                         {% elif c.state == 'warn' %} bg-amber-950/20 border-amber-800
@@ -1003,24 +1231,24 @@ HTML_TEMPLATE = """
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
                 <div class="bg-slate-800 rounded-xl border border-slate-700 p-4">
                     <h3 class="text-sm font-semibold text-slate-200 mb-2">💵 Cost &amp; break-even</h3>
-                    <p class="text-xs text-slate-300">{{ m.cost.sentence }}</p>
-                    <p class="text-[11px] text-slate-500 mt-1">{{ m.cost.next_status }}.</p>
+                    <p class="text-xs text-slate-300">{{ d.cost.sentence }}</p>
+                    <p class="text-[11px] text-slate-500 mt-1">{{ d.cost.next_status }}.</p>
                     <div class="grid grid-cols-2 gap-2 mt-3 text-xs">
-                        <div class="bg-slate-900/50 rounded-lg p-2 border border-slate-700"><span class="text-slate-400">1:1.5 uncosted</span><p class="font-mono text-slate-100 text-base">{{ "%.1f"|format(m.break_even.pct_nocost) }}%</p></div>
-                        <div class="bg-slate-900/50 rounded-lg p-2 border border-slate-700"><span class="text-slate-400">at $0.40 (binding now)</span><p class="font-mono text-amber-300 text-base">{{ "%.1f"|format(m.break_even.pct_registered) }}%</p></div>
-                        <div class="bg-slate-900/50 rounded-lg p-2 border border-slate-700"><span class="text-slate-400">with ~27% scratches</span><p class="font-mono text-slate-100 text-base">{{ "%.1f"|format(m.break_even.pct_with_scratches) }}%</p></div>
-                        <div class="bg-slate-900/50 rounded-lg p-2 border border-slate-700"><span class="text-slate-400">at $0.57 (next window)</span><p class="font-mono text-slate-100 text-base">{{ "%.1f"|format(m.break_even.pct_next_cost) }}%</p></div>
+                        <div class="bg-slate-900/50 rounded-lg p-2 border border-slate-700"><span class="text-slate-400">1:1.5 uncosted</span><p class="font-mono text-slate-100 text-base">{{ "%.1f"|format(d.break_even.pct_nocost) }}%</p></div>
+                        <div class="bg-slate-900/50 rounded-lg p-2 border border-slate-700"><span class="text-slate-400">at $0.40 (binding now)</span><p class="font-mono text-amber-300 text-base">{{ "%.1f"|format(d.break_even.pct_registered) }}%</p></div>
+                        <div class="bg-slate-900/50 rounded-lg p-2 border border-slate-700"><span class="text-slate-400">with ~27% scratches</span><p class="font-mono text-slate-100 text-base">{{ "%.1f"|format(d.break_even.pct_with_scratches) }}%</p></div>
+                        <div class="bg-slate-900/50 rounded-lg p-2 border border-slate-700"><span class="text-slate-400">at $0.57 (next window)</span><p class="font-mono text-slate-100 text-base">{{ "%.1f"|format(d.break_even.pct_next_cost) }}%</p></div>
                     </div>
-                    <p class="text-[11px] text-slate-500 mt-3">{{ m.break_even.note }}</p>
+                    <p class="text-[11px] text-slate-500 mt-3">{{ d.break_even.note }}</p>
                 </div>
                 <div class="bg-slate-800 rounded-xl border border-slate-700 p-4">
                     <h3 class="text-sm font-semibold text-slate-200 mb-2">📏 Cost ruler — spread as a share of your risk</h3>
-                    {% if m.ruler %}
-                    <p class="text-[11px] text-slate-500 mb-2">ATR ${{ "%.2f"|format(m.atr) }} · a stop under 10× the round trip is a cost pump.</p>
+                    {% if d.ruler %}
+                    <p class="text-[11px] text-slate-500 mb-2">ATR ${{ "%.2f"|format(d.atr) }} · a stop under 10× the round trip is a cost pump.</p>
                     <table class="w-full text-xs">
                         <thead><tr class="text-slate-400 text-left"><th class="py-1">Stop</th><th class="py-1">Risk</th><th class="py-1">$0.40</th><th class="py-1">$0.57</th><th class="py-1">Read</th></tr></thead>
                         <tbody>
-                        {% for r in m.ruler %}
+                        {% for r in d.ruler %}
                         <tr class="border-t border-slate-700/60">
                             <td class="py-1 font-mono text-slate-200">{{ "%.1f"|format(r.atr_mult) }} ATR</td>
                             <td class="py-1 font-mono text-slate-300">${{ "%.2f"|format(r.risk_usd) }}</td>
@@ -1038,10 +1266,10 @@ HTML_TEMPLATE = """
             <!-- private observation record: header only, no writes, never committed filled -->
             <div class="bg-slate-800 rounded-xl border border-slate-700 p-4 mb-5">
                 <h3 class="text-sm font-semibold text-slate-200 mb-2">📝 Private manual observation log (§7) — header only</h3>
-                <p class="text-xs text-slate-300 mb-2">{{ m.observation.hint }}</p>
-                <pre class="overflow-x-auto whitespace-pre-wrap break-all text-[10px] leading-snug bg-slate-900/70 border border-slate-700 rounded-lg p-3 text-slate-300">{{ m.observation.header }}</pre>
+                <p class="text-xs text-slate-300 mb-2">{{ d.observation.hint }}</p>
+                <pre class="overflow-x-auto whitespace-pre-wrap break-all text-[10px] leading-snug bg-slate-900/70 border border-slate-700 rounded-lg p-3 text-slate-300">{{ d.observation.header }}</pre>
                 <ul class="mt-3 space-y-1 text-xs text-slate-300">
-                    {% for rule in m.observation.rules %}<li class="flex gap-2"><span class="text-slate-500">•</span><span>{{ rule }}</span></li>{% endfor %}
+                    {% for rule in d.observation.rules %}<li class="flex gap-2"><span class="text-slate-500">•</span><span>{{ rule }}</span></li>{% endfor %}
                 </ul>
                 <p class="text-[11px] text-slate-500 mt-3">No journal file is created, read or written by this page. The manual pressure/hold <strong class="text-slate-300">rule is still undefined</strong> (A8): this desk implements no rule and no output here may become an engine gate without a new dated pre-registration.</p>
             </div>
@@ -1050,9 +1278,9 @@ HTML_TEMPLATE = """
             <div class="rounded-xl border border-slate-700/60 bg-slate-900/60 p-4 text-xs text-slate-400">
                 <p class="text-slate-200 font-semibold mb-2">What the repo actually measured (context, not a forecast)</p>
                 <ul class="space-y-1">
-                    {% for n in m.notes %}<li class="flex gap-2"><span class="text-slate-500">•</span><span>{{ n }}</span></li>{% endfor %}
+                    {% for n in d.notes %}<li class="flex gap-2"><span class="text-slate-500">•</span><span>{{ n }}</span></li>{% endfor %}
                 </ul>
-                <p class="mt-3 text-slate-500">{{ m.disclaimer }}</p>
+                <p class="mt-3 text-slate-500">{{ d.disclaimer }}</p>
                 <p class="mt-1 text-slate-500">Method: <span class="font-mono">docs/ANALYSIS-2026-11-26-manual-desk.md</span> ·
                     <span class="font-mono">docs/EXECUTION-PLAN.md §7</span> ·
                     <span class="font-mono">docs/PROPOSAL-2026-10-23-manual-chart-tab.md</span></p>
@@ -1060,13 +1288,12 @@ HTML_TEMPLATE = """
             {% else %}
             <div class="rounded-2xl border bg-slate-800 border-slate-700 p-5">
                 <div class="text-lg font-semibold text-slate-200">🧾 Manual desk unavailable</div>
-                <div class="text-sm text-slate-400 mt-1">{{ (ctx.manual.reason if ctx.manual else 'the read layer did not load') }}</div>
+                <div class="text-sm text-slate-400 mt-1">{{ (ctx.desk.reason if ctx.desk else 'the read layer did not load') }}</div>
                 <div class="text-xs text-slate-500 mt-2">The other tabs are unaffected. Nothing here can trade.</div>
             </div>
             {% endif %}
         </div>
         <!-- ================= END MANUAL DESK TAB ================= -->
-
 
         <!-- ================= READINESS TAB — timeline in days, done vs pending ================= -->
         <div id="panel-readiness" class="hidden">
@@ -2019,7 +2246,7 @@ HTML_TEMPLATE = """
 
     </div>
     <script>
-    var TABS = ['simple', 'journal', 'chart', 'boxes', 'manual', 'readiness', 'details'];
+    var TABS = ['simple', 'journal', 'chart', 'boxes', 'manual', 'desk', 'readiness', 'details'];
     function showTab(name) {
         TABS.forEach(function(t) {
             var panel = document.getElementById('panel-' + t);
@@ -2052,7 +2279,7 @@ HTML_TEMPLATE = """
             var saved = localStorage.getItem('gold_tab');
             if (TABS.indexOf(saved) >= 0) start = saved;
         } catch(e) {}
-        // Also allow ?tab=simple|journal|chart|boxes|manual|readiness|details deep links
+        // Also allow ?tab=simple|journal|chart|boxes|manual|desk|readiness|details deep links
         try {
             var params = new URLSearchParams(window.location.search);
             var wanted = params.get('tab');
@@ -2231,6 +2458,66 @@ def pressure_context():
 
 _box_cache = {"key": None, "geom": None, "regime": None}
 _chart_cache = {"key": None, "group": None, "view": None}
+_manual_cache = {"key": None, "value": None, "at": 0.0}
+MANUAL_BUDGETS = (5.0, 10.0, 20.0, 50.0)
+
+
+def manual_context(boxes_status=None):
+    """The manual trader's panel: both sides' stop/target/R, size table, clock.
+
+    Display-only and cached for a few minutes (the heavy parts — the level, the setup
+    gate read and the observed daily-break signature — are pure functions of the log
+    tail). The live spread is re-read every call because it changes minute to minute
+    and it is the one number that can veto a geometry on the spot.
+    """
+    if MP is None or PR is None:
+        return {"ok": False, "reason": f"manual_plan.py unavailable: {_MP_IMPORT_ERROR}"}
+
+    def key_of(path):
+        try:
+            stat = os.stat(path)
+            return (path, stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            return (path, None, None)
+
+    key = key_of(LOG_FILE_PATH)
+    import time as _time
+    now_ts = _time.time()
+    if _manual_cache["value"] and (key == _manual_cache["key"]
+                                  or (now_ts - _manual_cache["at"]) < CALIBRATION_CACHE_SECONDS):
+        read = _manual_cache["value"]
+    else:
+        try:
+            rows = PR.tail_rows(LOG_FILE_PATH, 9000, window_bytes=1024 * 1024)
+            spec = MP.load_spec(os.path.join(DATA_DIR, "xm_data"))
+            read = MP.read(log_rows=rows, quotes=[], spec=spec,
+                           now=datetime.now(timezone.utc).replace(tzinfo=None),
+                           risk_budgets=MANUAL_BUDGETS)
+            _manual_cache.update({"key": key, "value": read, "at": now_ts})
+        except Exception as exc:
+            return {"ok": False, "reason": f"manual read failed: {exc}"}
+    out = dict(read)
+    # The live spread is cheap and moves: read it fresh, and re-cost both sides with it.
+    try:
+        today = datetime.now(timezone.utc).replace(tzinfo=None)
+        quotes = PR.tail_rows(os.path.join(DATA_DIR, "xm_data",
+                                          "quotes-" + today.strftime("%Y-%m-%d") + ".csv"), 240)
+        live = None
+        for quote in reversed(quotes):
+            value = PR.parse_float(quote.get("spread"))
+            if (value is not None and value >= 0
+                    and (PR.parse_float(quote.get("n_ok")) or 0) > 0 and not quote.get("flags")):
+                live = value
+                break
+        if live is not None:
+            out["spread_now"] = live
+            for side, plan in (out.get("plans") or {}).items():
+                if plan.get("ok"):
+                    plan["cost"] = MP.cost_view(plan["entry"], plan["stop"], plan["target"],
+                                                spread_rt=out["spread_rt"], spread_now=live)
+    except Exception:
+        pass
+    return out
 _readiness_cache = {"at": 0.0, "view": None}
 READINESS_TTL_SECONDS = 300
 
@@ -2519,6 +2806,7 @@ def index():
         ctx["boxes"] = box_context(ctx.get("portfolio"), ctx.get("feed"))
         ctx["chart"] = chart_context(chart_tf, ctx.get("boxes"), status)
         ctx["journal"] = journal_context(cost=0.40)
+        ctx["manual"] = manual_context(ctx.get("boxes"))
         ctx["extra_indicators"] = PR._extra_indicators_series(PR.tail_rows(LOG_FILE_PATH, 400, window_bytes=512*1024)) if PR else {}
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         quotes = PR.tail_rows(os.path.join(DATA_DIR, "xm_data", "quotes-" + now.strftime("%Y-%m-%d") + ".csv"), 240)
@@ -2545,13 +2833,13 @@ def index():
     # down and never looks like a trading verdict.
     if MD is not None:
         try:
-            ctx["manual"] = MD.brief(status, ctx,
+            ctx["desk"] = MD.brief(status, ctx,
                                      datetime.now(timezone.utc).replace(tzinfo=None))
         except Exception as exc:
-            ctx["manual"] = {"ok": False, "reason": f"manual desk read failed: {exc}"}
+            ctx["desk"] = {"ok": False, "reason": f"manual desk read failed: {exc}"}
     else:
-        ctx["manual"] = {"ok": False,
-                         "reason": f"manual_desk.py unavailable: {_MD_IMPORT_ERROR}"}
+        ctx["desk"] = {"ok": False,
+                       "reason": f"manual_desk.py unavailable: {_MD_IMPORT_ERROR}"}
     trade_read = open_trade_read(status, recent_rows)
     stale, stale_age = _stale_info(status.get("last_update"))
     hold_minutes = _hold_minutes(status.get("entry_time")) if status.get("trade_active") else None

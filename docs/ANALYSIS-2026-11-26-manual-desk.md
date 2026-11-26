@@ -6,6 +6,8 @@
 
 **Canonical queue:** `docs/EXECUTION-PLAN.md`. **Current state:** `docs/HANDOFF.md`. Dated pre-registrations/reviews still own every experiment threshold; nothing below re-opens a closed judgement.
 
+**Integration note (merge with main, 2026-11-26):** while this branch was being built, main's PR #72 landed a complementary, display-only **🤝 Manual Trade** aid (`manual_plan.py`, `tools/manual_trade.py`, `?tab=manual`, `docs/MANUAL-TRADING.md`) from the same owner request. This branch merges main and keeps BOTH aids: main's tab sizes/costs a hand-trade and keeps a private host-local journal; this branch's **🧾 Manual desk** (`?tab=desk`) reads conditions, the bot's open paper position, cost/break-even and the private §7 CSV template. IDs, TABS, contexts, smoke scenario letters and docs were reconciled so neither feature shadows the other. Both are display-only; no strategy variable, cost, ledger row or order path changed.
+
 ---
 
 ## 0. Session ritual (§5), on collection 598 — log through `2026-11-26 14:59:08 UTC`
@@ -42,7 +44,7 @@ Then the lowest-numbered eligible queue steps:
 - **A6** is DONE (analysis 11-22, owner decision 11-22). Its only remaining action — writing $0.57 into the *next* window's pre-registration — cannot happen before 2026-12-01.
 - **A8** is research-only, parallel, and explicitly *“No bot behaviour change”*: a private manual observation log for the owner's pressure/hold hypothesis. Its stated blocker is that **the manual rule is still undefined** — ask the owner before coding it.
 
-So the safe work that *is* possible from this checkout, and which the owner explicitly asked for (“when we are also manually trading … include anything that can be helpful”), is **A8-supporting tooling**: surface the repo's measured placement/risk context in one display-only screen, ship the private §7 observation template, and finally close the deferred Chart-tab item (draw the bot's open paper trade). **No manual rule is implemented, judged or registered** — the A8 blocker is preserved and named in the tool's own output.
+So the safe work that *is* possible from this checkout, and which the owner explicitly asked for (“when we are also manually trading … include anything that can be helpful”), is **A8-supporting tooling**. Two parallel sessions delivered complementary display-only aids: main's 🤝 Manual Trade read (stop/size/clock/journal, PR #72) and this branch's 🧾 Manual desk (conditions checklist, cost/break-even, bot open paper position, private §7 CSV template), which also closes the deferred Chart-tab item. Both were merged here without stacking a strategy variable. **No manual rule is implemented, judged or registered** — the A8 blocker is preserved and named in the tool's own output.
 
 **One step, one variable:** no strategy variable was touched. This is not a second variable stacked on the open `structstop1.5` window.
 
@@ -77,11 +79,11 @@ Same contract as `pressure.py` / `chart.py` / `readiness.py`: **no engine import
 
 ### 3.2 `tools/manual_desk_report.py` (new CLI, read-only)
 
-`--root DIR`, `--json`, `--template`. `--template` prints the header and rules only, with no data read. Named `*_report.py` (like `pressure_report.py` / `box_report.py`) deliberately: a `tools/manual_desk.py` would shadow the root module whenever a tools script imports the dashboard — that shadowing bug was found and fixed during this session's dashboard render test.
+`--root DIR`, `--json`, `--template`. `--template` prints the header and rules only, with no data read. Named `*_report.py` (like `pressure_report.py` / `box_report.py`) deliberately: a `tools/manual_desk.py` would shadow the root module whenever a tools script imports the dashboard — that shadowing bug was found and fixed during this session's dashboard render test. Main's separate `tools/manual_trade.py` CLI is unaffected; it offers `--log-decision` to a host-local private JSONL and refuses to write inside the checkout.
 
-### 3.3 Dashboard: 🧾 **Manual desk** tab (`?tab=manual`)
+### 3.3 Dashboard: 🤝 **Manual Trade** (`?tab=manual`) and 🧾 **Manual desk** (`?tab=desk`)
 
-One screen, display-only: verdict card → the bot's open paper position → 8-row checklist → cost/break-even + cost ruler → private observation header → measured context + honesty footer. Deep links (`?tab=manual`) work; the 15-second meta-refresh keeps the selected tab (TABS array updated and pinned by `tools/test_dashboard_context.py`). The nav hint and JS tab list were updated.
+Main's 🤝 Manual Trade tab renders both sides' structural stop, share-of-1R cost, broker-grid size table, daily-break clock and private journal command. The 🧾 Manual desk tab is one further display-only screen: verdict card → the bot's open paper position → 8-row checklist → cost/break-even + cost ruler → private observation header → measured context + honesty footer. Both deep links (`?tab=manual`, `?tab=desk`) work; the 15-second meta-refresh keeps the selected tab (`TABS` now contains both, pinned by `tools/test_dashboard_context.py`). The nav hint and JS tab list were updated.
 
 ### 3.4 The deferred Chart-tab item is closed
 
@@ -89,14 +91,14 @@ One screen, display-only: verdict card → the bot's open paper position → 8-r
 
 ### 3.5 Ops + hygiene
 
-- `tools/autosync.sh`: `manual_desk.py` added to the dirty-tree guard and to `DASH_CHANGED`, so a future edit restarts **the dashboard only** — never the engine. `engine.py` / `trade_filter.py` are untouched, so this merge triggers no engine restart.
+- `tools/autosync.sh`: BOTH `manual_plan.py` (main) and `manual_desk.py` (this branch) are in the dirty-tree guard and `DASH_CHANGED`, so a future edit restarts **the dashboard only** — never the engine. `engine.py` / `trade_filter.py` are untouched on both sides, so this merge triggers no engine restart.
 - `.gitignore`: `manual_observations*.csv` — filled manual rows can never be committed.
 - `readiness.py`: dated 2026-11-26 milestone + the B5/feed blocker wording from §2.
 
 ### 3.6 What was deliberately NOT shipped
 
 - **No manual rule.** The owner's pressure/hold hypothesis is still undefined; A8's blocker is stated in the tool's own rules, not resolved. No screen, no gate, no pre-registration.
-- **No journal writer, no write route, no unredacted rows in Git** (the `/scalp` workspace was removed at the owner's request on 2026-10-23; this does not bring it back).
+- **No journal writer or write route in the dashboard, and no unredacted rows in Git** (the `/scalp` workspace was removed at the owner's request on 2026-10-23; this does not bring it back). Main's CLI-only `--log-decision` journal is host-local, refuses to write inside the checkout and is git-ignored; this branch's `--template` prints a header only.
 - **No signal, no forecast, no “buy/sell”, no score.** The verdict is conditions only, and the footer repeats that the book is negative even at $0.00 cost, that the 8/8 signal is a coin flip, that 0 of 8 box geometries cleared the driftless reference, and that the pressure gauge is collinear with side.
 - **No `SL_CLEAR_ATR` change, no `TRADING_MODE` change, no `GOLD_LIVE_ARMED`, no ledger edit, no cost re-basing, no second strategy variable, no host edit, no real order.**
 
@@ -108,18 +110,19 @@ One screen, display-only: verdict card → the bot's open paper position → 8-r
 
 | Test / check | Result |
 |---|---|
+| `tools/test_manual_plan.py` | **39 OK** (main's 🤝 Manual Trade read layer, journal refusal, no engine import) |
 | `tools/test_manual_desk.py` | **29 OK** — mirrors pinned to `pressure.py`, no engine import / no `open(` in the module, geometry/ratchet/time-stop, malformed status, $0.40 freeze past 12-01, break-even + scratch arithmetic, all 8 checklist states, JSON-serialisable brief, §7 fields/rules, CLI template/text |
 | `tools/test_manual_chart.py` | **35 OK** (+3: extra levels get pixel `y`, no merge with box levels, off-range pinned, invalid prices dropped, flat book draws nothing) |
-| `tools/smoke_test.py` | **A–AD + new Scenario AE PASSED** (10 checks: mirrors vs engine/trade_filter, no writer, conditions-only verdict, cost freeze, break-even, stale feed blocks, 23 §7 fields, open-trade overlay, flat book, no strategy change) |
-| `tools/test_dashboard_context.py` | **19 OK** (+2: `?tab=manual` render, open-trade overlay in `chart_context`) — Flask installed into a local, git-ignored `.venv` for this checkout |
+| `tools/smoke_test.py` | **A–AF PASSED**: main's Scenario AE (8 checks: daily-break mirror pinned to `engine.derive_daily_closure`, lot snap-down, under-`volume_min` refusal, share-of-1R invariance, no-edge footer, bot-gate context, journal refusal, no strategy constant) + new **Scenario AF** (10 checks: manual-desk mirrors, no writer, conditions-only verdict, cost freeze, break-even, stale feed blocks, 23 §7 fields, open-trade overlay, flat book, no strategy change) |
+| `tools/test_dashboard_context.py` | **20 OK** (+3 across both sessions: 🤝 Manual Trade `?tab=manual` render, 🧾 Manual desk `?tab=desk` render, open-trade overlay in `chart_context`) — Flask installed into a local, git-ignored `.venv` for this checkout |
 | `tools/test_readiness_tab.py` | **16 OK** (with Flask) |
-| `tools/test_live_readiness.py`, `test_live_manage.py`, `test_live_safety.py`, `test_cost_model.py`, `test_feed_forensics.py`, `test_box_report.py`, `test_box_alert.py`, `test_manual_chart.py`, `goldbot/tests` | **25 / 25 / 28 / 19 / 13 / 14 / 35 / 35 / 64 OK** — full re-run after all edits; see §7 of `docs/HANDOFF.md` |
+| `tools/test_live_readiness.py`, `test_live_manage.py`, `test_live_safety.py`, `test_cost_model.py`, `test_feed_forensics.py`, `test_box_report.py`, `test_box_alert.py`, `test_manual_chart.py`, `goldbot/tests` | **25 / 25 / 28 / 19 / 13 / 14 / 35 / 35 / 64 OK** — full re-run after the integration; see §7 of `docs/HANDOFF.md` |
 | `python3 -m py_compile engine.py trade_filter.py chart.py manual_desk.py dashboard.py readiness.py tools/*.py` | OK |
 | `tools/check_data.py` after the code change | 0 fail / 9 documented warnings |
 | `tools/live_readiness.py` after the code change | **17 PASS / 0 TODO / 3 MANUAL, CLOSED** — no check changed status |
 | `tools/handoff_check.py` after `--update` + prose | FRESH |
 
-**AST fact:** no function in `engine.py`, `trade_filter.py`, the paper path or the LIVE order path changed. The only runtime-adjacent edits are `dashboard.py`, `chart.py`, `readiness.py`, `manual_desk.py`, `tools/autosync.sh` (display restart list) and `.gitignore` — all display/ops, none on a trading path.
+**AST fact:** no function in `engine.py`, `trade_filter.py`, the paper path or the LIVE order path changed on either side of the merge. The only runtime-adjacent edits are `dashboard.py`, `chart.py`, `readiness.py`, `manual_plan.py`, `manual_desk.py`, `tools/autosync.sh` (display restart list) and `.gitignore` — all display/ops, none on a trading path.
 
 ---
 
@@ -128,7 +131,7 @@ One screen, display-only: verdict card → the bot's open paper position → 8-r
 1. **B5 (DEMO-account evidence)** remains the lowest-numbered open Track-B step and is **host/operator only**: a DEMO account + separate data dir, fill/SL/TP/BE/time/rejection/disconnect/restart/reconciliation, and a 48 h stable run written to `docs/DEMO-EVIDENCE.md` (file does not exist). **New this session:** its feed precondition is MET on the checked-in 14-day window (§2); that does not replace host restart verification or the 48 h run.
 2. **A2** independently awaits a verified flat **host** at deploy time; the local flat ledger is not that evidence. At deploy, set `CLEAR15_CUTOVER` from the host's `autosync: merge upstream` commit time.
 3. **A6's next action** (write $0.57 into the next window's pre-registration, before its first trade) cannot happen before **2026-12-01 21:00 UTC**.
-4. **A8's owner question is still open:** define the manual pressure/hold rule (what counts as an eligible signal/stop event, what the manual entry/exit decision is, and the contemporaneous reason codes) before any rule is coded or judged. The desk implements the *record*, not the rule.
+4. **A8's owner question is still open:** define the manual pressure/hold rule (what counts as an eligible signal/stop event, what the manual entry/exit decision is, and the contemporaneous reason codes) before any rule is coded or judged. Both aids implement *records and arithmetic*, not a rule; main's journal and this branch's §7 template are private and need ≥100 matched post-stop rows before any exploratory screen.
 5. **G2** (real money) is never delegated to “Follow execution plan”.
 
 **Verdict unchanged: no demonstrated edge after costs — the book is negative before costs.** Remain paper-only.
@@ -137,4 +140,4 @@ One screen, display-only: verdict card → the bot's open paper position → 8-r
 
 ## 6. Files changed this session
 
-`manual_desk.py`, `tools/manual_desk_report.py`, `tools/test_manual_desk.py`, `chart.py`, `tools/test_manual_chart.py`, `dashboard.py`, `tools/test_dashboard_context.py`, `tools/test_readiness_tab.py` (unchanged; run), `tools/smoke_test.py` (Scenario AE), `readiness.py`, `tools/autosync.sh`, `.gitignore`, `README.md`, `docs/EXECUTION-PLAN.md` (§2i + queue/ritual/§7), `docs/HANDOFF.md` (snapshot + §1/§4/§5/§6/§7/§9/§10/§11 + era timeline), `docs/HANDOFF-HISTORY.md` (superseded §1), `docs/ANALYSIS-2026-10-20-box-theory-manual-trading.md` and `docs/PROPOSAL-2026-10-23-manual-chart-tab.md` (dated daily-break wording annotated as pre-DST; no historical conclusion rewritten), `archive/PROJECT_LOG.md`, this doc.
+`manual_desk.py`, `tools/manual_desk_report.py`, `tools/test_manual_desk.py`, `chart.py`, `tools/test_manual_chart.py`, `dashboard.py`, `tools/test_dashboard_context.py`, `tools/smoke_test.py` (Scenario AF; main's AE merged), `readiness.py`, `tools/autosync.sh`, `.gitignore`, `README.md`, `docs/EXECUTION-PLAN.md`, `docs/HANDOFF.md`, `docs/HANDOFF-HISTORY.md` (duplicate replaced-§1 blocks deduplicated), `docs/ANALYSIS-2026-10-20-box-theory-manual-trading.md` and `docs/PROPOSAL-2026-10-23-manual-chart-tab.md` (dated daily-break wording annotated), `archive/PROJECT_LOG.md`, this doc. **Merged from main PR #72:** `manual_plan.py`, `tools/manual_trade.py`, `tools/test_manual_plan.py`, `docs/MANUAL-TRADING.md`, `docs/ANALYSIS-2026-11-26-manual-trading-aids.md`, and main's edits to `dashboard.py`/`tools/autosync.sh`/`tools/smoke_test.py`/`tools/test_dashboard_context.py`/`docs/HANDOFF.md`/`docs/HANDOFF-HISTORY.md`/`archive/PROJECT_LOG.md`.
