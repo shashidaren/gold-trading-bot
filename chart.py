@@ -231,12 +231,18 @@ def _blackout_at(dt, group):
 
 
 def view(rows=None, boxes=None, group=DEFAULT_GROUP, limit=DEFAULT_LIMIT,
-         width=980, height=380, series=None):
+         width=980, height=380, series=None, extra_levels=None):
     """Everything the SVG needs, in pixel coordinates.
 
     Returns candles, level lines, session/BLACKOUT bands, price ticks and time
     labels. Pixel maths lives here rather than in the template so it can be
     tested without a browser — the template only draws what it is handed.
+
+    `extra_levels` (2026-11-26 Manual desk) carries the bot's OPEN PAPER trade
+    as three labelled lines (entry / stop / target). They are appended AFTER the
+    box levels, are never merged by price with them, and use their own `kind`
+    so the template can colour them. Invalid prices are dropped, not coerced.
+    Display-only: a location marker, never a signal or an order.
     """
     series = series if series is not None else bars(rows)
     cs = candles(series, group, limit)
@@ -287,6 +293,22 @@ def view(rows=None, boxes=None, group=DEFAULT_GROUP, limit=DEFAULT_LIMIT,
     for lv in levels_from_boxes(boxes, cs[-1]["c"]):
         price = lv["price"]
         entry = {"label": lv["label"], "price": price, "kind": lv["kind"],
+                 "in_range": y_min <= price <= y_max}
+        if entry["in_range"]:
+            entry["y"] = round(y(price), 2)
+        else:
+            entry["offscreen_above"] = price > y_max
+        lvls.append(entry)
+    # The bot's open paper trade (Manual desk, 2026-11-26). Appended AFTER the
+    # box lines and NOT de-duplicated by price: an entry sitting on a box edge
+    # is two different facts and must keep both labels. Invalid prices are
+    # dropped rather than coerced into a plausible-looking level.
+    for lv in extra_levels or []:
+        price = _f((lv or {}).get("price"))
+        if price is None:
+            continue
+        entry = {"label": str(lv.get("label") or "paper level"), "price": price,
+                 "kind": lv.get("kind") or "extra",
                  "in_range": y_min <= price <= y_max}
         if entry["in_range"]:
             entry["y"] = round(y(price), 2)
@@ -344,6 +366,7 @@ def view(rows=None, boxes=None, group=DEFAULT_GROUP, limit=DEFAULT_LIMIT,
         "y_min": round(y_min, 2), "y_max": round(y_max, 2),
         "close_y": round(y(cs[-1]["c"]), 2),
         "candles": out_candles, "levels": lvls, "bands": bands,
+        "open_levels": sum(1 for l in lvls if str(l.get("kind", "")).startswith("open_")),
         "ticks": ticks, "times": times,
         "n_candles": len(cs), "fmt": fmt,
     }

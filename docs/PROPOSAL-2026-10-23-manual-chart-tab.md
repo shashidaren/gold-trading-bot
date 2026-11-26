@@ -96,7 +96,7 @@ it from data already in `forward_test_log.csv`.
 | 2 | **Structural levels + boxes** (20-bar engine level, 1h, 4h, prior day) | This *is* the bot's stop logic, and the box doc's verdict is that the box is "a fine place to put a stop". | `pressure.box_geometry()` — already computed, already rendered as numbers | Must be labelled "location, not signal" |
 | 3 | **Placement bands** — entry / stop / target drawn as zones on the chart | Turns three numbers into a picture. This is the direct answer to "where do I place it". | `box_watch_cards()` gives entry/stop/target/RR/cost-share per side | Must read "if you take it", never "take it" |
 | 4 | **Cost ruler** — spread as % of R, live | **The most valuable unique thing we can add.** No retail indicator shows it, and it is the reason most tight-stop gold trades lose. | `ATR` + `$0.40`/`$0.55` cost constants | none — it is arithmetic |
-| 5 | **Session + blackout shading** | The bot's own blackouts (07:55–09:00 BUY-only, 12:25–12:45, 13:25–15:15, 21:45–22:30 both sides) and the 20:58–22:00 daily break are invisible on a naked chart. | `trade_filter.BLACKOUT_WINDOWS` mirrored in `pressure.py` | none |
+| 5 | **Session + blackout shading** | The bot's own blackouts (07:55–09:00 BUY-only, 12:25–12:45, 13:25–15:15, 21:45–22:30 both sides) and the then-current 20:58–22:00 daily break (now 21:58–23:00 UTC since 2026-11-02) are invisible on a naked chart. | `trade_filter.BLACKOUT_WINDOWS` mirrored in `pressure.py` | none |
 | 6 | **Prior-day + session high/low rails** | The levels every gold desk actually marks. Cheap, and they explain why price stalls where it does. | `pressure.market_map()` levels | none |
 
 ### Tier 2 — worth adding, cheap, but secondary
@@ -213,7 +213,7 @@ This is the part that answers "advice where to place trades". It is the box doc'
    trades with a median lifetime of 1.5 min (`REVIEW-2026-09-15`). The reflex
    will do the same thing to a manual trade.
 6. **Skip the dark windows.** 07:55–09:00 (BUY only), 12:25–12:45, 13:25–15:15,
-   21:45–22:30 (both sides), plus the **20:58–22:00** daily break — a gap through
+   21:45–22:30 (both sides), plus the then-current **20:58–22:00** daily break (now **21:58–23:00 UTC** since 2026-11-02) — a gap through
    a stop is not a stop (`REVIEW-2026-10-19`, the fired §7 closure-gap trigger).
 7. **Do not chase.** More than ~1 ATR beyond the edge is a bad fill. 94% of breaks
    are retested within 30 bars at a median of 3 — the retest is usually available.

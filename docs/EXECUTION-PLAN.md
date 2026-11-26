@@ -1,8 +1,8 @@
 # Gold bot execution plan — “follow execution plan”
 
-**Status:** living session queue — re-based **2026-11-22** on collection 564 (data through `2026-11-20 21:57:03 UTC`);
+**Status:** living session queue — re-based **2026-11-26** on collection 598 (data through `2026-11-26 14:59:08 UTC`);
 §2/§2b refreshed 2026-10-27, §2c 2026-10-28, §2d 2026-10-30 (paper-ledger decision: **no top-up / no rebaseline**),
-§2e 2026-11-06, §2f 2026-11-12, **§2g 2026-11-22**. **G1 is SIGNED (2026-10-27, branch A):** A1 is DONE; **A2 remains
+§2e 2026-11-06, §2f 2026-11-12, §2g 2026-11-22, §2h 2026-11-22 (A6 decision), **§2i 2026-11-26 (this session)**. **G1 is SIGNED (2026-10-27, branch A):** A1 is DONE; **A2 remains
 blocked on a production-host flat-position check at deploy time**. This checkout's current ledger is flat, but it is not
 evidence about the inaccessible host. **B2 (10-28), B3 (11-06), B4 (11-12) and A6 (11-22, analysis) are DONE**;
 `live_readiness` is **17 PASS / 0 TODO / 3 MANUAL**, gate still CLOSED — **no code TODO remains**. **A6 is DONE as an
@@ -14,9 +14,16 @@ that the book is **negative at $0.00 cost**, so no cost assumption can make it p
 days** (11-04 676 open min, 11-05 26 min with **#819 open**, 11-06 425 min) — so the host feed is **not** healthy and this
 corrects the 11-12 note that said no host action was implied. **B5 (DEMO-account evidence) is the next open Track-B step
 and remains a host/operator action**, now with a precondition: a 48 h run needs a feed that survives 48 h.
+**2026-11-26 update (§2i):** `tools/feed_forensics.py --days 14` is **clean** on the checked-in window, so that
+*data* precondition is **MET** — the November outages are now older than 14 days — but this is **not host proof**:
+restart durability and the 48 h DEMO run remain operator actions, and `demo_evidence` stays MANUAL. The session's
+runnable step was **A8-supporting, display-only tooling for the owner's manual trading** (a Manual desk, the private
+§7 observation template and the deferred open-paper-trade chart overlay) — **no strategy variable, cost assumption,
+ledger row or gate changed, no manual rule coded**. The manual pressure/hold rule is still owner-undefined (A8 blocker).
 Evidence: `docs/REVIEW-2026-10-27-g1-decision.md`, `docs/REVIEW-2026-10-28-b2-broker-be-time-stop.md`,
 `docs/REVIEW-2026-11-06-b3-position-deal-reconciliation.md`, `docs/ANALYSIS-2026-11-12-b4-live-order-safety.md`,
-`docs/ANALYSIS-2026-11-22-a6-all-in-cost-model.md`, `docs/ANALYSIS-2026-11-22-feed-holes-november.md`.
+`docs/ANALYSIS-2026-11-22-a6-all-in-cost-model.md`, `docs/ANALYSIS-2026-11-22-feed-holes-november.md`,
+`docs/ANALYSIS-2026-11-26-manual-desk.md`.
 **Purpose:** make progress consistent across sessions while the bot stays in paper/forward-test mode, until there is — or is not — something genuinely workable for live trade.
 **Canonical prompt:** **“Follow execution plan.”** (The older “Execute the plan.” remains an exact alias; README/HANDOFF point here.)
 
@@ -312,6 +319,52 @@ parameter changed, no registered bar changed.**
 - **What would reopen it inside this window:** exactly one thing — the measured all-in round trip rising
   **above $0.70**. Anything else is an opinion, not a trigger.
 
+### 2i. Refresh 2026-11-26 ~15:30 UTC (collection 598, log through `2026-11-26 14:59:08 UTC`)
+
+Read with §2–§2h; a current-state refresh, the §6 rule-1 feed check, and one display-only improvement. Nothing
+below re-opens a closed judgement or changes a registered bar.
+
+- **1,064 closed** (236W/470L/354BE/4TIME, decisive **33.4% [30.0–37.0]**), engine ledger **$75.18**, true equity
+  **$58.25**, net **−$867.35** at the registered $0.40 round trip (diagnostic only: −$1,048.14 at the modelled
+  all-in $0.57). No open trade (`next_trade_num: 1065`). `check_data` **0 fail / 9 documented warnings**;
+  `handoff_check` was **STALE by 66 trades** and has been refreshed (`--update` + §1 prose + archived old §1);
+  `check_structural_stop` **PASS** (era n=567, 0 stops inside the level, 81.7% level-bound, +0.50 ATR clearance,
+  3.10 ATR median risk).
+- **Era n=567** (151W/259L/154BE/3TIME): decisive **36.8% [32.3–41.6]**, gross **−0.034R/trade**, SL/day **6.02**,
+  SL share **45.7%**, scratch **27.2%**, avg SL **$6.20**, era DD **$207.87**. Bar card B1/B2/B3/C1/C2/A4/A5 **OK**;
+  R4/R5 clear. Grown-sample observation only — the 10-19 judgement stays closed and the lapsed n=150 arm stays lapsed.
+  **No demonstrated edge after costs; the book is negative at $0.00 cost.**
+- **Gap rides: 9** (threshold 2), 1 reopen gapped through the stop, **0** worse exits, 4 scratch stops, 0 weekend rides —
+  recorded, not re-judged. `derive_daily_closure()` still follows the observed `21:58→23:00 UTC` break on its own.
+- **§6 rule 1 — the B5 feed precondition is MET on checked-in data.** `python3 tools/feed_forensics.py --days 14`
+  finds **no hole of 10+ expected-open minutes** from 11-12 → 11-26; bars to `14:59:08`, fresh quotes to `14:59:30`.
+  The three `BOTH FEEDS DOWN` November outages (11-04/05/06) are now **older than 14 days**; **#819 stays not
+  judgeable** on bar data; the two Sunday `PRICE-FEED ONLY` holes stay historical. `readiness.py`'s blocker text and
+  `demo` timeline row now say the *data* precondition is met. **This is not host evidence:** restart durability must
+  still be verified by the operator and the 48 h DEMO run is the real test. A clone whose last bar is ~1 h behind the
+  session clock prints STALE — that is the **collection boundary**, not an outage (the 11-06 mistake).
+- **Cost sample:** 41/14 complete UTC days, 5/2 weekends, measured round trip mean/median **$0.55** on **486** matched
+  trades, p90 $0.57; spec re-captured 2026-11-26 13:57:01 UTC: REAL, 1:1000, build 6230, IOC only, min 0.01 /
+  step 0.001 / max 50. EU rule fits 100.00% of 85,694 rows. **$0.40 stays registered** (§2h); $0.57 is for the NEXT
+  window from 2026-12-01 21:00 UTC.
+- **Paper runway:** true equity $58.25, era burn ≈−$0.74/closed trade at $0.40 and 13.2 trades/active day → ≈**79
+  trades / ~6.0 trading days** to $0.00; bootstrap 90% **74–1038**. Signed **"no rebaseline ever — let it go
+  negative"** unchanged; nothing here edits the ledger.
+- **Step selection:** A2 is still host-blocked, B5 is host-only, no time gate is expired, A6 is DONE. The lowest-numbered
+  *runnable* work was therefore **A8-supporting research tooling**, which the owner explicitly requested for their
+  manual trading. Shipped (display-only, paper-safe): `manual_desk.py`, `tools/manual_desk_report.py`, a `?tab=manual`
+  dashboard tab, the §7 private observation template, and the deferred open-paper-trade chart overlay in `chart.py`.
+  The verdict is conditions only (never buy/sell), **$0.40 stays binding**, no manual rule was coded — **A8's
+  "manual rule undefined" blocker is preserved**. Tests: `test_manual_desk.py` 29, `test_manual_chart.py` 35,
+  `test_dashboard_context.py` 19, `test_readiness_tab.py` 16, smoke **A–AE PASSED** (Scenario AE, 10 checks),
+  `goldbot` 64, `check_data` 0 fail/9 warn, `handoff_check` FRESH. `docs/ANALYSIS-2026-11-26-manual-desk.md`.
+- **`live_readiness` stays 17 PASS / 0 TODO / 3 MANUAL, CLOSED** — no check changed status. `SL_CLEAR_ATR` still **0.5**,
+  `CLEAR15_CUTOVER` still **None**, `TRADING_MODE` still `FORWARD_TEST`; no engine/trade_filter/paper-path/LIVE-order-path
+  function changed, no real order, no host action, no second strategy variable.
+- **Verdict unchanged:** paper-only; no demonstrated edge after costs. **Next eligible step: B5 (host/operator DEMO
+  evidence + 48 h run), with its data precondition now met.** A2 separately awaits a verified flat host; A8 awaits the
+  owner's manual-rule definition; A6's next action cannot precede 2026-12-01.
+
 ---
 
 ## 3. The queue
@@ -337,7 +390,7 @@ parameter changed, no registered bar changed.**
 | **A5** | n=150 or 2026-12-01 21:00 UTC, whichever comes first | **PASS/FAIL/REVERT** judgement exactly as registered. | dated REVIEW; PASS requires Wilson LB > 40%, net ≥ 0.00R at $0.20/side, ≥ −0.05R at $0.275/side, era DD ≤ $200. | none |
 | **A6** | **DONE 2026-11-22 (analysis)** — sample gate MET 11-06 | **All four legs modelled** in `tools/cost_model.py`: spread measured ($0.55 median, 420 joined trades), swap computed from the captured spec (long −69.5 / short +15.07 pts, triple-WED, DST-derived rollover → −$2.66 **both-sided**), slippage and commission **declared unobservable with sensitivities**. Ledger + era re-costed across 0.00/0.01/0.02 slip and 0/0.05/0.10 commission; share-of-1R distribution; break-even check. | **MET:** dated `docs/ANALYSIS-2026-11-22-a6-all-in-cost-model.md`; `tools/test_cost_model.py` **19 OK**; all-in **$0.57** vs registered $0.40; book **negative at $0.00**, so no cost assumption rescues it. | **DECIDED 2026-11-22 (§2h, `docs/REVIEW-2026-11-22-a6-cost-decision.md`): $0.40 stays registered for the current `structstop1.5` window** — the pre-registration's own overlay fires only **> $0.70** and the measured $0.57 does not reach it, so changing it now would be the banned post-outcome re-cost. **$0.57 is adopted for the NEXT window from 2026-12-01 21:00 UTC** and must be written into that pre-registration before its first trade. Nothing re-read or re-costed today. `cost_model` stays MANUAL — only demo fills / a broker statement can promote the two unobservable legs. |
 | **A7** | after A5, only if PASS | **Independent** forward window on the **same unchanged strategy** — 2–4 months, multiple regimes, chronological holdout. This, not a replay, is the edge test. | dated pre-registration before the window; positive net expectancy after measured cost with acceptable drawdown and uncertainty. | time; a FAIL/REVERT ends this track. |
-| **A8** | research only, parallel | Private manual observation log (§7) for the owner's pressure/hold hypothesis. No bot behaviour change. ≥100 matched post-stop observations before any exploratory screen; then a new dated pre-registration, never an engine gate. | private log (outside Git) + optional dated ANALYSIS. | the manual rule is still undefined — ask the owner for the definition before coding it. |
+| **A8** | research only, parallel | Private manual observation log (§7) for the owner's pressure/hold hypothesis. No bot behaviour change. ≥100 matched post-stop observations before any exploratory screen; then a new dated pre-registration, never an engine gate. **2026-11-26 (tooling only, not the step):** the §7 header/template, a display-only Manual desk and the open-paper-trade chart overlay shipped (`docs/ANALYSIS-2026-11-26-manual-desk.md`) — the record exists, no rule is implemented or judged. | private log (outside Git) + optional dated ANALYSIS. | **STILL OPEN:** the manual rule is undefined — ask the owner for the definition before coding it. The desk's own rules say so; it implements no rule, no gate, no journal writer. |
 
 ### Track B — LIVE execution engineering (all paper-safe; none places an order)
 
@@ -349,7 +402,7 @@ Every step must move at least one `live_readiness.py` check from TODO to PASS **
 | **B2** | **DONE 2026-10-28** | Choice recorded first (**implement, no divergence**): `docs/DECISION-2026-10-28-b2-broker-be-and-time-stop.md`. Broker-side **BE ratchet** (`TRADE_ACTION_SLTP` at +0.75R, stop to entry, only after `DONE`) **and** the 240-min **time stop** (market close by ticket), plus the LIVE fill state both rules need, restart persistence and a reconcile-pending block on new exposure. B3 later replaced quote-based time-stop booking with actual deal-history accounting. | **MET:** `live_readiness.py` `broker_be` + `broker_time_stop` PASS (now call-graph checks, not substring checks); **19** fake-MT5 tests in `tools/test_live_manage.py`; **Scenario AC** (12 checks) in `smoke_test.py`; smoke A–AB unchanged; scorecard **11 PASS / 6 TODO / 3 MANUAL**, gate CLOSED. Evidence: `docs/REVIEW-2026-10-28-b2-broker-be-time-stop.md`. | — (closed; followed by B3, now done) |
 | **B3** | **DONE 2026-11-06** | Startup adopts one valid strategy position by magic; order path reconciles before exposure; realized P&L comes from broker `history_deals_get`; ticket↔trade number persists; ambiguous states fail closed. | **MET:** `position_reconcile` + `deal_reconcile` PASS through the LIVE call graph; 25 fake-MT5 tests (including query-failure, restart, and idempotency); smoke Scenario AC uses actual deal accounting. | — |
 | **B4** | **DONE 2026-11-12** | **Pre-order safety:** `terminal_info().connected` **+** `trade_allowed`; `volume_min`/`volume_step`/**`volume_max`** and `trade_stops_level`/`freeze_level` from the live spec; leverage-aware free-margin check via `order_calc_margin()`; and a **spread-as-%-of-R** veto (measured $0.55 is ~9% of median 1R, up to 24.5% of the smallest). | **MET:** `disconnect_safety`, `sizing_limits`, `cost_guard` PASS through the call graph; **28** hermetic tests (`tools/test_live_safety.py`); **smoke Scenario AD** (11 checks, every refusal sends nothing); every guard re-pinned to go red if disconnected; paper path byte-identical. Scorecard **17 PASS / 0 TODO / 3 MANUAL**, gate CLOSED. Evidence: `docs/ANALYSIS-2026-11-12-b4-live-order-safety.md`. | — (closed; followed by B5, host-only) |
-| **B5** | **B2–B4 DONE → next open step**, but **precondition added 2026-11-22** | **DEMO-account** evidence on the host: fill (IOC), SL/TP, BE/time management, rejection handling, disconnect, restart, reconciliation, kill switch, and 48 h of stable running. Use a DEMO account and a separate data dir — the captured spec says REAL. | `docs/DEMO-EVIDENCE.md` (**new file to be created**, redacted) exists; `live_readiness.py` `demo_evidence` PASS. | **HOST/operator action** — cannot be done from the repo checkout. **New precondition:** a 48 h run needs a feed that survives 48 h, and three `BOTH FEEDS DOWN` outages hit in six days (11-04, 11-05, 11-06). Fix restart durability first; `python3 tools/feed_forensics.py` is the acceptance test (`docs/ANALYSIS-2026-11-22-feed-holes-november.md`). |
+| **B5** | **B2–B4 DONE → next open step**, but **precondition added 2026-11-22** | **DEMO-account** evidence on the host: fill (IOC), SL/TP, BE/time management, rejection handling, disconnect, restart, reconciliation, kill switch, and 48 h of stable running. Use a DEMO account and a separate data dir — the captured spec says REAL. | `docs/DEMO-EVIDENCE.md` (**new file to be created**, redacted) exists; `live_readiness.py` `demo_evidence` PASS. | **HOST/operator action** — cannot be done from the repo checkout. **New precondition:** a 48 h run needs a feed that survives 48 h, and three `BOTH FEEDS DOWN` outages hit in six days (11-04, 11-05, 11-06). Fix restart durability first; `python3 tools/feed_forensics.py` is the acceptance test (`docs/ANALYSIS-2026-11-22-feed-holes-november.md`). **2026-11-26:** `--days 14` is clean on checked-in data, so the *data* precondition is **MET**; host restart durability + the 48 h DEMO run remain operator actions and `demo_evidence` stays MANUAL. |
 | **B6** | B5 done | Ops runbook: `GOLD_LIVE_ARMED=1`, `LIVE_HALT` kill-switch drill, service/user separation, monitoring/alerts, rollback, and a written “who can arm it” rule. | dated `docs/RUNBOOK-LIVE.md` (**new file to be created**) + a drill log; no credential in Git. | none |
 
 ### Track C — the only path to a live pilot
@@ -366,6 +419,7 @@ Every step must move at least one `live_readiness.py` check from TODO to PASS **
 
 | When | What |
 |---|---|
+| 2026-11-26 | **Ritual refresh + B5 feed data-precondition MET + display-only Manual desk (paper-only, no strategy change).** Collection 598 (1,064 closes, era n=567): `check_data` 0 fail/9 warn, `handoff_check` STALE→FRESH, `check_structural_stop` PASS, `check_gap_rides` 9/2, `pressure_report` era 36.8% / −0.034R, `xm_quote_report` 41/14 days + 5/2 weekends, `live_readiness` 17/0/3 CLOSED. §6 rule 1: `feed_forensics.py --days 14` clean → B5's registered data precondition met on the checked-in window (NOT host proof). A2 host-blocked, B5 host-only → the runnable step was A8-supporting, owner-requested manual-trading tooling: `manual_desk.py` + `tools/manual_desk_report.py` + `?tab=manual` (conditions checklist, cost/break-even, §7 private template, open paper position), and `chart.py` draws the deferred open-paper-trade overlay. **No manual rule coded (A8 blocker preserved), no parameter/cost/ledger/gate change.** Tests: 29 + 35 + 19 + 16, smoke A–AE, `goldbot` 64. `docs/ANALYSIS-2026-11-26-manual-desk.md`. |
 | 2026-10-19 21:00 UTC | Structural-stop time gate judged: geometry PASS, **SCREEN MET**, **PASS unavailable** (n=139 < 150; Wilson LB 28.8%). §7 closure-gap trigger fired 2/2. `docs/REVIEW-2026-10-19-struct-stop-judgement.md`. |
 | 2026-10-20 | Post-gate refresh: n=150 arm **lapsed with the time gate**; no re-judgement on a grown sample. `docs/REVIEW-2026-10-20-post-gate-refresh.md`. |
 | 2026-10-25 ~03:30 UTC | Owner stop-hunt hypothesis → `tools/stop_hunt_markout.py` + `structstop1.5` replay variant. Deeper stops monotone-better at every cost; 1.5 ATR passes 3/4 of a **pre-declared** bar; **NO live change**, candidate only. `docs/ANALYSIS-2026-10-25-stop-hunt-markouts-and-clearance-grid.md`. |
@@ -393,10 +447,13 @@ python3 tools/check_gap_rides.py           # registered closure count + damage f
 python3 tools/pressure_report.py --root .  # era verdict + calibration
 python3 tools/xm_quote_report.py           # cost sample + DST offsets
 python3 tools/live_readiness.py            # live gate scorecard
+python3 tools/feed_forensics.py --days 14  # §6 rule 1: B5's feed acceptance test
+python3 tools/manual_desk_report.py        # display-only manual-trading brief (optional)
 python3 tools/strategy_lab.py --calib-only # only when a replay/param idea is in play
 python3 tools/handoff_check.py --update    # after checking the underlying files
 ```
-If code changed, also: `python3 tools/smoke_test.py`, `python3 tools/test_live_readiness.py`,
+If code changed, also: `python3 tools/smoke_test.py`, `python3 tools/test_manual_desk.py`,
+`python3 tools/test_dashboard_context.py`, `python3 tools/test_live_readiness.py`,
 `python3 tools/test_live_manage.py`, `python3 tools/test_live_safety.py`,
 `python3 -m unittest discover -s goldbot/tests -t .`,
 `python3 -m py_compile engine.py trade_filter.py`, and the relevant replay/calibration checks.
@@ -416,7 +473,9 @@ If code changed, also: `python3 tools/smoke_test.py`, `python3 tools/test_live_r
 2. Any expired **time gate** — judge it on the latest available snapshot, exactly as registered, before any new change.
 3. Track A in order (A1 → A5), unless blocked by G1 or a host action.
 4. Track B in order (B2 → B6), one `live_readiness.py` check at a time. B2–B4 are done; **B5 is a host/operator
-   action** (DEMO account + separate data dir) and must be reported as the exact blocker, not simulated.
+   action** (DEMO account + separate data dir) and must be reported as the exact blocker, not simulated. **2026-11-26:**
+   its registered *data* precondition (`feed_forensics.py --days 14` clean) is MET on checked-in data; that removes
+   neither the host-durability verification nor the 48 h DEMO run.
 5. A6/A8 (cost sample, private observation log) whenever their data arrives.
 6. C1 only when everything above is complete.
 
@@ -431,3 +490,7 @@ One row per eligible signal/stop event, including cases where the owner does **n
 `timestamp_utc, bot_trade_id, side, bot_entry, bot_sl, bot_tp, manual_entry, manual_exit, pressure_source, pressure_metric, pressure_timeframe, pressure_value_at_entry, pressure_value_at_stop_touch, last_closed_bar_utc, contemporaneous_action, reason_code, max_hold_or_exit_rule, post_stop_markout_horizons, mfe, mae, hypothetical_exit, estimated_cost, notes_without_account_identifiers`
 
 A trade that later touches its former target after the bot's stop is a **counterfactual mark-out**, not a win under the bot's rules. The entry, stop event and decision must be timestamped **before** looking at the recovery path. This phase changes no bot behaviour.
+
+Rules for keeping the record honest (mirrored verbatim in `manual_desk.OBSERVATION_RULES` and printed by `python3 tools/manual_desk_report.py --template`): log every eligible event including losses and non-overrides; keep bot/manual rows separate; timestamp the decision before looking at recovery; a later target touch is a mark-out, not a win; ≥100 matched post-stop observations before any exploratory screen; then a NEW dated pre-registration, never an engine gate; keep the file private with no account identifiers. `manual_observations*.csv` is git-ignored — **filled rows are never committed**.
+
+**Tooling shipped 2026-11-26 (display-only; no filled rows in Git).** The header and rules are available without reading or writing a journal: `python3 tools/manual_desk_report.py --template` prints them, and the dashboard's `?tab=manual` shows the same template beside the current conditions checklist. The read layer has no journal reader, no writer and no write route. **This does not define or judge A8's manual pressure/hold rule** — that remains the owner's open question. Scope and blocker: `docs/ANALYSIS-2026-11-26-manual-desk.md` §3/§5.

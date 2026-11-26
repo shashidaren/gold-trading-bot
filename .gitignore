@@ -26,6 +26,8 @@ portfolio_state.pkl
 box_alert_state.json
 # Manual scalping decisions are host-local, self-reported, and never part of the bot ledger
 manual_scalp_journal.json
+# EXECUTION-PLAN §7 private manual observation rows — header only in Git, filled rows never committed
+manual_observations*.csv
 
 # === OS & Editor Files ===
 .DS_Store

@@ -113,6 +113,12 @@ MILESTONES = [
      "post-outcome re-cost §0 forbids. $0.57 is adopted for the next window and is visible in every cost "
      "view rather than swapped in.",
      "docs/REVIEW-2026-11-22-a6-cost-decision.md"),
+    ("2026-11-26", "Manual desk + B5 feed precondition verified on checked-in data",
+     "Display-only companion for the owner's manual trading (conditions checklist, cost/break-even, private "
+     "§7 observation template, open paper trade drawn on the chart). Ritual refresh + feed_forensics --days 14 "
+     "clean, so the trailing 14-day acceptance test for B5 is met on this snapshot; B5 is still a HOST action. "
+     "No strategy variable, cost, ledger row or order path changed.",
+     "docs/ANALYSIS-2026-11-26-manual-desk.md"),
 ]
 
 # Blockers that no code commit can clear. `who` is the person/place that must act.
@@ -130,7 +136,9 @@ BLOCKERS = [
     ("Host", "DEMO account + 48 h evidence (B5 — next open step)",
      "Every code check on the LIVE gate is now PASS (B2/B3/B4 done); what remains is operator evidence: a "
      "DEMO account with a separate data dir, and a dated report covering fill, SL/TP, BE/time management, "
-     "rejection, disconnect, restart, reconciliation and 48 h stable. The captured spec says REAL.",
+     "rejection, disconnect, restart, reconciliation and 48 h stable. The captured spec says REAL. "
+     "The trailing 14-day feed acceptance test is clean on the 2026-11-26 checked-in snapshot, but that "
+     "is not host evidence and does not replace the 48 h DEMO run.",
      "docs/ANALYSIS-2026-11-12-b4-live-order-safety.md"),
     ("Evidence", "Positive net expectancy",
      "Whole book net −$826 at the registered $0.40 (−$994 at the measured all-in $0.57); negative even at "
@@ -141,10 +149,13 @@ BLOCKERS = [
      "fire, so re-reading any net figure at the measured $0.57 mid-window would be a post-outcome "
      "re-cost. $0.57 applies from the next window (2026-12-01 21:00 UTC at the earliest).",
      "docs/REVIEW-2026-11-22-a6-cost-decision.md"),
-    ("Host", "November feed outages (3 in 6 days)",
+    ("Host", "November feed outages (3 in 6 days) — trailing 14 d now clean",
      "Both feeds went silent inside open sessions: 11-04 08:17→19:33 (676 open min), 11-05 03:00→03:26 "
-     "(26 min, #819 open), 11-06 13:50→20:55 (425 min). Needs journal/log review + restart durability; "
-     "acceptance test is `python3 tools/feed_forensics.py` showing no BOTH-FEEDS-DOWN row.",
+     "(26 min, #819 open), 11-06 13:50→20:55 (425 min). #819 stays NOT judgeable on bar data. "
+     "2026-11-26 ritual: `python3 tools/feed_forensics.py --days 14` reports 'no hole of 10+ expected-open "
+     "minutes', so the registered acceptance test is MET on the checked-in window (2026-11-12 → 11-26). "
+     "That is NOT host proof: restart durability must still be verified by the operator, and the 48 h DEMO "
+     "run is the real test.",
      "docs/ANALYSIS-2026-11-22-feed-holes-november.md"),
     ("Owner", "G2 — real-money approval",
      "Never delegated to 'Follow execution plan'. Required even if every check is green.",
@@ -263,8 +274,9 @@ def build_timeline(now, progress, counts):
              "The next open Track-B step and it cannot be produced from the repo: a demo account + separate "
              "data dir, fill/SLTP/BE/time/rejection/disconnect/restart/reconciliation and 48 h stable. The "
              "captured spec says REAL. A 48 h DEMO run needs the feed to survive 48 h — three "
-             "BOTH-FEEDS-DOWN outages happened in six days in November, so the restart durability must be "
-             "fixed first (`tools/feed_forensics.py` is the acceptance test)."),
+             "BOTH-FEEDS-DOWN outages happened in six days in November. On 2026-11-26 the trailing "
+             "14-day `feed_forensics.py --days 14` read is CLEAN on checked-in data, so the *data* "
+             "precondition is met; host restart durability and the 48 h DEMO run remain operator actions."),
         _row("edge_review", "Independent edge reassessment (2–4 months)", "conditional",
              f"~{edge_lo}–{edge_hi} d",
              f"{_date(AUDIT + timedelta(days=edge_lo))} – {_date(AUDIT + timedelta(days=edge_hi))}",

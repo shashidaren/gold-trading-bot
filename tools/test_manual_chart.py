@@ -299,5 +299,56 @@ class TeachingText(unittest.TestCase):
             self.assertIn(word, blob)
 
 
+class OpenPaperTradeLevels(unittest.TestCase):
+    """The 2026-11-26 Manual desk: the bot's OPEN paper trade on the chart."""
+
+    def tape(self):
+        return tape(n=120, px=4000.0, step=0.0, span=1.0, atr=2.0)
+
+    def test_extra_levels_get_pixel_y_and_are_never_merged_with_a_box(self):
+        boxes = [box("20-bar", 4001.0, 3999.0, 4000.0, 2.0)]
+        extra = [
+            {"label": "paper BUY entry", "price": 4000.0, "kind": "open_entry"},
+            {"label": "paper BUY stop", "price": 3999.0, "kind": "open_stop"},
+            {"label": "paper BUY target", "price": 4002.0, "kind": "open_target"},
+        ]
+        v = C.view(rows=self.tape(), boxes=boxes, extra_levels=extra)
+        self.assertTrue(v["ok"])
+        self.assertEqual(v["open_levels"], 3)
+        open_lines = [l for l in v["levels"] if l["kind"].startswith("open_")]
+        self.assertEqual(len(open_lines), 3)
+        for l in open_lines:
+            self.assertTrue(l["in_range"])
+            self.assertIn("y", l)
+            self.assertGreaterEqual(l["y"], v["plot"]["t"])
+            self.assertLessEqual(l["y"], v["plot"]["t"] + v["plot"]["h"])
+        # The stop sits on the 20-bar floor: both facts keep their own label.
+        labels_at_floor = [l["label"] for l in v["levels"]
+                           if round(l["price"], 2) == 3999.0]
+        self.assertIn("Engine floor (20-bar)", " ".join(labels_at_floor))
+        self.assertIn("paper BUY stop", " ".join(labels_at_floor))
+
+    def test_offscreen_open_levels_are_pinned_not_dropped(self):
+        extra = [
+            {"label": "paper SELL target", "price": 9.0, "kind": "open_target"},
+            {"label": "paper SELL stop", "price": 9000.0, "kind": "open_stop"},
+        ]
+        v = C.view(rows=self.tape(), extra_levels=extra)
+        self.assertEqual(v["open_levels"], 2)
+        pinned = [l for l in v["levels"] if l["kind"].startswith("open_")]
+        self.assertEqual(len(pinned), 2)
+        self.assertTrue(all(not l["in_range"] for l in pinned))
+        self.assertEqual(sorted(l["offscreen_above"] for l in pinned), [False, True])
+
+    def test_invalid_extra_prices_are_dropped_and_flat_book_draws_nothing(self):
+        v = C.view(rows=self.tape(), extra_levels=[
+            {"label": "bad", "price": "nan", "kind": "open_entry"},
+            {"label": "bad2", "price": None, "kind": "open_stop"},
+            None,
+        ])
+        self.assertEqual(v["open_levels"], 0)
+        self.assertEqual(C.view(rows=self.tape())["open_levels"], 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
