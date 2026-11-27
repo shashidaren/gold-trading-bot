@@ -2386,3 +2386,8 @@ Timestamp,Reason,Price,ATR
 2026-11-27 01:50:00,SL Cooldown: 17 min remaining (8 consecutive SLs -> 60m cooldown),3578.31,2.86
 2026-11-27 01:52:06,SL Cooldown: 14 min remaining (8 consecutive SLs -> 60m cooldown),3577.57,2.92
 2026-11-27 05:39:02,ATR too high - News volatility (4.65 > 4.5),3647.08,4.65
+2026-11-27 08:38:02,Blackout: London Open & Early Session Kill-Zone,3670.72,2.59
+2026-11-27 08:40:03,Blackout: London Open & Early Session Kill-Zone,3670.34,2.09
+2026-11-27 08:42:03,Blackout: London Open & Early Session Kill-Zone,3674.40,2.25
+2026-11-27 08:45:04,Blackout: London Open & Early Session Kill-Zone,3674.65,2.08
+2026-11-27 08:59:05,Blackout: London Open & Early Session Kill-Zone,3677.52,1.83
