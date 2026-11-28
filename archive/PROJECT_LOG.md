@@ -794,3 +794,52 @@ Ritual on collection 598 (log through `2026-11-26 14:59:08 UTC`): `check_data` *
 Verification after integrating main: `test_manual_plan.py` **39 OK**, `test_manual_desk.py` **29 OK**, `test_manual_chart.py` **35**, `test_dashboard_context.py` **20** (+3 new across both sessions), `test_readiness_tab.py` **16**, smoke **A–AF PASSED** (main Scenario AE 8 checks + new Scenario AF 10 checks), `test_live_readiness.py` / `test_live_manage.py` / `test_live_safety.py` / `goldbot` 64 green, `py_compile` OK, `check_data` 0 fail/9 warn, `live_readiness` 17/0/3 CLOSED, `handoff_check` **FRESH (0 advisory drift)**. Flask was installed into a local, git-ignored `.venv` to run the dashboard render tests. **No `engine.py` / `trade_filter.py` / paper-path / LIVE-order-path function changed.**
 
 Unchanged: `SL_CLEAR_ATR = 0.5`, `CLEAR15_CUTOVER = None`, `RR_TARGET = 1.5`, `BE_TRIGGER_R = 0.75`, `MAX_HOLD_MINUTES = 240`, registered **$0.40** cost, `TRADING_MODE = "FORWARD_TEST"`, every ledger row. No A2 deploy, no host action, no LIVE arming, no broker connection, no real order, no second strategy variable. Evidence: `docs/ANALYSIS-2026-11-26-manual-desk.md`, `docs/MANUAL-TRADING.md`, `docs/ANALYSIS-2026-11-26-manual-trading-aids.md`; queue/status: `docs/EXECUTION-PLAN.md` §2i/§3/§4/§5/§6/§7; current state: `docs/HANDOFF.md`. **Next: B5 (host/operator DEMO evidence + 48 h run — data precondition now met); A2 separately awaits a verified flat host; A8 awaits the owner's manual-rule definition; A6's next action cannot precede 2026-12-01. Remain paper-only.**
+
+## 2026-11-28 — Volume-spike localisation: the M5→M1 step-down has no level edge (display-only analysis, no strategy change)
+
+Owner ask: "step down from the 5-minute to the 1-minute chart to identify the exact price level
+where volume surges; check whether the spike sits near a recent intraday swing high/low (≈80% of
+such spikes); and whether a channel-high/low penetration triggered algorithmic order flow."
+
+Ran it on the repo's own tape (collection 612, log through `2026-11-27 19:39 UTC`, 14,963
+complete M5 buckets over 69 days from the MT5-sidecar era). New read-only tool:
+`volume_spike.py` + `tools/volume_spike_report.py`, 14 hermetic tests
+(`python3 -m unittest tools.test_volume_spike`). **No `engine.py` / `trade_filter.py` change, no
+gate, no parameter, no ledger row, nothing written by the tool.**
+
+Three findings, in the order of the ask:
+
+1. **The feed cannot localise a spike.** Inside a spiking 5m bucket the largest single minute
+   carries a median **23%** of the volume (p90 27%) and **0 of 158** spikes ever put 50% in one
+   minute. Within-bucket dispersion is 1.95x Poisson, so real sub-5m structure exists — it is
+   just diffuse. "The exact price level where volume surges" is not recoverable from MT5 tick
+   counts.
+2. **"≈80% of spikes are near a swing" is a base rate.** 84.2% of spikes sit within 0.50 ATR of
+   a confirmed pivot — and so do **88.8% of all ordinary buckets**. Lift **−4.6pp**; negative at
+   0.25/0.50/0.75/1.00 ATR and under both distance definitions (range-overlap and like-for-like).
+   Without the control row the claim looks true and means nothing.
+3. **Channel penetration is real but not causal.** 20.3% of spikes newly break the 20-bar channel
+   vs 8.4% of all buckets (+11.9pp, median depth 0.57 ATR). But only 16.7% of penetration bars
+   reach the p90 volume percentile vs 10.0% of ordinary bars (+6.7pp, n=1,255 vs 13,708), and the
+   30-minute fade is 64.7% with a spike vs 61.7% without (n=17 vs 776). Break and surge travel
+   together; neither leads.
+
+**Measurement trap found on the way.** `engine.py` logs `Vol_MA` as a plain 20-bar trailing mean,
+but gold's tick volume runs 79/min at 22:00 UTC and 367/min at 14:00 UTC (4.6x). Re-basing the
+audit's "volume spike >1.3x is the only p<0.05 in the lab" against a seasonally-corrected baseline
+(weekday-class + minute, 14 prior days, day-normalised) gives **+4.0pp, Fisher p=0.655** on the
+struct-stop era (n=411 decisive) — and the whole effect is a BUY/NY artefact (BUY 47.8% vs 32.3%,
+p=0.020; SELL 36.4% vs 40.3%, p=0.743; Asia spike-vs-normal −4.0pp). The participation hint in
+`docs/INDICATOR-AUDIT-2026-10-23.md` §4 Tier 1 is weaker than the docs currently imply. Any future
+volume number in this repo should use `volume_spike.session_profile`, not `Vol_MA`.
+
+**Verdict for the bot: nothing changes.** `REQUIRE_VOLUME_CONFIRM` stays `False`,
+`VOLUME_SPIKE_MULTIPLIER` stays `0.9`, volume stays display-only context. The penetration
+association is filed as an **input to the queued A9/E1 large-N MT5 history dump**, not as a new
+step — it is the first evidence that something beyond the bar close may be measurable at M1, and
+69 days is not the sample to register it on.
+
+Unchanged: `SL_CLEAR_ATR = 0.5`, `CLEAR15_CUTOVER = None`, `BE_TRIGGER_R = 0.75`,
+`RR_TARGET = 1.5`, `MAX_HOLD_MINUTES = 240`, registered `$0.40` cost, `TRADING_MODE =
+"FORWARD_TEST"`, LIVE gate 17 PASS / 0 TODO / 3 MANUAL CLOSED, every ledger row. Evidence:
+`docs/ANALYSIS-2026-11-28-volume-spike-localisation.md`.
