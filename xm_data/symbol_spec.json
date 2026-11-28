@@ -10,11 +10,11 @@
     "margin_so_call": 50.0,
     "margin_so_mode": 0,
     "margin_so_so": 20.0,
-    "trade_allowed": false,
+    "trade_allowed": true,
     "trade_expert": true,
     "trade_mode": 2
   },
-  "captured_utc": "2026-11-28 08:28:01",
+  "captured_utc": "2026-11-28 14:28:05",
   "decoded": {
     "account_kind": "REAL",
     "calc_mode": "CFD_LEVERAGE",
@@ -42,7 +42,7 @@
     "swap_triple_day": "WED",
     "symbol_trade_mode": "FULL"
   },
-  "hash": "730bfbea7fab",
+  "hash": "bb6928a5f670",
   "label": "",
   "probes": {
     "calc_margin_usd_0.01lot": 3.65,
@@ -101,7 +101,7 @@
   "terminal": {
     "build": 6230,
     "company": "MetaQuotes Ltd.",
-    "connected": false,
+    "connected": true,
     "maxbars": 100000,
     "name": "MetaTrader 5",
     "trade_allowed": false,
