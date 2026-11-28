@@ -137,6 +137,7 @@ ritual before drawing any conclusion. The list below is the detailed version.
 | Chart & Placement tab read layer | `python3 tools/test_manual_chart.py` (32 hermetic tests; the tab itself is `?tab=chart`, `?tf=1\|5\|15`) |
 | **Trading by hand — stop, cost, size, clock** | `python3 tools/manual_trade.py` (both sides, live numbers) · `--side/--entry/--stop/--target/--budget` judges **your** geometry on one code path · `--contract-ruler` the ATR→cost table only · `--json` · `--log-decision` appends one §7 observation row to a host-local JSONL · `--journal-summary` counts only. In the browser: the dashboard's **🤝 Manual Trade** tab (`?tab=manual`), display-only — no form, no input, no order, no bot-file write. Mirrors `derive_daily_closure` and is **pinned to it by smoke Scenario AE**. Read layer `manual_plan.py` (stdlib only, no engine import); tests `python3 tools/test_manual_plan.py` (39). `docs/MANUAL-TRADING.md` |
 | v2 harness (goldbot/) | `python3 -m unittest discover -s goldbot/tests -t .` (64 hermetic tests) then `python3 -m goldbot --compare`. Read-only; no orders. `docs/REDESIGN-2026-10-23-v2-harness.md` |
+| **Where did a volume spike actually print?** | `python3 tools/volume_spike_report.py` (`--threshold`, `--tolerance`, `--spikes N`, `--json`) — the M5→M1 step-down read: feed resolution (can it localise at all?), the seasonal baseline table, swing proximity **with its control row**, channel penetration **and its causality test**, and the 30-min follow-through. Read layer `volume_spike.py`; tests `python3 -m unittest tools.test_volume_spike` (14). Display-only: no order, no gate, no writes. `docs/ANALYSIS-2026-11-28-volume-spike-localisation.md` |
 | Loser features | `python3 tools/analyze_losers.py` |
 | Engine regression | `python3 tools/smoke_test.py` (A–AF) |
 | **LIVE execution gate scorecard** | `python3 tools/live_readiness.py` (`--json`, `--strict` → exit 1 while closed) — 20 checks; a PASS is a code check, not a demo test |
@@ -434,6 +435,26 @@ entry guard / flat-before-close policy is a named candidate (§5a/REVIEW-10-05
 ## 5. Evidence base (don't re-derive)
 
 Key documents:
+- **`docs/ANALYSIS-2026-11-28-volume-spike-localisation.md` (this update; owner ask, display-only):**
+  tests the three claims behind "step down M5 → M1 to find the exact price level where volume
+  surges". **(a)** The feed cannot localise a spike to one print: inside a 158-spike sample the
+  largest M1 bar carries a median **23%** of the bucket's volume and **0/158** reach 50%, so the
+  surge is a busy five minutes, not a burst. **(b)** "≈80% of spikes sit near a swing" is a
+  **base rate** — 84.2% of spikes are within 0.50 ATR of a confirmed swing but **88.8% of all
+  buckets** are (lift **−4.6pp**, negative at every tolerance and under both distance
+  definitions). **(c)** Channel penetration is the one real association (**20.3%** of spikes vs
+  **8.4%** of all buckets, **+11.9pp**) but the causality is not there: only **16.7%** of
+  penetration bars reach the p90 volume percentile vs 10.0% normal (+6.7pp), and the 30-min fade
+  is 64.7% with a spike vs 61.7% without (n=17 vs 776). It also records the **measurement trap**:
+  `Vol_MA` is a trailing 20-bar mean across a 4.6x session swing, and re-basing the audit's
+  "spike >1.3x is the only p<0.05" against a seasonally-corrected baseline collapses it to
+  **+4.0pp, Fisher p=0.655** on the era, with the whole effect a BUY/NY artefact
+  (BUY **p=0.020**, SELL **p=0.743**). **No gate, no parameter, no ledger change:**
+  `REQUIRE_VOLUME_CONFIRM` stays `False`, `VOLUME_SPIKE_MULTIPLIER` stays `0.9`, volume stays
+  context per `docs/INDICATOR-AUDIT-2026-10-23.md` §4 Tier 1. Tool
+  `python3 tools/volume_spike_report.py` (read layer `volume_spike.py`, 14 hermetic tests). The
+  penetration association is added as an **input to A9/E1** (the queued large-N MT5 history dump),
+  not as a new step.
 - **`docs/ANALYSIS-2026-11-27-reversal-pain-points.md` (this update; collection 607 reversal-before-TP audit & backlog):**
   documents the MFE/BE/SL pathwalk on `n=582` (`54.3%` reached `+0.75R`, `50.6%` of those reversed to `$0` BE; `52.5%`
   of SLs hit `>=+0.25R` first; driftless `1/(1+RR)` curve across targets), five root causes (inert `FLOOR_BUFFER_PCT=0.0020`,
